@@ -1,0 +1,12 @@
+Java_Projects/Singularity/Singularity-944aea44/curr/SingularityService/src/main/java/com/hubspot/singularity/scheduler/SingularityDeployHealthHelper.java
+Java_Projects/Singularity/Singularity-944aea44/curr/SingularityService/src/test/java/com/hubspot/singularity/SingularitySchedulerTestBase.java
+Java_Projects/Singularity/Singularity-944aea44/curr/SingularityService/src/test/java/com/hubspot/singularity/scheduler/SingularitySchedulerTest.java
+Java_Projects/Singularity/Singularity-944aea44/prev/SingularityService/src/main/java/com/hubspot/singularity/scheduler/SingularityDeployHealthHelper.java
+Java_Projects/Singularity/Singularity-944aea44/prev/SingularityService/src/test/java/com/hubspot/singularity/SingularitySchedulerTestBase.java
+Java_Projects/Singularity/Singularity-944aea44/prev/SingularityService/src/test/java/com/hubspot/singularity/scheduler/SingularitySchedulerTest.java
+Java_Projects/Singularity/Singularity-45ada13b/curr/SingularityService/src/main/java/com/hubspot/singularity/resources/AbstractRequestResource.java
+Java_Projects/Singularity/Singularity-45ada13b/curr/SingularityService/src/main/java/com/hubspot/singularity/resources/DeployResource.java
+Java_Projects/Singularity/Singularity-45ada13b/curr/SingularityService/src/main/java/com/hubspot/singularity/resources/RequestResource.java
+Java_Projects/Singularity/Singularity-45ada13b/prev/SingularityService/src/main/java/com/hubspot/singularity/resources/AbstractRequestResource.java
+Java_Projects/Singularity/Singularity-45ada13b/prev/SingularityService/src/main/java/com/hubspot/singularity/resources/DeployResource.java
+Java_Projects/Singularity/Singularity-45ada13b/prev/SingularityService/src/main/java/com/hubspot/singularity/resources/RequestResource.java

@@ -1,0 +1,4 @@
+Java_Projects/glide/glide-0d4b2795/curr/library/src/main/java/com/bumptech/glide/request/target/ImageViewTarget.java
+Java_Projects/glide/glide-0d4b2795/curr/library/src/main/java/com/bumptech/glide/request/target/ViewTarget.java
+Java_Projects/glide/glide-0d4b2795/prev/library/src/main/java/com/bumptech/glide/request/target/ImageViewTarget.java
+Java_Projects/glide/glide-0d4b2795/prev/library/src/main/java/com/bumptech/glide/request/target/ViewTarget.java

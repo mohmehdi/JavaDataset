@@ -1,0 +1,12 @@
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/main/java/com/seyren/core/service/notification/EmailNotificationService.java
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/main/java/com/seyren/core/util/velocity/VelocityEmailHelper.java
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/main/java/com/seyren/core/util/config/SeyrenConfig.java
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/main/java/com/seyren/core/util/email/EmailHelper.java
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/test/java/com/seyren/core/util/velocity/VelocityEmailHelperTest.java
+Java_Projects/seyren/seyren-5fb36a32/curr/seyren-core/src/test/java/com/seyren/core/util/config/SeyrenConfigTest.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/main/java/com/seyren/core/service/notification/EmailNotificationService.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/main/java/com/seyren/core/util/velocity/VelocityEmailHelper.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/main/java/com/seyren/core/util/config/SeyrenConfig.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/main/java/com/seyren/core/util/email/EmailHelper.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/test/java/com/seyren/core/util/velocity/VelocityEmailHelperTest.java
+Java_Projects/seyren/seyren-5fb36a32/prev/seyren-core/src/test/java/com/seyren/core/util/config/SeyrenConfigTest.java

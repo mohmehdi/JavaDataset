@@ -1,0 +1,3 @@
+Java_Projects/sshj/sshj-7c26ac66/curr/src/test/java/com/hierynomus/sshj/SshIntegrationTestBase.java
+Java_Projects/sshj/sshj-7c26ac66/curr/src/test/java/com/hierynomus/sshj/connection/channel/ChannelCloseEofTest.java
+Java_Projects/sshj/sshj-7c26ac66/prev/src/test/java/nl/javadude/sshj/connection/channel/ChannelCloseEofTest.java

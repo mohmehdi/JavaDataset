@@ -1,0 +1,2362 @@
+
+package com.SecUpwN.AIMSICD.adapters;
+
+import com.SecUpwN.AIMSICD.AIMSICD;
+import com.SecUpwN.AIMSICD.constants.Examples;
+import com.SecUpwN.AIMSICD.utils.Cell;
+import com.SecUpwN.AIMSICD.utils.CMDProcessor;
+import com.SecUpwN.AIMSICD.constants.Examples.EVENT_LOG_DATA;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.AssetManager;
+import android.database.Cursor;
+import android.database.SQLException;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.os.Bundle;
+import android.os.Environment;
+import android.util.Log;
+import android.util.SparseArray;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+import au.com.bytecode.opencsv.CSVReader;
+import au.com.bytecode.opencsv.CSVWriter;
+
+
+
+
+public class AIMSICDDbAdapter {
+
+    public static String FOLDER;
+    public static final int DATABASE_VERSION = 9; 
+
+    
+    private final Boolean MONO_DB_DUMP = true; 
+
+    private final String TAG = "AIMSICD";
+    private final String mTAG = "DbAdapter";
+    private final String DB_NAME = "aimsicd.db";
+    private static final String COLUMN_ID   = "_id"; 
+
+    private final String LOCATION_TABLE     = "locationinfo";    
+    private final String CELL_TABLE         = "cellinfo";        
+    private final String OPENCELLID_TABLE   = "opencellid";      
+    private final String TABLE_DEFAULT_MCC  = "defaultlocation"; 
+    private final String SILENT_SMS_TABLE   = "silentsms";       
+
+    
+    
+    private final String CELL_SIGNAL_TABLE  = "cellSignal";      
+
+    
+
+    
+    
+    
+    
+    
+    
+    private final String TABLE_EVENTLOG    = "EventLog";          
+    
+    
+    
+
+    private final String[] mTables;
+    private final DbHelper mDbHelper;
+    private SQLiteDatabase mDb;
+    private final Context mContext;
+
+    private Cursor signalStrengthMeasurementDatA; 
+
+
+    
+    public AIMSICDDbAdapter(Context context) {
+        mContext = context;
+        FOLDER = mContext.getExternalFilesDir(null) + File.separator; 
+        mDbHelper = new DbHelper(context);
+        mTables = new String[]{
+                
+                LOCATION_TABLE,
+                CELL_TABLE,
+                OPENCELLID_TABLE,
+                SILENT_SMS_TABLE,
+                
+                
+                
+                
+                TABLE_EVENTLOG,
+                
+                
+        };
+    }
+
+    public AIMSICDDbAdapter open() throws SQLException {
+        mDb = mDbHelper.getWritableDatabase();
+        return this;
+    }
+
+    public void close() {
+        mDbHelper.close();
+    }
+
+
+    
+    
+    
+
+
+    public long insertSilentSms(Bundle bundle) {
+        ContentValues smsValues = new ContentValues();
+        smsValues.put("Address",    bundle.getString("address"));           
+        smsValues.put("Display",    bundle.getString("display_address"));   
+        smsValues.put("Class",      bundle.getString("class"));             
+        smsValues.put("ServiceCtr", bundle.getString("service_centre"));    
+        smsValues.put("Message",    bundle.getString("message"));           
+
+        return mDb.insert(SILENT_SMS_TABLE, null, smsValues);
+    }
+
+    
+    public long insertCell( int lac,
+                            int cellID,
+                            int netType,
+                            double latitude,
+                            double longitude,
+                            int signalInfo,
+                            int mcc,
+                            int mnc,
+                            double accuracy,
+                            double speed,
+                            double direction,
+                            String networkType,
+                            long measurementTaken
+                            ) {
+
+        if (cellID != -1 && (latitude != 0.0 && longitude != 0.0)) {
+            
+            ContentValues cellValues = new ContentValues();
+            cellValues.put("Lac",           lac);
+            cellValues.put("CellID",        cellID);
+            cellValues.put("Net",           netType);
+            cellValues.put("Lat",           latitude);
+            cellValues.put("Lng",           longitude);
+            cellValues.put("Signal",        signalInfo);
+            cellValues.put("Mcc",           mcc);
+            cellValues.put("Mnc",           mnc);
+            cellValues.put("Accuracy",      accuracy);
+            cellValues.put("Speed",         speed);
+            cellValues.put("Direction",     direction);
+            cellValues.put("NetworkType",   networkType);
+            cellValues.put("MeasurementTaken", measurementTaken);
+
+            if (cellExists(cellID)) {
+                Log.v(TAG, mTAG + ": Cell info updated in local db: " + cellID);
+                return mDb.update( CELL_TABLE, cellValues, "CellID=?", new String[]{Integer.toString(cellID)} );
+            } else {
+                Log.v(TAG,  mTAG + ": New Cell found, insert into local db:: " + cellID);
+                return mDb.insert(CELL_TABLE, null, cellValues);
+            }
+        }
+        return 0;
+    }
+
+    
+    public long insertCell(Cell cell) {
+
+        
+        
+        
+        
+        if (cell.getCID() != Integer.MAX_VALUE && (cell.getLat() != 0.0 && cell.getLon() != 0.0)) {
+            
+            ContentValues cellValues = new ContentValues();
+            cellValues.put("Lac",       cell.getLAC());
+            cellValues.put("CellID",    cell.getCID());
+            cellValues.put("Net",       cell.getNetType());
+            cellValues.put("Lat",       cell.getLat());
+            cellValues.put("Lng",       cell.getLon());
+            cellValues.put("Signal",    cell.getDBM());
+            cellValues.put("Mcc",       cell.getMCC());
+            cellValues.put("Mnc",       cell.getMNC());
+            cellValues.put("Accuracy",  cell.getAccuracy());
+            cellValues.put("Speed",     cell.getSpeed());
+            cellValues.put("Direction", cell.getBearing());
+            cellValues.put("MeasurementTaken", cell.getTimestamp());
+
+            if (cellExists(cell.getCID())) {
+                Log.v(TAG,  mTAG + ": CID info updated in local db (DBi): " + cell.getCID());
+                return mDb.update(CELL_TABLE, cellValues,"CellID=?", new String[]{Integer.toString(cell.getCID())});
+            } else {
+                Log.v(TAG,  mTAG + ": New CID found, insert into local db (DBi):: " + cell.getCID());
+                return mDb.insert(CELL_TABLE, null, cellValues);
+            }
+        }
+        return 0;
+    }
+
+    
+
+    long insertOpenCell(double latitude,
+                        double longitude,
+                        int mcc,
+                        int mnc,
+                        int lac,
+                        int cellID,
+                        int avgSigStr,
+                        int range,      
+                        int samples,
+                        int isGPSexact, 
+                        String RAT      
+                        
+    ) {
+        return insertOpenCell(
+                latitude,
+                longitude,
+                mcc,
+                mnc,
+                lac,
+                cellID,
+                avgSigStr,
+                range,
+                samples,
+                isGPSexact,
+                RAT,
+                true);
+    }
+
+    
+    long insertOpenCell(double latitude,
+                        double longitude,
+                        int mcc,
+                        int mnc,
+                        int lac,
+                        int cellID,
+                        int avgSigStr,
+                        int range,      
+                        int samples,
+                        int isGPSexact, 
+                        String RAT,      
+                        
+                        boolean isNeedCheckExists
+                        ) {
+
+        
+        ContentValues cellIDValues = new ContentValues();
+        cellIDValues.put("Lat",         latitude);
+        cellIDValues.put("Lng",         longitude);
+        cellIDValues.put("Mcc",         mcc);
+        cellIDValues.put("Mnc",         mnc);
+        cellIDValues.put("Lac",         lac);
+        cellIDValues.put("CellID",      cellID); 
+        cellIDValues.put("AvgSigStr",   avgSigStr);
+        cellIDValues.put("avg_range",   range );       
+        cellIDValues.put("Samples",     samples);
+        cellIDValues.put("isGPSexact",  isGPSexact );  
+        cellIDValues.put("Type",        RAT );         
+        
+
+        
+        if (isNeedCheckExists && openCellExists(cellID)) {
+            
+            Log.v(TAG,  mTAG + ": CID already found in DBe_import! Skipping: " + cellID );
+            return 1;
+            
+            
+        } else {
+            return mDb.insert(OPENCELLID_TABLE, null, cellIDValues);
+        }
+    }
+
+    
+    public long insertLocation( int lac,
+                                int cellID,
+                                int netType,
+                                double latitude,
+                                double longitude,
+                                int signalInfo,
+                                String cellInfo
+                                ) {
+
+        if (latitude != 0.0 && longitude != 0.0) {
+            
+            ContentValues locationValues = new ContentValues();
+            locationValues.put("Lac",       lac);
+            locationValues.put("CellID",    cellID);
+            locationValues.put("Net",       netType);
+            locationValues.put("Lat",       latitude);
+            locationValues.put("Lng",       longitude);
+            locationValues.put("Signal",    signalInfo);
+            locationValues.put("Connection", cellInfo); 
+
+            
+            
+            if (locationExists(cellID, latitude, longitude, signalInfo)) {
+                return mDb.update(LOCATION_TABLE, locationValues, "CellID=?",
+                        new String[]{Integer.toString(cellID)});
+            } else {
+                return mDb.insert(LOCATION_TABLE, null, locationValues);
+            }
+        }
+
+        return 0;
+    }
+
+    
+    public int deleteCell(int cellId) {
+        Log.i(TAG,  mTAG + ": Deleted CID: " + cellId);
+        return mDb.delete(CELL_TABLE, "CellID = ?", new String[]{ String.valueOf(cellId) });
+    }
+
+    
+     public long insertDetection(
+                                 int LAC,
+                                 int CID,
+                                 int PSC,
+                                 double latitude,
+                                 double longitude,
+                                 double accu,
+                                 int DF_id,
+                                 String DF_description) {
+
+        
+        ContentValues detectionValues = new ContentValues();
+        
+        detectionValues.put("LAC",          LAC);
+        detectionValues.put("CID",          CID);
+        detectionValues.put("PSC",          PSC);
+        detectionValues.put("gpsd_lat",     latitude);
+        detectionValues.put("gpsd_lon",     longitude);
+        detectionValues.put("gpsd_accu",    accu);
+        detectionValues.put("DF_id",        DF_id);
+        detectionValues.put("DF_description", DF_description);
+
+        Log.v(TAG, mTAG + ": Insert Detection into EventLog Table: " + CID);
+        return mDb.insert(TABLE_EVENTLOG, null, detectionValues);
+     }
+
+
+    
+
+    
+
+    
+    public Cursor getEventLogData() {
+        return mDb.query(TABLE_EVENTLOG,
+                new String[]{"time", "LAC", "CID", "PSC", "gpsd_lat","gpsd_lon", "gpsd_accu", "DF_id", "DF_desc"},
+                null, null, null, null, null
+        );
+    }
+
+
+    
+    
+    public Cursor getSilentSmsData() {
+        return mDb.query(SILENT_SMS_TABLE,
+                new String[]{"Address", "Display", "Class", "ServiceCtr", "Message", "Timestamp"},
+                null, null, null, null, COLUMN_ID + " DESC"
+        );
+    }
+
+    
+    public Cursor getCellData() {
+        return mDb.query( CELL_TABLE,
+                new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
+                        "Accuracy", "Speed", "Direction"},
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getOPCIDSubmitData() {
+        return mDb.query( CELL_TABLE,
+                new String[]{"Mcc", "Mnc", "Lac", "CellID", "Lng", "Lat", "Signal", "Timestamp",
+                        "Accuracy", "Speed", "Direction", "NetworkType"}, "OCID_SUBMITTED <> 1",
+                null, null, null, null
+        );
+    }
+
+    
+    public Cursor getLocationData() {
+        return mDb.query( LOCATION_TABLE,
+                new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal"},
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getOpenCellIDData() {
+        return mDb.query( OPENCELLID_TABLE,
+                new String[]{"CellID", "Lac", "Mcc", "Mnc", "Lat", "Lng", "AvgSigStr", "Samples"},
+                
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getDefaultMccLocationData() {
+        return mDb.query( TABLE_DEFAULT_MCC,
+                new String[]{"Country", "Mcc", "Lat", "Lng"}, null, null, null, null, null);
+    }
+
+    
+    
+    
+
+
+    
+    boolean locationExists(int cellID, double lat, double lng, int signal) {
+        Cursor cursor = mDb.rawQuery("SELECT * FROM " + LOCATION_TABLE +
+                        " WHERE CellID = " + cellID +
+                        " AND Lat = " + lat + " AND Lng = " + lng + " AND Signal = " + signal, null);
+        boolean exists = cursor.getCount() > 0;
+        cursor.close();
+        return exists;
+    }
+
+    
+    boolean cellExists(int cellID) {
+        Cursor cursor = mDb.rawQuery("SELECT 1 FROM " + CELL_TABLE +
+                        " WHERE CellID = " + cellID, null);
+        boolean exists = cursor.getCount() > 0;
+        
+        cursor.close();
+        return exists;
+    }
+
+    
+    public boolean openCellExists(int cellID) {
+        Cursor cursor = mDb.rawQuery("SELECT * FROM " + OPENCELLID_TABLE +
+                        " WHERE CellID = " + cellID, null);
+        boolean exists = cursor.getCount() > 0;
+        
+        cursor.close();
+        return exists;
+    }
+
+    
+    public boolean checkLAC(Cell cell) {
+        Cursor cursor = mDb.query(CELL_TABLE,
+                        
+                        new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
+                        "Accuracy", "Speed", "Direction", "Timestamp"},
+                        "CellID=" + cell.getCID(),
+                        null, null, null, null);
+
+        while (cursor.moveToNext()) {
+            
+            if (cell.getLAC() != cursor.getInt(1)) {
+                
+                
+                
+                Log.i(TAG, "ALERT: Changing LAC on CID: " + cell.getCID()
+                            + " LAC(API): " + cell.getLAC()
+                            + " LAC(DBi): " + cursor.getInt(1) );
+
+                
+                
+                insertDetection(cell.getLAC(), cell.getCID(), cell.getPSC(),
+                                cursor.getDouble(3), cursor.getDouble(4), cursor.getInt(8),
+                                1, "Changing LAC");
+
+                cursor.close();
+                return false;
+            } else {
+                Log.v(TAG, "LAC checked - no change on CID:" + cell.getCID()
+                            + " LAC(API): " + cell.getLAC()
+                            + " LAC(DBi): " + cursor.getInt(1) );
+            }
+        }
+        cursor.close();
+        return true;
+    }
+
+    
+    public void ocidProcessed() {
+        ContentValues ocidValues = new ContentValues();
+        ocidValues.put("OCID_SUBMITTED", 1); 
+        mDb.update(CELL_TABLE, ocidValues, "OCID_SUBMITTED<>?", new String[]{"1"}); 
+    }
+
+    public double[] getDefaultLocation(int mcc) {
+        double[] loc = new double[2];
+        Cursor cursor = mDb.rawQuery("SELECT Lat, Lng FROM " + TABLE_DEFAULT_MCC + " WHERE Mcc = " + mcc, null);
+
+        if (cursor.moveToFirst()) {
+            loc[0] = Double.parseDouble(cursor.getString(0));
+            loc[1] = Double.parseDouble(cursor.getString(1));
+        } else {
+            loc[0] = 0.0;
+            loc[1] = 0.0;
+        }
+        cursor.close();
+        return loc;
+    }
+
+    
+    public void cleanseCellTable() {
+        
+        mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE " + COLUMN_ID + " NOT IN (SELECT MAX(" + COLUMN_ID + ") FROM " + CELL_TABLE + " GROUP BY CellID)");
+        
+        mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE CellID = " + Integer.MAX_VALUE + " OR CellID = -1");
+    }
+
+    
+    public boolean prepareOpenCellUploadData() {
+        boolean result;
+
+        File dir = new File(FOLDER + "OpenCellID/");
+        if (!dir.exists()) {
+            result = dir.mkdirs();
+            if (!result) {
+                return false;
+            }
+        }
+        File file = new File(dir, "aimsicd-ocid-data.csv");
+
+        try {
+            open(); 
+            Cursor c = getOPCIDSubmitData(); 
+
+            if(c.getCount() > 0) { 
+                if (!file.exists()) {
+                    result = file.createNewFile();
+                    if (!result) {
+                        c.close();
+                        return false;
+                    }
+
+                    CSVWriter csvWrite = new CSVWriter(new FileWriter(file));
+
+                    csvWrite.writeNext("mcc,mnc,lac,cellid,lon,lat,signal,measured_at,rating,speed,direction,act");
+                    String[] rowData = new String[c.getColumnCount()];
+                    int size = c.getColumnCount();
+                    AIMSICD.mProgressBar.setProgress(0);
+                    AIMSICD.mProgressBar.setMax(size);
+                    while (c.moveToNext()) {
+                        for (int i = 0; i < size; i++) {
+                            rowData[i] = c.getString(i);
+                            AIMSICD.mProgressBar.setProgress(i);
+                        }
+                        csvWrite.writeNext(rowData);
+                    }
+
+                    csvWrite.close();
+                    c.close();
+                }
+                return true;
+             }
+             return false;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error creating OpenCellID Upload Data: " + e);
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+    }
+
+    
+    private void populateDefaultMCC(SQLiteDatabase db) {
+        AssetManager mngr = mContext.getAssets();
+        InputStream csvDefaultMcc;
+        FileOutputStream fout;
+
+        try {
+            csvDefaultMcc = mngr.open("default_mcc_locations.csv");
+            File tempfile = File.createTempFile("tempFile", ".tmp");
+            tempfile.deleteOnExit();
+
+            fout = new FileOutputStream(tempfile);
+            byte[] buf = new byte[1024];
+            int len;
+            while ((len = csvDefaultMcc.read(buf)) != -1) {
+                fout.write(buf, 0, len);
+            }
+            fout.close();
+            csvDefaultMcc.close();
+
+            CSVReader csvReader = new CSVReader(new FileReader(tempfile));
+            List<String[]> csvMcc = csvReader.readAll();
+            
+            ContentValues defaultMccValues = new ContentValues();
+
+            for (int i = 1; i < csvMcc.size(); i++) {
+                
+                defaultMccValues.put("Country", csvMcc.get(i)[0]);
+                defaultMccValues.put("Mcc", csvMcc.get(i)[1]);
+                defaultMccValues.put("Lng", csvMcc.get(i)[2]);
+                defaultMccValues.put("Lat", csvMcc.get(i)[3]);
+                db.insert(TABLE_DEFAULT_MCC, null, defaultMccValues);
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error populating Default MCC Data: " + e);
+        }
+    }
+
+    
+    public boolean updateOpenCellID() {
+        String fileName = Environment.getExternalStorageDirectory()
+                                        + "/AIMSICD/OpenCellID/opencellid.csv";
+        File file = new File(fileName);
+        try {
+            if (file.exists()) {
+                CSVReader csvReader = new CSVReader(new FileReader(file));
+                List<String[]> csvCellID = new ArrayList<>();
+                String next[];
+                
+                
+                
+
+                
+                
+                while ((next = csvReader.readNext()) != null) {
+                    csvCellID.add(next);
+                    
+                }
+
+                if (!csvCellID.isEmpty()) {
+                    int lines = csvCellID.size();
+                    Log.i(TAG, mTAG + ":updateOpenCellID: OCID CSV size (lines): " + lines );
+
+                    String lQuery = "SELECT CellID, COUNT(CellID) FROM "+OPENCELLID_TABLE+" GROUP BY CellID;";
+                    Cursor lCursor = mDb.rawQuery(lQuery, null);
+                    SparseArray<Boolean> lPresentCellID = new SparseArray<>();
+                    if(lCursor.getCount() > 0) {
+                        while(lCursor.moveToNext()) {
+                            lPresentCellID.put(lCursor.getInt(0), true );
+                        }
+                    }
+                    lCursor.close();
+
+                    AIMSICD.mProgressBar.setProgress(0);
+                    AIMSICD.mProgressBar.setMax(lines);
+                    for (int i = 1; i < lines; i++) {
+                        AIMSICD.mProgressBar.setProgress(i);
+
+                        
+                        
+                        if(lPresentCellID.get(Integer.parseInt(csvCellID.get(i)[5]), false)) {
+                            continue;
+                        }
+                        
+                        
+                        insertOpenCell( Double.parseDouble(csvCellID.get(i)[0]), 
+                                        Double.parseDouble(csvCellID.get(i)[1]), 
+                                        Integer.parseInt(csvCellID.get(i)[2]),   
+                                        Integer.parseInt(csvCellID.get(i)[3]),   
+                                        Integer.parseInt(csvCellID.get(i)[4]),   
+                                        Integer.parseInt(csvCellID.get(i)[5]),   
+                                        Integer.parseInt(csvCellID.get(i)[6]),   
+                                        Integer.parseInt(csvCellID.get(i)[7]),   
+                                        Integer.parseInt(csvCellID.get(i)[8]),   
+                                        Integer.parseInt(csvCellID.get(i)[9]),   
+                                        String.valueOf(csvCellID.get(i)[10]),     
+                                        false
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+
+                        );
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error parsing OpenCellID data: " + e.getMessage());
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+    }
+
+    
+    
+    
+
+    
+    public boolean restoreDB() {
+        try {
+            for (String table : mTables) {
+                File file = new File(FOLDER + "aimsicd-" + table + ".csv");
+                if (file.exists()) {
+                    List<String[]> records = new ArrayList<>();
+                    String next[];
+                    CSVReader csvReader = new CSVReader(new FileReader(file));
+                    while ((next = csvReader.readNext()) != null) {
+                        records.add(next);
+                    }
+
+                    if (!records.isEmpty()) {
+                        int lines = records.size();
+                        AIMSICD.mProgressBar.setMax(lines);
+                        AIMSICD.mProgressBar.setProgress(0);
+                        for (int i = 1; i < lines; i++) {
+                            AIMSICD.mProgressBar.setProgress(i);
+                            switch (table) {
+
+                                case CELL_TABLE:
+                                    insertCell(
+                                            
+                                            Integer.parseInt(records.get(i)[1]),    
+                                            Integer.parseInt(records.get(i)[2]),    
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Double.parseDouble(records.get(i)[4]),  
+                                            Double.parseDouble(records.get(i)[5]),  
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            Integer.valueOf(records.get(i)[7]),     
+                                            Integer.valueOf(records.get(i)[8]),     
+                                            Double.valueOf(records.get(i)[9]),      
+                                            Double.valueOf(records.get(i)[10]),     
+                                            Double.valueOf(records.get(i)[11]),     
+                                            String.valueOf(records.get(i)[12]),     
+                                            Long.valueOf(records.get(i)[13])        
+                                            
+                                            
+                                    );
+                                    break;
+
+                                case LOCATION_TABLE:
+                                    insertLocation(
+                                            Integer.parseInt(records.get(i)[1]),    
+                                            Integer.parseInt(records.get(i)[2]),    
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Double.parseDouble(records.get(i)[4]),  
+                                            Double.parseDouble(records.get(i)[5]),  
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            String.valueOf(records.get(i)[7])       
+                                    );
+                                    break;
+
+                                case OPENCELLID_TABLE:
+                                    insertOpenCell(
+                                            
+                                            Double.parseDouble(records.get(i)[1]),  
+                                            Double.parseDouble(records.get(i)[2]),  
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Integer.parseInt(records.get(i)[4]),    
+                                            Integer.parseInt(records.get(i)[5]),    
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            Integer.parseInt(records.get(i)[7]),    
+                                            Integer.parseInt(records.get(i)[8]),    
+                                            Integer.parseInt(records.get(i)[9]),    
+                                            Integer.parseInt(records.get(i)[10]),   
+                                            String.valueOf(records.get(i)[11])      
+                                            
+                                    );
+                                    break;
+
+                                case SILENT_SMS_TABLE:
+                                    Bundle bundle = new Bundle();
+                                    bundle.putString("address",         String.valueOf(records.get(i)[1]));
+                                    bundle.putString("display_address", String.valueOf(records.get(i)[2]));
+                                    bundle.putString("message_class",   String.valueOf(records.get(i)[3]));
+                                    bundle.putString("service_centre",  String.valueOf(records.get(i)[4]));
+                                    bundle.putString("message",         String.valueOf(records.get(i)[5]));
+                                    insertSilentSms(bundle);
+                                    break;
+                            }
+
+                        }
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": restoreDB() " + e);
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+
+    }
+
+    
+    private void dumpDB()  {
+        File dumpdir = new File(FOLDER);
+        
+        File file = new File(dumpdir, "aimsicd_dump.db");
+        
+        String aimdir = "/data/data/com.SecUpwN.AIMSICD/databases/";
+        
+        String execString = "/system/xbin/sqlite3 " + aimdir + "aimsicd.db '.backup " + file + "'";
+
+        try {
+            Log.i(TAG, mTAG + ":dumpDB() Attempting to dump DB to: " + file + "\nUsing: \"" + execString + "\"\n");
+            
+            CMDProcessor.runSuCommand(execString);
+            
+            
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ":dumpDB() Failed to export DB dump file: " + e);
+        }
+        Log.i(TAG, mTAG + ":dumpDB() Database dumped to: " + file);
+
+    }
+
+
+    
+    public boolean backupDB() {
+        try {
+            for (String table : mTables) {
+                backup(table);
+            }
+            if (MONO_DB_DUMP) {
+                dumpDB();
+            }
+            return true;
+        } catch (Exception ioe) {
+            Log.e(TAG, mTAG + ":backupDB() Error: " + ioe);
+            return false;
+        }
+    }
+
+    
+    private void backup(String tableName) {
+        Log.i(TAG, mTAG + ": Database Backup: " + DB_NAME);
+
+        File dir = new File(FOLDER);
+        if (!dir.exists()) { dir.mkdirs(); }  
+        File file = new File(dir, "aimsicd-" + tableName + ".csv");
+
+        try {
+            file.createNewFile();
+            CSVWriter csvWrite = new CSVWriter(new FileWriter(file));
+            Log.d(TAG, mTAG + ": table name " + tableName);
+            open();
+            Cursor c = mDb.rawQuery("SELECT * FROM " + tableName, new String[0]);
+
+            csvWrite.writeNext(c.getColumnNames());
+            String[] rowData = new String[c.getColumnCount()];
+            int size = c.getColumnCount();
+            AIMSICD.mProgressBar.setProgress(0);
+            AIMSICD.mProgressBar.setMax(size);
+            while (c.moveToNext()) {
+                for (int i = 0; i < size; i++) {
+                    rowData[i] = c.getString(i);
+                    AIMSICD.mProgressBar.setProgress(i);
+                }
+                csvWrite.writeNext(rowData);
+            }
+
+            csvWrite.close();
+            c.close();
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error exporting table: " + tableName + " " + e);
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+
+        Log.i(TAG, mTAG + ": Database Export complete.");
+    }
+
+
+    
+    
+    
+
+    
+    
+    public void checkDBe() {
+        
+        int tf_settings=30;         
+        int min_gps_precision=50;   
+
+        String sqlq;                
+
+        
+        
+        
+
+        Log.d(TAG, mTAG + ":checkDBe() Attempting to delete bad import data from DBe_import table...");
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Samples < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        
+        
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac > 65534";
+        mDb.execSQL(sqlq);
+        
+        
+        
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID > 268435455";
+        mDb.execSQL(sqlq);
+        
+        
+        
+
+        Log.i(TAG, mTAG + ":checkDBe() Deleted BTS entries from DBe_import table with bad LAC/CID...");
+
+        
+        
+        
+
+        
+        
+        
+
+        
+        
+
+        
+        
+
+    }
+
+
+
+    
+    
+    
+    public void cleanseCellStrengthTables(long maxTime) {
+        Log.d(TAG, mTAG + ": Cleaning " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
+        mDb.execSQL("DELETE FROM " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
+    }
+
+    public void addSignalStrength( int cellID, int signal, Long timestamp ) {
+        ContentValues row = new ContentValues();
+        row.put("cellID", cellID);
+        row.put("signal", signal);
+        row.put("timestamp", timestamp);
+        mDb.insert(CELL_SIGNAL_TABLE, null, row);
+    }
+
+    public int countSignalMeasurements(int cellID) {
+        Cursor c = mDb.rawQuery("SELECT COUNT(cellID) FROM " + CELL_SIGNAL_TABLE +" WHERE cellID=" + cellID, new String[0]);
+        c.moveToFirst();
+        int lAnswer = c.getInt(0);
+        c.close();
+        return lAnswer;
+    }
+
+    public int getAverageSignalStrength(int cellID) {
+        Cursor c = mDb.rawQuery("SELECT AVG(signal) FROM " + CELL_SIGNAL_TABLE +" WHERE cellID=" + cellID, new String[0]);
+        c.moveToFirst();
+        int lAnswer = c.getInt(0);
+        c.close();
+        return lAnswer;
+    }
+
+    public Cursor getSignalStrengthMeasurementData() {
+        return mDb.rawQuery("SELECT cellID, signal, timestamp FROM " + CELL_SIGNAL_TABLE +" ORDER BY timestamp DESC", new String[0]);
+    }
+
+
+    
+    
+    
+
+    
+    public class DbHelper extends SQLiteOpenHelper {
+
+        DbHelper(Context context) {
+            super(context, DB_NAME, null, DATABASE_VERSION);
+        }
+
+        
+        @Override
+        public void onCreate(SQLiteDatabase database) {
+
+            
+            
+            
+            createCellSignalTable(database);
+            createSilentSmsTable(database);
+            createLocationTable(database);
+            createCellTable(database);
+            createOpenCellIDTable(database);
+            createDefaultMCCTable(database);
+
+            
+            
+            
+            createEventLogTable(database);
+
+            
+            populateDefaultMCC(database);
+
+        }
+
+        
+        
+        
+
+        
+        
+        @Override
+        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
+                        + ", and destroy all old data.");
+
+            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
+
+            
+            
+            
+            
+            
+            
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
+            
+            
+            
+
+            onCreate(db);
+        }
+        
+        private void createCellSignalTable(SQLiteDatabase database) {
+
+            database.execSQL("CREATE TABLE " +
+                    CELL_SIGNAL_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "cellID INTEGER, signal INTEGER, " +
+                    "timestamp INTEGER);");
+            database.execSQL("CREATE INDEX cellID_index ON " + CELL_SIGNAL_TABLE + " (cellID);");
+            database.execSQL("CREATE INDEX cellID_timestamp ON " + CELL_SIGNAL_TABLE + " (timestamp);");
+        }
+
+        
+        private void createSilentSmsTable(SQLiteDatabase database) {
+            String SMS_DATABASE_CREATE = "CREATE TABLE " +
+                    SILENT_SMS_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Address VARCHAR, " +
+                    "Display VARCHAR, " +
+                    "Class VARCHAR, " +
+                    "ServiceCtr VARCHAR, " +
+                    "Message VARCHAR, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(SMS_DATABASE_CREATE);
+
+            
+            String ZeroSMS = "INSERT INTO " + SILENT_SMS_TABLE +
+                    " (Address,Display,Class,ServiceCtr,Message) " +
+                    "VALUES ('"+
+                    Examples.SILENT_SMS_CARD_DATA.ADDRESS +"','"+
+                    Examples.SILENT_SMS_CARD_DATA.DISPLAY+"','CLAZZ','SMSC','DaTestMessage');";
+            database.execSQL(ZeroSMS);
+        }
+
+        
+        private void createLocationTable(SQLiteDatabase database) {
+            String LOC_DATABASE_CREATE = "CREATE TABLE " +
+                    LOCATION_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lac INTEGER, CellID INTEGER, " +
+                    "Net VARCHAR, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Signal INTEGER, " +
+                    "Connection VARCHAR, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(LOC_DATABASE_CREATE);
+        }
+
+        
+        private void createCellTable(SQLiteDatabase database) {
+            String CELL_DATABASE_CREATE = "CREATE TABLE " +
+                    CELL_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lac INTEGER, " +
+                    "CellID INTEGER, " +
+                    "Net INTEGER, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Signal INTEGER, " +
+                    "Mcc INTEGER, " +
+                    "Mnc INTEGER, " +
+                    "Accuracy REAL, " +
+                    "Speed REAL, " +
+                    "Direction REAL, " +
+                    "NetworkType VARCHAR, " +
+                    "MeasurementTaken VARCHAR, " +
+                    "OCID_SUBMITTED INTEGER DEFAULT 0, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(CELL_DATABASE_CREATE);
+        }
+
+        
+        private void createOpenCellIDTable(SQLiteDatabase database) {
+            String OPENCELLID_DATABASE_CREATE = "CREATE TABLE " +
+                    OPENCELLID_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Mcc INTEGER, " +
+                    "Mnc INTEGER, " +
+                    "Lac INTEGER, " +
+                    "CellID INTEGER, " +
+                    "AvgSigStr INTEGER, " +
+                    "avg_range INTEGER, " +     
+                    "Samples INTEGER, " +
+                    "isGPSexact INTEGER, " +    
+                    "Type TEXT, " +             
+                    
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+                    
+                    ");";
+            database.execSQL(OPENCELLID_DATABASE_CREATE);
+        }
+
+        
+        private void createDefaultMCCTable(SQLiteDatabase database) {
+            String DEFAULT_MCC_DATABASE_CREATE = "CREATE TABLE " +
+                    TABLE_DEFAULT_MCC + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Country VARCHAR, " +
+                    "Mcc INTEGER, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR);";
+            database.execSQL(DEFAULT_MCC_DATABASE_CREATE);
+        }
+
+        
+        private void createEventLogTable(SQLiteDatabase database) {
+
+            
+            
+            String TABLE_EVENTLOG_CREATE = "CREATE TABLE " +
+                    TABLE_EVENTLOG + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "time     		TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"  +
+                    "LAC           	INTEGER NOT NULL," +
+                    "CID           	INTEGER NOT NULL," +
+                    "PSC           	INTEGER," +
+                    "gpsd_lat      	REAL," +
+                    "gpsd_lon      	REAL," +
+                    "gpsd_accu     	INTEGER," +
+                    "DF_id         	INTEGER," +
+                    "DF_desc    	TEXT" + ");";
+            database.execSQL(TABLE_EVENTLOG_CREATE);
+
+            
+            
+            
+
+            String ZeroEvent = "INSERT INTO " + TABLE_EVENTLOG +
+                    " (LAC,CID,PSC, gpsd_lat,gpsd_lon,gpsd_accu, DF_id,DF_desc) " +
+                    "VALUES ("+
+                    EVENT_LOG_DATA.LAC+","+
+                    EVENT_LOG_DATA.CID+","+
+                    EVENT_LOG_DATA.PSC+","+
+                    EVENT_LOG_DATA.GPSD_LAT+","+
+                    EVENT_LOG_DATA.GPSD_LON+","+
+                    EVENT_LOG_DATA.GPSD_ACCU+","+
+                    EVENT_LOG_DATA.DF_ID+",'CellID not found in OCID Database');";
+            database.execSQL(ZeroEvent);
+        }
+    }
+}
+
+<code block>
+
+package com.SecUpwN.AIMSICD.adapters;
+
+import com.SecUpwN.AIMSICD.AIMSICD;
+import com.SecUpwN.AIMSICD.constants.Examples;
+import com.SecUpwN.AIMSICD.utils.Cell;
+import com.SecUpwN.AIMSICD.utils.CMDProcessor;
+import com.SecUpwN.AIMSICD.constants.Examples.EVENT_LOG_DATA;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.AssetManager;
+import android.database.Cursor;
+import android.database.SQLException;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.os.Bundle;
+import android.os.Environment;
+import android.util.Log;
+import android.util.SparseArray;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+import au.com.bytecode.opencsv.CSVReader;
+import au.com.bytecode.opencsv.CSVWriter;
+
+
+
+
+public class AIMSICDDbAdapter {
+
+    public static String FOLDER;
+    public static final int DATABASE_VERSION = 9; 
+
+    
+    private final Boolean MONO_DB_DUMP = true; 
+
+    private final String TAG = "AIMSICD";
+    private final String mTAG = "DbAdapter";
+    private final String DB_NAME = "aimsicd.db";
+    private static final String COLUMN_ID   = "_id"; 
+
+    private final String LOCATION_TABLE     = "locationinfo";    
+    private final String CELL_TABLE         = "cellinfo";        
+    private final String OPENCELLID_TABLE   = "opencellid";      
+    private final String TABLE_DEFAULT_MCC  = "defaultlocation"; 
+    private final String SILENT_SMS_TABLE   = "silentsms";       
+
+    
+    
+    private final String CELL_SIGNAL_TABLE  = "cellSignal";      
+
+    
+
+    
+    
+    
+    
+    
+    
+    private final String TABLE_EVENTLOG    = "EventLog";          
+    
+    
+    
+
+    private final String[] mTables;
+    private final DbHelper mDbHelper;
+    private SQLiteDatabase mDb;
+    private final Context mContext;
+
+    private Cursor signalStrengthMeasurementDatA; 
+
+
+    
+    public AIMSICDDbAdapter(Context context) {
+        mContext = context;
+        FOLDER = mContext.getExternalFilesDir(null) + File.separator; 
+        mDbHelper = new DbHelper(context);
+        mTables = new String[]{
+                
+                LOCATION_TABLE,
+                CELL_TABLE,
+                OPENCELLID_TABLE,
+                SILENT_SMS_TABLE,
+                
+                
+                
+                
+                TABLE_EVENTLOG,
+                
+                
+        };
+    }
+
+    public AIMSICDDbAdapter open() throws SQLException {
+        mDb = mDbHelper.getWritableDatabase();
+        return this;
+    }
+
+    public void close() {
+        mDbHelper.close();
+    }
+
+
+    
+    
+    
+
+
+    public long insertSilentSms(Bundle bundle) {
+        ContentValues smsValues = new ContentValues();
+        smsValues.put("Address",    bundle.getString("address"));           
+        smsValues.put("Display",    bundle.getString("display_address"));   
+        smsValues.put("Class",      bundle.getString("class"));             
+        smsValues.put("ServiceCtr", bundle.getString("service_centre"));    
+        smsValues.put("Message",    bundle.getString("message"));           
+
+        return mDb.insert(SILENT_SMS_TABLE, null, smsValues);
+    }
+
+    
+    public long insertCell( int lac,
+                            int cellID,
+                            int netType,
+                            double latitude,
+                            double longitude,
+                            int signalInfo,
+                            int mcc,
+                            int mnc,
+                            double accuracy,
+                            double speed,
+                            double direction,
+                            String networkType,
+                            long measurementTaken
+                            ) {
+
+        if (cellID != -1 && (latitude != 0.0 && longitude != 0.0)) {
+            
+            ContentValues cellValues = new ContentValues();
+            cellValues.put("Lac",           lac);
+            cellValues.put("CellID",        cellID);
+            cellValues.put("Net",           netType);
+            cellValues.put("Lat",           latitude);
+            cellValues.put("Lng",           longitude);
+            cellValues.put("Signal",        signalInfo);
+            cellValues.put("Mcc",           mcc);
+            cellValues.put("Mnc",           mnc);
+            cellValues.put("Accuracy",      accuracy);
+            cellValues.put("Speed",         speed);
+            cellValues.put("Direction",     direction);
+            cellValues.put("NetworkType",   networkType);
+            cellValues.put("MeasurementTaken", measurementTaken);
+
+            if (cellExists(cellID)) {
+                Log.v(TAG, mTAG + ": Cell info updated in local db: " + cellID);
+                return mDb.update( CELL_TABLE, cellValues, "CellID=?", new String[]{Integer.toString(cellID)} );
+            } else {
+                Log.v(TAG,  mTAG + ": New Cell found, insert into local db:: " + cellID);
+                return mDb.insert(CELL_TABLE, null, cellValues);
+            }
+        }
+        return 0;
+    }
+
+    
+    public long insertCell(Cell cell) {
+
+        
+        
+        
+        
+        if (cell.getCID() != Integer.MAX_VALUE && (cell.getLat() != 0.0 && cell.getLon() != 0.0)) {
+            
+            ContentValues cellValues = new ContentValues();
+            cellValues.put("Lac",       cell.getLAC());
+            cellValues.put("CellID",    cell.getCID());
+            cellValues.put("Net",       cell.getNetType());
+            cellValues.put("Lat",       cell.getLat());
+            cellValues.put("Lng",       cell.getLon());
+            cellValues.put("Signal",    cell.getDBM());
+            cellValues.put("Mcc",       cell.getMCC());
+            cellValues.put("Mnc",       cell.getMNC());
+            cellValues.put("Accuracy",  cell.getAccuracy());
+            cellValues.put("Speed",     cell.getSpeed());
+            cellValues.put("Direction", cell.getBearing());
+            cellValues.put("MeasurementTaken", cell.getTimestamp());
+
+            if (cellExists(cell.getCID())) {
+                Log.v(TAG,  mTAG + ": CID info updated in local db (DBi): " + cell.getCID());
+                return mDb.update(CELL_TABLE, cellValues,"CellID=?", new String[]{Integer.toString(cell.getCID())});
+            } else {
+                Log.v(TAG,  mTAG + ": New CID found, insert into local db (DBi):: " + cell.getCID());
+                return mDb.insert(CELL_TABLE, null, cellValues);
+            }
+        }
+        return 0;
+    }
+
+    
+
+    long insertOpenCell(double latitude,
+                        double longitude,
+                        int mcc,
+                        int mnc,
+                        int lac,
+                        int cellID,
+                        int avgSigStr,
+                        int range,      
+                        int samples,
+                        int isGPSexact, 
+                        String RAT      
+                        
+    ) {
+        return insertOpenCell(
+                latitude,
+                longitude,
+                mcc,
+                mnc,
+                lac,
+                cellID,
+                avgSigStr,
+                range,
+                samples,
+                isGPSexact,
+                RAT,
+                true);
+    }
+
+    
+    long insertOpenCell(double latitude,
+                        double longitude,
+                        int mcc,
+                        int mnc,
+                        int lac,
+                        int cellID,
+                        int avgSigStr,
+                        int range,      
+                        int samples,
+                        int isGPSexact, 
+                        String RAT,      
+                        
+                        boolean isNeedCheckExists
+                        ) {
+
+        
+        ContentValues cellIDValues = new ContentValues();
+        cellIDValues.put("Lat",         latitude);
+        cellIDValues.put("Lng",         longitude);
+        cellIDValues.put("Mcc",         mcc);
+        cellIDValues.put("Mnc",         mnc);
+        cellIDValues.put("Lac",         lac);
+        cellIDValues.put("CellID",      cellID); 
+        cellIDValues.put("AvgSigStr",   avgSigStr);
+        cellIDValues.put("avg_range",   range );       
+        cellIDValues.put("Samples",     samples);
+        cellIDValues.put("isGPSexact",  isGPSexact );  
+        cellIDValues.put("Type",        RAT );         
+        
+
+        
+        if (isNeedCheckExists && openCellExists(cellID)) {
+            
+            Log.v(TAG,  mTAG + ": CID already found in DBe_import! Skipping: " + cellID );
+            return 1;
+            
+            
+        } else {
+            return mDb.insert(OPENCELLID_TABLE, null, cellIDValues);
+        }
+    }
+
+    
+    public long insertLocation( int lac,
+                                int cellID,
+                                int netType,
+                                double latitude,
+                                double longitude,
+                                int signalInfo,
+                                String cellInfo
+                                ) {
+
+        if (latitude != 0.0 && longitude != 0.0) {
+            
+            ContentValues locationValues = new ContentValues();
+            locationValues.put("Lac",       lac);
+            locationValues.put("CellID",    cellID);
+            locationValues.put("Net",       netType);
+            locationValues.put("Lat",       latitude);
+            locationValues.put("Lng",       longitude);
+            locationValues.put("Signal",    signalInfo);
+            locationValues.put("Connection", cellInfo); 
+
+            
+            
+            if (locationExists(cellID, latitude, longitude, signalInfo)) {
+                return mDb.update(LOCATION_TABLE, locationValues, "CellID=?",
+                        new String[]{Integer.toString(cellID)});
+            } else {
+                return mDb.insert(LOCATION_TABLE, null, locationValues);
+            }
+        }
+
+        return 0;
+    }
+
+    
+    public int deleteCell(int cellId) {
+        Log.i(TAG,  mTAG + ": Deleted CID: " + cellId);
+        return mDb.delete(CELL_TABLE, "CellID = ?", new String[]{ String.valueOf(cellId) });
+    }
+
+    
+     public long insertDetection(
+                                 int LAC,
+                                 int CID,
+                                 int PSC,
+                                 double latitude,
+                                 double longitude,
+                                 double accu,
+                                 int DF_id,
+                                 String DF_description) {
+
+        
+        ContentValues detectionValues = new ContentValues();
+        
+        detectionValues.put("LAC",          LAC);
+        detectionValues.put("CID",          CID);
+        detectionValues.put("PSC",          PSC);
+        detectionValues.put("gpsd_lat",     latitude);
+        detectionValues.put("gpsd_lon",     longitude);
+        detectionValues.put("gpsd_accu",    accu);
+        detectionValues.put("DF_id",        DF_id);
+        detectionValues.put("DF_description", DF_description);
+
+        Log.v(TAG, mTAG + ": Insert Detection into EventLog Table: " + CID);
+        return mDb.insert(TABLE_EVENTLOG, null, detectionValues);
+     }
+
+
+    
+
+    
+
+    
+    public Cursor getEventLogData() {
+        return mDb.query(TABLE_EVENTLOG,
+                new String[]{"time", "LAC", "CID", "PSC", "gpsd_lat","gpsd_lon", "gpsd_accu", "DF_id", "DF_desc"},
+                null, null, null, null, null
+        );
+    }
+
+
+    
+    
+    public Cursor getSilentSmsData() {
+        return mDb.query(SILENT_SMS_TABLE,
+                new String[]{"Address", "Display", "Class", "ServiceCtr", "Message", "Timestamp"},
+                null, null, null, null, COLUMN_ID + " DESC"
+        );
+    }
+
+    
+    public Cursor getCellData() {
+        return mDb.query( CELL_TABLE,
+                new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
+                        "Accuracy", "Speed", "Direction"},
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getOPCIDSubmitData() {
+        return mDb.query( CELL_TABLE,
+                new String[]{"Mcc", "Mnc", "Lac", "CellID", "Lng", "Lat", "Signal", "Timestamp",
+                        "Accuracy", "Speed", "Direction", "NetworkType"}, "OCID_SUBMITTED <> 1",
+                null, null, null, null
+        );
+    }
+
+    
+    public Cursor getLocationData() {
+        return mDb.query( LOCATION_TABLE,
+                new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal"},
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getOpenCellIDData() {
+        return mDb.query( OPENCELLID_TABLE,
+                new String[]{"CellID", "Lac", "Mcc", "Mnc", "Lat", "Lng", "AvgSigStr", "Samples"},
+                
+                null, null, null, null, null
+        );
+    }
+
+    
+    public Cursor getDefaultMccLocationData() {
+        return mDb.query( TABLE_DEFAULT_MCC,
+                new String[]{"Country", "Mcc", "Lat", "Lng"}, null, null, null, null, null);
+    }
+
+    
+    
+    
+
+
+    
+    boolean locationExists(int cellID, double lat, double lng, int signal) {
+        Cursor cursor = mDb.rawQuery("SELECT * FROM " + LOCATION_TABLE +
+                        " WHERE CellID = " + cellID +
+                        " AND Lat = " + lat + " AND Lng = " + lng + " AND Signal = " + signal, null);
+        boolean exists = cursor.getCount() > 0;
+        cursor.close();
+        return exists;
+    }
+
+    
+    boolean cellExists(int cellID) {
+        Cursor cursor = mDb.rawQuery("SELECT 1 FROM " + CELL_TABLE +
+                        " WHERE CellID = " + cellID, null);
+        boolean exists = cursor.getCount() > 0;
+        
+        cursor.close();
+        return exists;
+    }
+
+    
+    public boolean openCellExists(int cellID) {
+        Cursor cursor = mDb.rawQuery("SELECT * FROM " + OPENCELLID_TABLE +
+                        " WHERE CellID = " + cellID, null);
+        boolean exists = cursor.getCount() > 0;
+        
+        cursor.close();
+        return exists;
+    }
+
+    
+    public boolean checkLAC(Cell cell) {
+        Cursor cursor = mDb.query(CELL_TABLE,
+                        
+                        new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
+                        "Accuracy", "Speed", "Direction", "Timestamp"},
+                        "CellID=" + cell.getCID(),
+                        null, null, null, null);
+
+        while (cursor.moveToNext()) {
+            
+            if (cell.getLAC() != cursor.getInt(1)) {
+                
+                
+                
+                Log.i(TAG, "ALERT: Changing LAC on CID: " + cell.getCID()
+                            + " LAC(API): " + cell.getLAC()
+                            + " LAC(DBi): " + cursor.getInt(1) );
+
+                
+                
+                insertDetection(cell.getLAC(), cell.getCID(), cell.getPSC(),
+                                cursor.getDouble(3), cursor.getDouble(4), cursor.getInt(8),
+                                1, "Changing LAC");
+
+                cursor.close();
+                return false;
+            } else {
+                Log.v(TAG, "LAC checked - no change on CID:" + cell.getCID()
+                            + " LAC(API): " + cell.getLAC()
+                            + " LAC(DBi): " + cursor.getInt(1) );
+            }
+        }
+        cursor.close();
+        return true;
+    }
+
+    
+    public void ocidProcessed() {
+        ContentValues ocidValues = new ContentValues();
+        ocidValues.put("OCID_SUBMITTED", 1); 
+        mDb.update(CELL_TABLE, ocidValues, "OCID_SUBMITTED<>?", new String[]{"1"}); 
+    }
+
+    public double[] getDefaultLocation(int mcc) {
+        double[] loc = new double[2];
+        Cursor cursor = mDb.rawQuery("SELECT Lat, Lng FROM " + TABLE_DEFAULT_MCC + " WHERE Mcc = " + mcc, null);
+
+        if (cursor.moveToFirst()) {
+            loc[0] = Double.parseDouble(cursor.getString(0));
+            loc[1] = Double.parseDouble(cursor.getString(1));
+        } else {
+            loc[0] = 0.0;
+            loc[1] = 0.0;
+        }
+        cursor.close();
+        return loc;
+    }
+
+    
+    public void cleanseCellTable() {
+        
+        mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE " + COLUMN_ID + " NOT IN (SELECT MAX(" + COLUMN_ID + ") FROM " + CELL_TABLE + " GROUP BY CellID)");
+        
+        mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE CellID = " + Integer.MAX_VALUE + " OR CellID = -1");
+    }
+
+    
+    public boolean prepareOpenCellUploadData() {
+        boolean result;
+
+        File dir = new File(FOLDER + "OpenCellID/");
+        if (!dir.exists()) {
+            result = dir.mkdirs();
+            if (!result) {
+                return false;
+            }
+        }
+        File file = new File(dir, "aimsicd-ocid-data.csv");
+
+        try {
+            open(); 
+            Cursor c = getOPCIDSubmitData(); 
+
+            if(c.getCount() > 0) { 
+                if (!file.exists()) {
+                    result = file.createNewFile();
+                    if (!result) {
+                        c.close();
+                        return false;
+                    }
+
+                    CSVWriter csvWrite = new CSVWriter(new FileWriter(file));
+
+                    csvWrite.writeNext("mcc,mnc,lac,cellid,lon,lat,signal,measured_at,rating,speed,direction,act");
+                    String[] rowData = new String[c.getColumnCount()];
+                    int size = c.getColumnCount();
+                    AIMSICD.mProgressBar.setProgress(0);
+                    AIMSICD.mProgressBar.setMax(size);
+                    while (c.moveToNext()) {
+                        for (int i = 0; i < size; i++) {
+                            rowData[i] = c.getString(i);
+                            AIMSICD.mProgressBar.setProgress(i);
+                        }
+                        csvWrite.writeNext(rowData);
+                    }
+
+                    csvWrite.close();
+                    c.close();
+                }
+                return true;
+             }
+             return false;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error creating OpenCellID Upload Data: " + e);
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+    }
+
+    
+    private void populateDefaultMCC(SQLiteDatabase db) {
+        AssetManager mngr = mContext.getAssets();
+        InputStream csvDefaultMcc;
+        FileOutputStream fout;
+
+        try {
+            csvDefaultMcc = mngr.open("default_mcc_locations.csv");
+            File tempfile = File.createTempFile("tempFile", ".tmp");
+            tempfile.deleteOnExit();
+
+            fout = new FileOutputStream(tempfile);
+            byte[] buf = new byte[1024];
+            int len;
+            while ((len = csvDefaultMcc.read(buf)) != -1) {
+                fout.write(buf, 0, len);
+            }
+            fout.close();
+            csvDefaultMcc.close();
+
+            CSVReader csvReader = new CSVReader(new FileReader(tempfile));
+            List<String[]> csvMcc = csvReader.readAll();
+            
+            ContentValues defaultMccValues = new ContentValues();
+
+            for (int i = 1; i < csvMcc.size(); i++) {
+                
+                defaultMccValues.put("Country", csvMcc.get(i)[0]);
+                defaultMccValues.put("Mcc", csvMcc.get(i)[1]);
+                defaultMccValues.put("Lng", csvMcc.get(i)[2]);
+                defaultMccValues.put("Lat", csvMcc.get(i)[3]);
+                db.insert(TABLE_DEFAULT_MCC, null, defaultMccValues);
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error populating Default MCC Data: " + e);
+        }
+    }
+
+    
+    public boolean updateOpenCellID() {
+        String fileName = Environment.getExternalStorageDirectory()
+                                        + "/AIMSICD/OpenCellID/opencellid.csv";
+        File file = new File(fileName);
+        try {
+            if (file.exists()) {
+                CSVReader csvReader = new CSVReader(new FileReader(file));
+                List<String[]> csvCellID = new ArrayList<>();
+                String next[];
+                
+                
+                
+
+                
+                
+                while ((next = csvReader.readNext()) != null) {
+                    csvCellID.add(next);
+                    
+                }
+
+                if (!csvCellID.isEmpty()) {
+                    int lines = csvCellID.size();
+                    Log.i(TAG, mTAG + ":updateOpenCellID: OCID CSV size (lines): " + lines );
+
+                    String lQuery = "SELECT CellID, COUNT(CellID) FROM "+OPENCELLID_TABLE+" GROUP BY CellID;";
+                    Cursor lCursor = mDb.rawQuery(lQuery, null);
+                    SparseArray<Boolean> lPresentCellID = new SparseArray<>();
+                    if(lCursor.getCount() > 0) {
+                        while(lCursor.moveToNext()) {
+                            lPresentCellID.put(lCursor.getInt(0), true );
+                        }
+                    }
+                    lCursor.close();
+
+                    AIMSICD.mProgressBar.setProgress(0);
+                    AIMSICD.mProgressBar.setMax(lines);
+                    for (int i = 1; i < lines; i++) {
+                        AIMSICD.mProgressBar.setProgress(i);
+
+                        
+                        
+                        if(lPresentCellID.get(Integer.parseInt(csvCellID.get(i)[5]), false)) {
+                            continue;
+                        }
+                        
+                        
+                        insertOpenCell( Double.parseDouble(csvCellID.get(i)[0]), 
+                                        Double.parseDouble(csvCellID.get(i)[1]), 
+                                        Integer.parseInt(csvCellID.get(i)[2]),   
+                                        Integer.parseInt(csvCellID.get(i)[3]),   
+                                        Integer.parseInt(csvCellID.get(i)[4]),   
+                                        Integer.parseInt(csvCellID.get(i)[5]),   
+                                        Integer.parseInt(csvCellID.get(i)[6]),   
+                                        Integer.parseInt(csvCellID.get(i)[7]),   
+                                        Integer.parseInt(csvCellID.get(i)[8]),   
+                                        Integer.parseInt(csvCellID.get(i)[9]),   
+                                        String.valueOf(csvCellID.get(i)[10]),     
+                                        false
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+
+                        );
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error parsing OpenCellID data: " + e.getMessage());
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+    }
+
+    
+    
+    
+
+    
+    public boolean restoreDB() {
+        try {
+            for (String table : mTables) {
+                File file = new File(FOLDER + "aimsicd-" + table + ".csv");
+                if (file.exists()) {
+                    List<String[]> records = new ArrayList<>();
+                    String next[];
+                    CSVReader csvReader = new CSVReader(new FileReader(file));
+                    while ((next = csvReader.readNext()) != null) {
+                        records.add(next);
+                    }
+
+                    if (!records.isEmpty()) {
+                        int lines = records.size();
+                        AIMSICD.mProgressBar.setMax(lines);
+                        AIMSICD.mProgressBar.setProgress(0);
+                        for (int i = 1; i < lines; i++) {
+                            AIMSICD.mProgressBar.setProgress(i);
+                            switch (table) {
+
+                                case CELL_TABLE:
+                                    insertCell(
+                                            
+                                            Integer.parseInt(records.get(i)[1]),    
+                                            Integer.parseInt(records.get(i)[2]),    
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Double.parseDouble(records.get(i)[4]),  
+                                            Double.parseDouble(records.get(i)[5]),  
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            Integer.valueOf(records.get(i)[7]),     
+                                            Integer.valueOf(records.get(i)[8]),     
+                                            Double.valueOf(records.get(i)[9]),      
+                                            Double.valueOf(records.get(i)[10]),     
+                                            Double.valueOf(records.get(i)[11]),     
+                                            String.valueOf(records.get(i)[12]),     
+                                            Long.valueOf(records.get(i)[13])        
+                                            
+                                            
+                                    );
+                                    break;
+
+                                case LOCATION_TABLE:
+                                    insertLocation(
+                                            Integer.parseInt(records.get(i)[1]),    
+                                            Integer.parseInt(records.get(i)[2]),    
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Double.parseDouble(records.get(i)[4]),  
+                                            Double.parseDouble(records.get(i)[5]),  
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            String.valueOf(records.get(i)[7])       
+                                    );
+                                    break;
+
+                                case OPENCELLID_TABLE:
+                                    insertOpenCell(
+                                            
+                                            Double.parseDouble(records.get(i)[1]),  
+                                            Double.parseDouble(records.get(i)[2]),  
+                                            Integer.parseInt(records.get(i)[3]),    
+                                            Integer.parseInt(records.get(i)[4]),    
+                                            Integer.parseInt(records.get(i)[5]),    
+                                            Integer.parseInt(records.get(i)[6]),    
+                                            Integer.parseInt(records.get(i)[7]),    
+                                            Integer.parseInt(records.get(i)[8]),    
+                                            Integer.parseInt(records.get(i)[9]),    
+                                            Integer.parseInt(records.get(i)[10]),   
+                                            String.valueOf(records.get(i)[11])      
+                                            
+                                    );
+                                    break;
+
+                                case SILENT_SMS_TABLE:
+                                    Bundle bundle = new Bundle();
+                                    bundle.putString("address",         String.valueOf(records.get(i)[1]));
+                                    bundle.putString("display_address", String.valueOf(records.get(i)[2]));
+                                    bundle.putString("message_class",   String.valueOf(records.get(i)[3]));
+                                    bundle.putString("service_centre",  String.valueOf(records.get(i)[4]));
+                                    bundle.putString("message",         String.valueOf(records.get(i)[5]));
+                                    insertSilentSms(bundle);
+                                    break;
+                            }
+
+                        }
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": restoreDB() " + e);
+            return false;
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+
+    }
+
+    
+    private void dumpDB()  {
+        File dumpdir = new File(FOLDER);
+        
+        File file = new File(dumpdir, "aimsicd_dump.db");
+        
+        String aimdir = "/data/data/com.SecUpwN.AIMSICD/databases/";
+        
+        String execString = "/system/xbin/sqlite3 " + aimdir + "aimsicd.db '.backup " + file + "'";
+
+        try {
+            Log.i(TAG, mTAG + ":dumpDB() Attempting to dump DB to: " + file + "\nUsing: \"" + execString + "\"\n");
+            
+            CMDProcessor.runSuCommand(execString);
+            
+            
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ":dumpDB() Failed to export DB dump file: " + e);
+        }
+        Log.i(TAG, mTAG + ":dumpDB() Database dumped to: " + file);
+
+    }
+
+
+    
+    public boolean backupDB() {
+        try {
+            for (String table : mTables) {
+                backup(table);
+            }
+            if (MONO_DB_DUMP) {
+                dumpDB();
+            }
+            return true;
+        } catch (Exception ioe) {
+            Log.e(TAG, mTAG + ":backupDB() Error: " + ioe);
+            return false;
+        }
+    }
+
+    
+    private void backup(String tableName) {
+        Log.i(TAG, mTAG + ": Database Backup: " + DB_NAME);
+
+        File dir = new File(FOLDER);
+        if (!dir.exists()) { dir.mkdirs(); }  
+        File file = new File(dir, "aimsicd-" + tableName + ".csv");
+
+        try {
+            file.createNewFile();
+            CSVWriter csvWrite = new CSVWriter(new FileWriter(file));
+            Log.d(TAG, mTAG + ": table name " + tableName);
+            open();
+            Cursor c = mDb.rawQuery("SELECT * FROM " + tableName, new String[0]);
+
+            csvWrite.writeNext(c.getColumnNames());
+            String[] rowData = new String[c.getColumnCount()];
+            int size = c.getColumnCount();
+            AIMSICD.mProgressBar.setProgress(0);
+            AIMSICD.mProgressBar.setMax(size);
+            while (c.moveToNext()) {
+                for (int i = 0; i < size; i++) {
+                    rowData[i] = c.getString(i);
+                    AIMSICD.mProgressBar.setProgress(i);
+                }
+                csvWrite.writeNext(rowData);
+            }
+
+            csvWrite.close();
+            c.close();
+
+        } catch (Exception e) {
+            Log.e(TAG, mTAG + ": Error exporting table: " + tableName + " " + e);
+        } finally {
+            AIMSICD.mProgressBar.setProgress(0);
+        }
+
+        Log.i(TAG, mTAG + ": Database Export complete.");
+    }
+
+
+    
+    
+    
+
+    
+    
+    public void checkDBe() {
+        
+        int tf_settings=30;         
+        int min_gps_precision=50;   
+
+        String sqlq;                
+
+        
+        
+        
+
+        Log.d(TAG, mTAG + ":checkDBe() Attempting to delete bad import data from DBe_import table...");
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Samples < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        
+        
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac > 65534";
+        mDb.execSQL(sqlq);
+        
+        
+        
+
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID < 1";
+        mDb.execSQL(sqlq);
+
+        
+        
+        
+        sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID > 268435455";
+        mDb.execSQL(sqlq);
+        
+        
+        
+
+        Log.i(TAG, mTAG + ":checkDBe() Deleted BTS entries from DBe_import table with bad LAC/CID...");
+
+        
+        
+        
+
+        
+        
+        
+
+        
+        
+
+        
+        
+
+    }
+
+
+
+    
+    
+    
+    public void cleanseCellStrengthTables(long maxTime) {
+        Log.d(TAG, mTAG + ": Cleaning " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
+        mDb.execSQL("DELETE FROM " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
+    }
+
+    public void addSignalStrength( int cellID, int signal, Long timestamp ) {
+        ContentValues row = new ContentValues();
+        row.put("cellID", cellID);
+        row.put("signal", signal);
+        row.put("timestamp", timestamp);
+        mDb.insert(CELL_SIGNAL_TABLE, null, row);
+    }
+
+    public int countSignalMeasurements(int cellID) {
+        Cursor c = mDb.rawQuery("SELECT COUNT(cellID) FROM " + CELL_SIGNAL_TABLE +" WHERE cellID=" + cellID, new String[0]);
+        c.moveToFirst();
+        int lAnswer = c.getInt(0);
+        c.close();
+        return lAnswer;
+    }
+
+    public int getAverageSignalStrength(int cellID) {
+        Cursor c = mDb.rawQuery("SELECT AVG(signal) FROM " + CELL_SIGNAL_TABLE +" WHERE cellID=" + cellID, new String[0]);
+        c.moveToFirst();
+        int lAnswer = c.getInt(0);
+        c.close();
+        return lAnswer;
+    }
+
+    public Cursor getSignalStrengthMeasurementData() {
+        return mDb.rawQuery("SELECT cellID, signal, timestamp FROM " + CELL_SIGNAL_TABLE +" ORDER BY timestamp DESC", new String[0]);
+    }
+
+
+    
+    
+    
+
+    
+    public class DbHelper extends SQLiteOpenHelper {
+
+        DbHelper(Context context) {
+            super(context, DB_NAME, null, DATABASE_VERSION);
+        }
+
+
+        
+        @Override
+        public void onCreate(SQLiteDatabase database) {
+
+            
+            
+            
+
+            
+            database.execSQL("CREATE TABLE " +
+                    CELL_SIGNAL_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "cellID INTEGER, signal INTEGER, " +
+                    "timestamp INTEGER);");
+            database.execSQL("CREATE INDEX cellID_index ON " + CELL_SIGNAL_TABLE + " (cellID);");
+            database.execSQL("CREATE INDEX cellID_timestamp ON " + CELL_SIGNAL_TABLE + " (timestamp);");
+
+            
+            String SMS_DATABASE_CREATE = "CREATE TABLE " +
+                    SILENT_SMS_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Address VARCHAR, " +
+                    "Display VARCHAR, " +
+                    "Class VARCHAR, " +
+                    "ServiceCtr VARCHAR, " +
+                    "Message VARCHAR, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(SMS_DATABASE_CREATE);
+
+            
+            String ZeroSMS = "INSERT INTO " + SILENT_SMS_TABLE +
+                    " (Address,Display,Class,ServiceCtr,Message) " +
+                    "VALUES ('"+
+                    Examples.SILENT_SMS_CARD_DATA.ADDRESS +"','"+
+                    Examples.SILENT_SMS_CARD_DATA.DISPLAY+"','CLAZZ','SMSC','DaTestMessage');";
+            database.execSQL(ZeroSMS);
+
+
+            
+            String LOC_DATABASE_CREATE = "CREATE TABLE " +
+                    LOCATION_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lac INTEGER, CellID INTEGER, " +
+                    "Net VARCHAR, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Signal INTEGER, " +
+                    "Connection VARCHAR, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(LOC_DATABASE_CREATE);
+
+            
+            String CELL_DATABASE_CREATE = "CREATE TABLE " +
+                    CELL_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lac INTEGER, " +
+                    "CellID INTEGER, " +
+                    "Net INTEGER, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Signal INTEGER, " +
+                    "Mcc INTEGER, " +
+                    "Mnc INTEGER, " +
+                    "Accuracy REAL, " +
+                    "Speed REAL, " +
+                    "Direction REAL, " +
+                    "NetworkType VARCHAR, " +
+                    "MeasurementTaken VARCHAR, " +
+                    "OCID_SUBMITTED INTEGER DEFAULT 0, " +
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
+            database.execSQL(CELL_DATABASE_CREATE);
+
+
+            
+            String OPENCELLID_DATABASE_CREATE = "CREATE TABLE " +
+                    OPENCELLID_TABLE + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR, " +
+                    "Mcc INTEGER, " +
+                    "Mnc INTEGER, " +
+                    "Lac INTEGER, " +
+                    "CellID INTEGER, " +
+                    "AvgSigStr INTEGER, " +
+                    "avg_range INTEGER, " +     
+                    "Samples INTEGER, " +
+                    "isGPSexact INTEGER, " +    
+                    "Type TEXT, " +             
+                    
+                    "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+                    
+                    ");";
+            database.execSQL(OPENCELLID_DATABASE_CREATE);
+
+            
+            String DEFAULT_MCC_DATABASE_CREATE = "CREATE TABLE " +
+                    TABLE_DEFAULT_MCC + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "Country VARCHAR, " +
+                    "Mcc INTEGER, " +
+                    "Lat VARCHAR, " +
+                    "Lng VARCHAR);";
+            database.execSQL(DEFAULT_MCC_DATABASE_CREATE);
+
+            
+            
+            
+
+            
+            
+            
+            String TABLE_EVENTLOG_CREATE = "CREATE TABLE " +
+                    TABLE_EVENTLOG + " (" + COLUMN_ID +
+                    " INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "time     		TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"  +
+                    "LAC           	INTEGER NOT NULL," +
+                    "CID           	INTEGER NOT NULL," +
+                    "PSC           	INTEGER," +
+                    "gpsd_lat      	REAL," +
+                    "gpsd_lon      	REAL," +
+                    "gpsd_accu     	INTEGER," +
+                    "DF_id         	INTEGER," +
+                    "DF_desc    	TEXT" + ");";
+            database.execSQL(TABLE_EVENTLOG_CREATE);
+
+            
+            
+            
+
+            String ZeroEvent = "INSERT INTO " + TABLE_EVENTLOG +
+                    " (LAC,CID,PSC, gpsd_lat,gpsd_lon,gpsd_accu, DF_id,DF_desc) " +
+                    "VALUES ("+
+                    EVENT_LOG_DATA.LAC+","+
+                    EVENT_LOG_DATA.CID+","+
+                    EVENT_LOG_DATA.PSC+","+
+                    EVENT_LOG_DATA.GPSD_LAT+","+
+                    EVENT_LOG_DATA.GPSD_LON+","+
+                    EVENT_LOG_DATA.GPSD_ACCU+","+
+                    EVENT_LOG_DATA.DF_ID+",'CellID not found in OCID Database');";
+            database.execSQL(ZeroEvent);
+
+            
+            populateDefaultMCC(database);
+
+        }
+
+
+        
+        
+        
+
+        
+        
+        @Override
+        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
+                        + ", and destroy all old data.");
+
+            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
+
+            
+            
+            
+            
+            
+            
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
+            
+            
+            
+
+            onCreate(db);
+        }
+
+    }
+
+}

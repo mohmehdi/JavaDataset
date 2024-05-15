@@ -1,0 +1,16 @@
+Java_Projects/guava/guava-31fc1920/curr/guava/src/com/google/common/primitives/Longs.java
+Java_Projects/guava/guava-31fc1920/curr/guava-gwt/test-super/com/google/common/primitives/super/com/google/common/primitives/IntsTest.java
+Java_Projects/guava/guava-31fc1920/curr/guava-gwt/test-super/com/google/common/primitives/super/com/google/common/primitives/LongsTest.java
+Java_Projects/guava/guava-31fc1920/curr/guava-gwt/src-super/com/google/common/primitives/super/com/google/common/primitives/Ints.java
+Java_Projects/guava/guava-31fc1920/curr/guava-gwt/test/com/google/common/primitives/LongsTest_gwt.java
+Java_Projects/guava/guava-31fc1920/curr/guava-gwt/test/com/google/common/primitives/IntsTest_gwt.java
+Java_Projects/guava/guava-31fc1920/prev/guava/src/com/google/common/primitives/Longs.java
+Java_Projects/guava/guava-31fc1920/prev/guava-gwt/test-super/com/google/common/primitives/super/com/google/common/primitives/IntsTest.java
+Java_Projects/guava/guava-31fc1920/prev/guava-gwt/test-super/com/google/common/primitives/super/com/google/common/primitives/LongsTest.java
+Java_Projects/guava/guava-31fc1920/prev/guava-gwt/src-super/com/google/common/primitives/super/com/google/common/primitives/Ints.java
+Java_Projects/guava/guava-31fc1920/prev/guava-gwt/test/com/google/common/primitives/LongsTest_gwt.java
+Java_Projects/guava/guava-31fc1920/prev/guava-gwt/test/com/google/common/primitives/IntsTest_gwt.java
+Java_Projects/guava/guava-5bab9e83/curr/guava/src/com/google/common/collect/HashBiMap.java
+Java_Projects/guava/guava-5bab9e83/curr/guava-tests/test/com/google/common/collect/HashBiMapTest.java
+Java_Projects/guava/guava-5bab9e83/prev/guava/src/com/google/common/collect/HashBiMap.java
+Java_Projects/guava/guava-5bab9e83/prev/guava-tests/test/com/google/common/collect/HashBiMapTest.java

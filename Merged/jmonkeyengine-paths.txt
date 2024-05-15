@@ -1,0 +1,12 @@
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/NodePanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/ConnectionCurve.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/ConnectionStraight.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/OutBusPanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/DraggablePanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/curr/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/Diagram.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/NodePanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/ConnectionCurve.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/ConnectionStraight.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/OutBusPanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/DraggablePanel.java
+Java_Projects/jmonkeyengine/jmonkeyengine-5989711f/prev/sdk/jme3-materialeditor/src/com/jme3/gde/materialdefinition/editor/Diagram.java

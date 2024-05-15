@@ -1,0 +1,464 @@
+package org.jgroups.auth;
+
+import org.jgroups.Event;
+import org.jgroups.Message;
+import org.jgroups.PhysicalAddress;
+import org.jgroups.annotations.Property;
+import org.jgroups.stack.IpAddress;
+import org.jgroups.util.Bits;
+import org.jgroups.util.Util;
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.StringTokenizer;
+
+
+public class FixedMembershipToken extends AuthToken {
+    private final List<InetSocketAddress> memberList = new ArrayList<>();
+    private String                        token = "emptyToken";
+
+    @Property
+    private String fixed_members_seperator = ",";
+
+    public FixedMembershipToken() {
+    }
+
+    public FixedMembershipToken(String token) {
+        this.token=token;
+    }
+
+    public String getName() {
+        return "org.jgroups.auth.FixedMembershipToken";
+    }
+
+    @Property
+    public void setFixedMembersSeparator(String value) {
+        fixed_members_seperator = value;
+    }
+
+    public boolean authenticate(AuthToken token, Message msg) {
+        if ((token != null) && (token instanceof FixedMembershipToken) && (this.memberList != null)) {
+            PhysicalAddress src = (PhysicalAddress) auth.down(new Event(Event.GET_PHYSICAL_ADDRESS, msg.getSrc()));
+            if (src == null) {
+                log.error("didn't find physical address for " + msg.getSrc());
+                return false;
+            }
+            return isInMembersList((IpAddress)src);
+        }
+
+        if (log.isWarnEnabled())
+            log.warn("Invalid AuthToken instance - wrong type or null");
+        return false;
+    }
+
+    public boolean isInMembersList(IpAddress sender) {
+        if(memberList == null || sender == null)
+            return false;
+
+        for(InetSocketAddress addr: memberList) {
+            if(match(sender, addr))
+                return true;
+        }
+        return false;
+    }
+
+    public static boolean match(IpAddress sender, InetSocketAddress addr) {
+        return !(sender == null || addr == null)
+          && addr.getAddress().equals(sender.getIpAddress())
+          && (addr.getPort() == 0 || addr.getPort() == sender.getPort());
+    }
+
+
+    private static boolean hasPort(String member) {
+        return member.contains(":");
+    }
+
+    @Property(name = "fixed_members_value")
+    public void setMemberList(String list) throws UnknownHostException {
+        memberList.clear();
+        StringTokenizer memberListTokenizer = new StringTokenizer(list, fixed_members_seperator);
+        while (memberListTokenizer.hasMoreTokens()) {
+            String tmp=memberListTokenizer.nextToken().trim();
+            int index=tmp.lastIndexOf('/');
+            int port=index != -1? Integer.parseInt(tmp.substring(index+1)) : 0;
+            String addr_str=index != -1? tmp.substring(0, index) : tmp;
+            InetAddress addr=InetAddress.getByName(addr_str);
+            memberList.add(new InetSocketAddress(addr, port));
+        }
+    }
+
+    
+    public void writeTo(DataOutput out) throws Exception {
+        if (log.isDebugEnabled())
+            log.debug("SimpleToken writeTo()");
+        Bits.writeString(this.token,out);
+    }
+
+    
+    public void readFrom(DataInput in) throws Exception {
+        if (log.isDebugEnabled())
+            log.debug("SimpleToken readFrom()");
+        this.token = Bits.readString(in);
+    }
+
+    public int size() {
+        return Util.size(token);
+    }
+}
+
+<code block>
+package org.jgroups.protocols;
+
+
+import org.jgroups.Global;
+import org.jgroups.auth.FixedMembershipToken;
+import org.jgroups.auth.MD5Token;
+import org.jgroups.auth.SimpleToken;
+import org.jgroups.stack.IpAddress;
+import org.testng.annotations.Test;
+
+
+@Test(groups=Global.FUNCTIONAL,sequential=false)
+public class AUTHTest {
+
+    
+    public static void testSimpleToken() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chris");
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSimpleTokenMismatch() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chrismills");
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testMD5Token() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("MD5");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chris");
+        token2.setHashType("MD5");
+
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testMD5TokenMismatch() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("MD5");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chrismills");
+        token2.setHashType("MD5");
+
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSHAToken() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("SHA");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chris");
+        token2.setHashType("SHA");
+
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSHATokenMismatch() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("SHA");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chrismills");
+        token2.setHashType("SHA");
+
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testAuthHeader() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+
+        AuthHeader header=new AuthHeader();
+        header.setToken(token1);
+
+        assert token1 == header.getToken();
+    }
+
+    
+    public static void testAuthHeaderDifferent() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chris");
+
+        AuthHeader header=new AuthHeader();
+        header.setToken(token1);
+
+        assert !(token2 == header.getToken());
+    }
+
+
+    public static void testFixedMembershipTokenIPv4() throws Exception {
+        FixedMembershipToken tok=new FixedMembershipToken();
+        tok.setMemberList("192.168.1.6,10.1.1.1/7500,localhost/7800");
+        assert !tok.isInMembersList(new IpAddress("192.168.1.3", 7500));
+        assert !tok.isInMembersList(new IpAddress("10.1.1.1", 7000));
+        assert tok.isInMembersList(new IpAddress("10.1.1.1", 7500));
+        assert tok.isInMembersList(new IpAddress("192.168.1.6", 7500)); 
+        assert tok.isInMembersList(new IpAddress("192.168.1.6", 0));    
+    }
+
+
+    public static void testFixedMembershipTokenIPv6() throws Exception {
+        FixedMembershipToken tok=new FixedMembershipToken();
+        tok.setMemberList("fe80::aa20:66ff:fe11:d346,2a02:120b:2c45:1b70:aa20:66ff:fe11:d346/7500,2a02:120b:2c45:1b70:f474:e6ca:3038:6b5f/7500");
+        assert tok.isInMembersList(new IpAddress("2a02:120b:2c45:1b70:f474:e6ca:3038:6b5f", 7500));
+    }
+
+
+}
+
+<code block>
+package org.jgroups.auth;
+
+import org.jgroups.Event;
+import org.jgroups.Message;
+import org.jgroups.PhysicalAddress;
+import org.jgroups.annotations.Property;
+import org.jgroups.util.Bits;
+import org.jgroups.util.Util;
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.StringTokenizer;
+
+
+public class FixedMembershipToken extends AuthToken {
+    private List<String> memberList = null;
+    private String token = "emptyToken";
+
+    @Property
+    private String fixed_members_seperator = ",";
+
+    public FixedMembershipToken() {
+    }
+
+    public FixedMembershipToken(String token) {
+        this.token=token;
+    }
+
+    public String getName() {
+        return "org.jgroups.auth.FixedMembershipToken";
+    }
+
+    @Property
+    public void setFixedMembersSeparator(String value) {
+        fixed_members_seperator = value;
+    }
+
+    public boolean authenticate(AuthToken token, Message msg) {
+        if ((token != null) && (token instanceof FixedMembershipToken) && (this.memberList != null)) {
+            PhysicalAddress src = (PhysicalAddress) auth.down(new Event(Event.GET_PHYSICAL_ADDRESS,
+                            msg.getSrc()));
+            if (src == null) {
+                if (log.isErrorEnabled())
+                    log.error("didn't find physical address for " + msg.getSrc());
+                return false;
+            }
+
+            String sourceAddressWithPort = src.toString();
+            String sourceAddressWithoutPort = sourceAddressWithPort.substring(0,
+                            sourceAddressWithPort.indexOf(":"));
+
+            if (log.isDebugEnabled()) {
+                log.debug("AUTHToken received from " + sourceAddressWithPort);
+            }
+
+            for (String member : memberList) {
+                if (hasPort(member)) {
+                    if (member.equals(sourceAddressWithPort))
+                        return true;
+                } else {
+                    if (member.equals(sourceAddressWithoutPort))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        if (log.isWarnEnabled()) {
+            log.warn("Invalid AuthToken instance - wrong type or null");
+        }
+        return false;
+    }
+
+    private static boolean hasPort(String member) {
+        return member.contains(":");
+    }
+
+    @Property(name = "fixed_members_value")
+    public void setMemberList(String list) {
+        memberList = new ArrayList<>();
+        StringTokenizer memberListTokenizer = new StringTokenizer(list, fixed_members_seperator);
+        while (memberListTokenizer.hasMoreTokens()) {
+            memberList.add(memberListTokenizer.nextToken().replace('/', ':'));
+        }
+    }
+
+    
+    public void writeTo(DataOutput out) throws Exception {
+        if (log.isDebugEnabled()) {
+            log.debug("SimpleToken writeTo()");
+        }
+        Bits.writeString(this.token,out);
+    }
+
+    
+    public void readFrom(DataInput in) throws Exception {
+        if (log.isDebugEnabled()) {
+            log.debug("SimpleToken readFrom()");
+        }
+        this.token = Bits.readString(in);
+    }
+
+    public int size() {
+        return Util.size(token);
+    }
+}
+
+<code block>
+package org.jgroups.protocols;
+
+
+import org.jgroups.Global;
+import org.jgroups.auth.MD5Token;
+import org.jgroups.auth.SimpleToken;
+import org.testng.annotations.Test;
+
+
+@Test(groups=Global.FUNCTIONAL,sequential=false)
+public class AUTHTest {
+
+    
+    public static void testSimpleToken() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chris");
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSimpleTokenMismatch() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chrismills");
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testMD5Token() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("MD5");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chris");
+        token2.setHashType("MD5");
+
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testMD5TokenMismatch() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("MD5");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chrismills");
+        token2.setHashType("MD5");
+
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSHAToken() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("SHA");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chris");
+        token2.setHashType("SHA");
+
+        assert token1.authenticate(token2, null);
+    }
+
+    
+    public static void testSHATokenMismatch() {
+        MD5Token token1=new MD5Token();
+        token1.setAuthValue("chris");
+        token1.setHashType("SHA");
+
+        MD5Token token2=new MD5Token();
+        token2.setAuthValue("chrismills");
+        token2.setHashType("SHA");
+
+        assert !token1.authenticate(token2, null);
+    }
+
+    
+    public static void testAuthHeader() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+
+        AuthHeader header=new AuthHeader();
+        header.setToken(token1);
+
+        assert token1 == header.getToken();
+    }
+
+    
+    public static void testAuthHeaderDifferent() {
+        SimpleToken token1=new SimpleToken();
+        token1.setAuthValue("chris");
+
+        SimpleToken token2=new SimpleToken();
+        token2.setAuthValue("chris");
+
+        AuthHeader header=new AuthHeader();
+        header.setToken(token1);
+
+        assert !(token2 == header.getToken());
+    }
+
+
+}

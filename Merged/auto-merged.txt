@@ -1,0 +1,3572 @@
+
+package com.google.auto.value.processor;
+
+import com.google.auto.service.AutoService;
+import com.google.auto.value.AutoValue;
+import com.google.common.base.Functions;
+import com.google.common.base.Joiner;
+import com.google.common.base.Optional;
+import com.google.common.base.Throwables;
+import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableBiMap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+
+import java.beans.Introspector;
+import java.io.IOException;
+import java.io.Serializable;
+import java.io.Writer;
+import java.lang.annotation.Annotation;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.annotation.Generated;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+import javax.tools.JavaFileObject;
+
+
+@AutoService(Processor.class)
+public class AutoValueProcessor extends AbstractProcessor {
+  public AutoValueProcessor() {}
+
+  @Override
+  public Set<String> getSupportedAnnotationTypes() {
+    return ImmutableSet.of(AutoValue.class.getName());
+  }
+
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
+  }
+
+  private ErrorReporter errorReporter;
+
+  
+  private final List<String> deferredTypeNames = new ArrayList<String>();
+
+  @Override
+  public synchronized void init(ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    errorReporter = new ErrorReporter(processingEnv);
+  }
+
+  @Override
+  public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    List<TypeElement> deferredTypes = new ArrayList<TypeElement>();
+    for (String deferred : deferredTypeNames) {
+      deferredTypes.add(processingEnv.getElementUtils().getTypeElement(deferred));
+    }
+    if (roundEnv.processingOver()) {
+      
+      
+      
+      for (TypeElement type : deferredTypes) {
+        errorReporter.reportError("Did not generate @AutoValue class for " + type.getQualifiedName()
+            + " because it references undefined types", type);
+      }
+      return false;
+    }
+    Collection<? extends Element> annotatedElements =
+        roundEnv.getElementsAnnotatedWith(AutoValue.class);
+    List<TypeElement> types = new ImmutableList.Builder<TypeElement>()
+        .addAll(deferredTypes)
+        .addAll(ElementFilter.typesIn(annotatedElements))
+        .build();
+    deferredTypeNames.clear();
+    for (TypeElement type : types) {
+      try {
+        processType(type);
+      } catch (AbortProcessingException e) {
+        
+      } catch (MissingTypeException e) {
+        
+        
+        
+        
+        
+        
+        deferredTypeNames.add(type.getQualifiedName().toString());
+      } catch (RuntimeException e) {
+        
+        
+        String trace = Throwables.getStackTraceAsString(e);
+        errorReporter.reportError("@AutoValue processor threw an exception: " + trace, type);
+      }
+    }
+    return false;  
+  }
+
+  private String generatedClassName(TypeElement type, String prefix) {
+    String name = type.getSimpleName().toString();
+    while (type.getEnclosingElement() instanceof TypeElement) {
+      type = (TypeElement) type.getEnclosingElement();
+      name = type.getSimpleName() + "_" + name;
+    }
+    String pkg = TypeSimplifier.packageNameOf(type);
+    String dot = pkg.isEmpty() ? "" : ".";
+    return pkg + dot + prefix + name;
+  }
+
+  private String generatedSubclassName(TypeElement type) {
+    return generatedClassName(type, "AutoValue_");
+  }
+
+  
+  public static class Property {
+    private final String name;
+    private final String identifier;
+    private final ExecutableElement method;
+    private final String type;
+    private final ImmutableList<String> annotations;
+    private final String nullableAnnotation;
+
+    Property(
+        String name,
+        String identifier,
+        ExecutableElement method,
+        String type,
+        TypeSimplifier typeSimplifier) {
+      this.name = name;
+      this.identifier = identifier;
+      this.method = method;
+      this.type = type;
+      this.annotations = buildAnnotations(typeSimplifier);
+      this.nullableAnnotation = buildNullableAnnotation(typeSimplifier);
+    }
+
+    private String buildNullableAnnotation(TypeSimplifier typeSimplifier) {
+      for (AnnotationMirror annotationMirror : method.getAnnotationMirrors()) {
+        String name = annotationMirror.getAnnotationType().asElement().getSimpleName().toString();
+        if (name.equals("Nullable")) {
+          AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+          return annotationOutput.sourceFormForAnnotation(annotationMirror);
+        }
+      }
+      return null;
+    }
+
+    private ImmutableList<String> buildAnnotations(TypeSimplifier typeSimplifier) {
+      ImmutableList.Builder<String> builder = ImmutableList.builder();
+
+      for (AnnotationMirror annotationMirror : method.getAnnotationMirrors()) {
+        TypeElement annotationElement =
+            (TypeElement) annotationMirror.getAnnotationType().asElement();
+        if (annotationElement.getQualifiedName().toString().equals(Override.class.getName())) {
+          
+          
+          continue;
+        }
+        
+        AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+        builder.add(annotationOutput.sourceFormForAnnotation(annotationMirror));
+      }
+
+      return builder.build();
+    }
+
+    
+    @Override
+    public String toString() {
+      return identifier;
+    }
+
+    
+    public String getName() {
+      return name;
+    }
+
+    
+    public String getGetter() {
+      return method.getSimpleName().toString();
+    }
+
+    TypeElement getOwner() {
+      return (TypeElement) method.getEnclosingElement();
+    }
+
+    public TypeMirror getTypeMirror() {
+      return method.getReturnType();
+    }
+
+    public String getType() {
+      return type;
+    }
+
+    public TypeKind getKind() {
+      return method.getReturnType().getKind();
+    }
+
+    public List<String> getAnnotations() {
+      return annotations;
+    }
+
+    public boolean isNullable() {
+      return nullableAnnotation != null;
+    }
+    
+    public String getNullableAnnotation() {
+      return nullableAnnotation;
+    }
+
+    public String getAccess() {
+      Set<Modifier> mods = method.getModifiers();
+      if (mods.contains(Modifier.PUBLIC)) {
+        return "public ";
+      } else if (mods.contains(Modifier.PROTECTED)) {
+        return "protected ";
+      } else {
+        return "";
+      }
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return obj instanceof Property && ((Property) obj).method.equals(method);
+    }
+
+    @Override
+    public int hashCode() {
+      return method.hashCode();
+    }
+  }
+
+  private static boolean isJavaLangObject(TypeElement type) {
+    return type.getSuperclass().getKind() == TypeKind.NONE && type.getKind() == ElementKind.CLASS;
+  }
+
+  private enum ObjectMethodToOverride {
+    NONE, TO_STRING, EQUALS, HASH_CODE
+  }
+
+  private static ObjectMethodToOverride objectMethodToOverride(ExecutableElement method) {
+    String name = method.getSimpleName().toString();
+    switch (method.getParameters().size()) {
+      case 0:
+        if (name.equals("toString")) {
+          return ObjectMethodToOverride.TO_STRING;
+        } else if (name.equals("hashCode")) {
+          return ObjectMethodToOverride.HASH_CODE;
+        }
+        break;
+      case 1:
+        if (name.equals("equals")
+            && method.getParameters().get(0).asType().toString().equals("java.lang.Object")) {
+          return ObjectMethodToOverride.EQUALS;
+        }
+        break;
+    }
+    return ObjectMethodToOverride.NONE;
+  }
+
+  private void findLocalAndInheritedMethods(TypeElement type, List<ExecutableElement> methods) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    Elements elementUtils = processingEnv.getElementUtils();
+    for (TypeMirror superInterface : type.getInterfaces()) {
+      findLocalAndInheritedMethods((TypeElement) typeUtils.asElement(superInterface), methods);
+    }
+    if (type.getSuperclass().getKind() != TypeKind.NONE) {
+      
+      
+      findLocalAndInheritedMethods(
+          (TypeElement) typeUtils.asElement(type.getSuperclass()), methods);
+    }
+    
+    
+    
+    List<ExecutableElement> theseMethods = ElementFilter.methodsIn(type.getEnclosedElements());
+    for (ExecutableElement method : theseMethods) {
+      if (!method.getModifiers().contains(Modifier.PRIVATE)) {
+        boolean alreadySeen = false;
+        for (Iterator<ExecutableElement> methodIter = methods.iterator(); methodIter.hasNext();) {
+          ExecutableElement otherMethod = methodIter.next();
+          if (elementUtils.overrides(method, otherMethod, type)) {
+            methodIter.remove();
+          } else if (method.getSimpleName().equals(otherMethod.getSimpleName())
+              && method.getParameters().equals(otherMethod.getParameters())) {
+            
+            alreadySeen = true;
+          }
+        }
+        if (!alreadySeen) {
+          methods.add(method);
+        }
+      }
+    }
+  }
+
+  private void processType(TypeElement type) {
+    AutoValue autoValue = type.getAnnotation(AutoValue.class);
+    if (autoValue == null) {
+      
+      
+      errorReporter.abortWithError("annotation processor for @AutoValue was invoked with a type"
+          + " that does not have that annotation; this is probably a compiler bug", type);
+    }
+    if (type.getKind() != ElementKind.CLASS) {
+      errorReporter.abortWithError(
+          "@" + AutoValue.class.getName() + " only applies to classes", type);
+    }
+    if (ancestorIsAutoValue(type)) {
+      errorReporter.abortWithError("One @AutoValue class may not extend another", type);
+    }
+    if (implementsAnnotation(type)) {
+      errorReporter.abortWithError("@AutoValue may not be used to implement an annotation"
+          + " interface; try using @AutoAnnotation instead", type);
+    }
+    AutoValueTemplateVars vars = new AutoValueTemplateVars();
+    vars.pkg = TypeSimplifier.packageNameOf(type);
+    vars.origClass = TypeSimplifier.classNameOf(type);
+    vars.simpleClassName = TypeSimplifier.simpleNameOf(vars.origClass);
+    vars.subclass = TypeSimplifier.simpleNameOf(generatedSubclassName(type));
+    vars.types = processingEnv.getTypeUtils();
+    defineVarsForType(type, vars);
+    GwtCompatibility gwtCompatibility = new GwtCompatibility(type);
+    vars.gwtCompatibleAnnotation = gwtCompatibility.gwtCompatibleAnnotationString();
+    String text = vars.toText();
+    text = Reformatter.fixup(text);
+    writeSourceFile(generatedSubclassName(type), text, type);
+    GwtSerialization gwtSerialization = new GwtSerialization(gwtCompatibility, processingEnv, type);
+    gwtSerialization.maybeWriteGwtSerializer(vars);
+  }
+
+  private void defineVarsForType(TypeElement type, AutoValueTemplateVars vars) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    List<ExecutableElement> methods = new ArrayList<ExecutableElement>();
+    findLocalAndInheritedMethods(type, methods);
+    determineObjectMethodsToGenerate(methods, vars);
+    ImmutableSet<ExecutableElement> methodsToImplement = methodsToImplement(methods);
+    Set<TypeMirror> types = new TypeMirrorSet();
+    types.addAll(returnTypesOf(methodsToImplement));
+    TypeMirror javaxAnnotationGenerated = getTypeMirror(Generated.class);
+    types.add(javaxAnnotationGenerated);
+    TypeMirror javaUtilArrays = getTypeMirror(Arrays.class);
+    if (containsArrayType(types)) {
+      
+      
+      types.add(javaUtilArrays);
+    }
+    BuilderSpec builderSpec = new BuilderSpec(type, processingEnv, errorReporter);
+    Optional<BuilderSpec.Builder> builder = builderSpec.getBuilder();
+    ImmutableSet<ExecutableElement> toBuilderMethods;
+    if (builder.isPresent()) {
+      toBuilderMethods = builder.get().toBuilderMethods(typeUtils, methodsToImplement);
+      types.addAll(builder.get().referencedTypes());
+    } else {
+      toBuilderMethods = ImmutableSet.of();
+    }
+    vars.toBuilderMethods =
+        FluentIterable.from(toBuilderMethods).transform(SimpleNameFunction.INSTANCE).toList();
+    Set<ExecutableElement> propertyMethods = Sets.difference(methodsToImplement, toBuilderMethods);
+    String pkg = TypeSimplifier.packageNameOf(type);
+    TypeSimplifier typeSimplifier = new TypeSimplifier(typeUtils, pkg, types, type.asType());
+    vars.imports = typeSimplifier.typesToImport();
+    vars.generated = typeSimplifier.simplify(javaxAnnotationGenerated);
+    vars.arrays = typeSimplifier.simplify(javaUtilArrays);
+    ImmutableBiMap<ExecutableElement, String> methodToPropertyName =
+        methodToPropertyNameMap(propertyMethods);
+    Map<ExecutableElement, String> methodToIdentifier =
+        Maps.newLinkedHashMap(methodToPropertyName);
+    fixReservedIdentifiers(methodToIdentifier);
+    List<Property> props = new ArrayList<Property>();
+    for (ExecutableElement method : propertyMethods) {
+      String propertyType = typeSimplifier.simplify(method.getReturnType());
+      String propertyName = methodToPropertyName.get(method);
+      String identifier = methodToIdentifier.get(method);
+      props.add(new Property(propertyName, identifier, method, propertyType, typeSimplifier));
+    }
+    
+    eclipseHack().reorderProperties(props);
+    vars.props = ImmutableSet.copyOf(props);
+    vars.serialVersionUID = getSerialVersionUID(type);
+    vars.formalTypes = typeSimplifier.formalTypeParametersString(type);
+    vars.actualTypes = TypeSimplifier.actualTypeParametersString(type);
+    vars.wildcardTypes = wildcardTypeParametersString(type);
+    
+    if (builder.isPresent()) {
+      builder.get().defineVars(vars, typeSimplifier, methodToPropertyName);
+    }
+  }
+
+  private ImmutableBiMap<ExecutableElement, String> methodToPropertyNameMap(
+      Iterable<ExecutableElement> propertyMethods) {
+    ImmutableMap.Builder<ExecutableElement, String> builder = ImmutableMap.builder();
+    boolean allGetters = allGetters(propertyMethods);
+    for (ExecutableElement method : propertyMethods) {
+      String methodName = method.getSimpleName().toString();
+      String name = allGetters ? nameWithoutPrefix(methodName) : methodName;
+      builder.put(method, name);
+    }
+    ImmutableMap<ExecutableElement, String> map = builder.build();
+    if (allGetters) {
+      checkDuplicateGetters(map);
+    }
+    return ImmutableBiMap.copyOf(map);
+  }
+
+  private static boolean allGetters(Iterable<ExecutableElement> methods) {
+    for (ExecutableElement method : methods) {
+      String name = method.getSimpleName().toString();
+      
+      boolean get = name.startsWith("get") && !name.equals("get");
+      boolean is = name.startsWith("is") && !name.equals("is")
+          && method.getReturnType().getKind() == TypeKind.BOOLEAN;
+      if (!get && !is) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private String nameWithoutPrefix(String name) {
+    if (name.startsWith("get")) {
+      name = name.substring(3);
+    } else {
+      assert name.startsWith("is");
+      name = name.substring(2);
+    }
+    return Introspector.decapitalize(name);
+  }
+
+  private void checkDuplicateGetters(Map<ExecutableElement, String> methodToIdentifier) {
+    Set<String> seen = Sets.newHashSet();
+    for (Map.Entry<ExecutableElement, String> entry : methodToIdentifier.entrySet()) {
+      if (!seen.add(entry.getValue())) {
+        errorReporter.reportError(
+            "More than one @AutoValue property called " + entry.getValue(), entry.getKey());
+      }
+    }
+  }
+
+  
+  
+  private void fixReservedIdentifiers(Map<ExecutableElement, String> methodToIdentifier) {
+    for (Map.Entry<ExecutableElement, String> entry : methodToIdentifier.entrySet()) {
+      if (SourceVersion.isKeyword(entry.getValue())) {
+        entry.setValue(disambiguate(entry.getValue(), methodToIdentifier.values()));
+      }
+    }
+  }
+
+  private String disambiguate(String name, Collection<String> existingNames) {
+    for (int i = 0; ; i++) {
+      String candidate = name + i;
+      if (!existingNames.contains(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  private Set<TypeMirror> returnTypesOf(Iterable<ExecutableElement> methods) {
+    Set<TypeMirror> returnTypes = new TypeMirrorSet();
+    for (ExecutableElement method : methods) {
+      returnTypes.add(method.getReturnType());
+    }
+    return returnTypes;
+  }
+
+  private static boolean containsArrayType(Set<TypeMirror> types) {
+    for (TypeMirror type : types) {
+      if (type.getKind() == TypeKind.ARRAY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  
+  private static void determineObjectMethodsToGenerate(
+      List<ExecutableElement> methods, AutoValueTemplateVars vars) {
+    
+    
+    
+    
+    vars.equals = false;
+    vars.hashCode = false;
+    vars.toString = false;
+    for (ExecutableElement method : methods) {
+      ObjectMethodToOverride override = objectMethodToOverride(method);
+      boolean canGenerate = method.getModifiers().contains(Modifier.ABSTRACT)
+          || isJavaLangObject((TypeElement) method.getEnclosingElement());
+      switch (override) {
+        case EQUALS:
+          vars.equals = canGenerate;
+          break;
+        case HASH_CODE:
+          vars.hashCode = canGenerate;
+          break;
+        case TO_STRING:
+          vars.toString = canGenerate;
+          break;
+      }
+    }
+  }
+
+  private ImmutableSet<ExecutableElement> methodsToImplement(List<ExecutableElement> methods) {
+    ImmutableSet.Builder<ExecutableElement> toImplement = ImmutableSet.builder();
+    boolean errors = false;
+    for (ExecutableElement method : methods) {
+      if (method.getModifiers().contains(Modifier.ABSTRACT)
+          && objectMethodToOverride(method) == ObjectMethodToOverride.NONE) {
+        if (method.getParameters().isEmpty() && method.getReturnType().getKind() != TypeKind.VOID) {
+          if (isReferenceArrayType(method.getReturnType())) {
+            errorReporter.reportError("An @AutoValue class cannot define an array-valued property"
+                + " unless it is a primitive array", method);
+            errors = true;
+          }
+          toImplement.add(method);
+        } else {
+          
+          
+          
+          
+          errorReporter.reportWarning("@AutoValue classes cannot have abstract methods other than"
+              + " property getters and Builder converters", method);
+        }
+      }
+    }
+    if (errors) {
+      throw new AbortProcessingException();
+    }
+    return toImplement.build();
+  }
+
+  private static boolean isReferenceArrayType(TypeMirror type) {
+    return type.getKind() == TypeKind.ARRAY
+        && !((ArrayType) type).getComponentType().getKind().isPrimitive();
+  }
+
+  private void writeSourceFile(String className, String text, TypeElement originatingType) {
+    try {
+      JavaFileObject sourceFile =
+          processingEnv.getFiler().createSourceFile(className, originatingType);
+      Writer writer = sourceFile.openWriter();
+      try {
+        writer.write(text);
+      } finally {
+        writer.close();
+      }
+    } catch (IOException e) {
+      
+      
+      
+      
+      
+      
+      processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+          "Could not write generated class " + className + ": " + e);
+    }
+  }
+
+  private boolean ancestorIsAutoValue(TypeElement type) {
+    while (true) {
+      TypeMirror parentMirror = type.getSuperclass();
+      if (parentMirror.getKind() == TypeKind.NONE) {
+        return false;
+      }
+      Types typeUtils = processingEnv.getTypeUtils();
+      TypeElement parentElement = (TypeElement) typeUtils.asElement(parentMirror);
+      if (parentElement.getAnnotation(AutoValue.class) != null) {
+        return true;
+      }
+      type = parentElement;
+    }
+  }
+
+  private boolean implementsAnnotation(TypeElement type) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    return typeUtils.isAssignable(type.asType(), getTypeMirror(Annotation.class));
+  }
+
+  
+  
+  private String getSerialVersionUID(TypeElement type) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    TypeMirror serializable = getTypeMirror(Serializable.class);
+    if (typeUtils.isAssignable(type.asType(), serializable)) {
+      List<VariableElement> fields = ElementFilter.fieldsIn(type.getEnclosedElements());
+      for (VariableElement field : fields) {
+        if (field.getSimpleName().toString().equals("serialVersionUID")) {
+          Object value = field.getConstantValue();
+          if (field.getModifiers().containsAll(Arrays.asList(Modifier.STATIC, Modifier.FINAL))
+              && field.asType().getKind() == TypeKind.LONG
+              && value != null) {
+            return value + "L";
+          } else {
+            errorReporter.reportError(
+                "serialVersionUID must be a static final long compile-time constant", field);
+            break;
+          }
+        }
+      }
+    }
+    return "";
+  }
+
+  private TypeMirror getTypeMirror(Class<?> c) {
+    return processingEnv.getElementUtils().getTypeElement(c.getName()).asType();
+  }
+
+  
+  
+  
+  private static String wildcardTypeParametersString(TypeElement type) {
+    List<? extends TypeParameterElement> typeParameters = type.getTypeParameters();
+    if (typeParameters.isEmpty()) {
+      return "";
+    } else {
+      return "<"
+          + Joiner.on(", ").join(
+              FluentIterable.from(typeParameters).transform(Functions.constant("?")))
+          + ">";
+    }
+  }
+
+  private EclipseHack eclipseHack() {
+    return new EclipseHack(processingEnv);
+  }
+}
+
+<code block>
+
+package com.google.auto.value.processor;
+
+import com.google.auto.common.SuperficialValidation;
+import com.google.auto.service.AutoService;
+import com.google.auto.value.AutoAnnotation;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.primitives.Primitives;
+
+import java.io.IOException;
+import java.io.Writer;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.annotation.Generated;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+import javax.tools.JavaFileObject;
+
+
+@AutoService(Processor.class)
+public class AutoAnnotationProcessor extends AbstractProcessor {
+  public AutoAnnotationProcessor() {}
+
+  @Override
+  public Set<String> getSupportedAnnotationTypes() {
+    return ImmutableSet.of(AutoAnnotation.class.getName());
+  }
+
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
+  }
+
+  
+  private void reportError(Element e, String msg, Object... msgParams) {
+    String formattedMessage = String.format(msg, msgParams);
+    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, formattedMessage, e);
+  }
+
+  
+  private AbortProcessingException abortWithError(String msg, Element e) {
+    reportError(e, msg);
+    return new AbortProcessingException();
+  }
+
+  private Types typeUtils;
+
+  @Override
+  public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    typeUtils = processingEnv.getTypeUtils();
+    boolean claimed = (annotations.size() == 1
+        && annotations.iterator().next().getQualifiedName().toString().equals(
+            AutoAnnotation.class.getName()));
+    if (claimed) {
+      process(roundEnv);
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  private void process(RoundEnvironment roundEnv) {
+    Collection<? extends Element> annotatedElements =
+        roundEnv.getElementsAnnotatedWith(AutoAnnotation.class);
+    List<ExecutableElement> methods = ElementFilter.methodsIn(annotatedElements);
+    if (!SuperficialValidation.validateElements(methods) || methodsAreOverloaded(methods)) {
+      return;
+    }
+    for (ExecutableElement method : methods) {
+      try {
+        processMethod(method);
+      } catch (AbortProcessingException e) {
+        
+      } catch (RuntimeException e) {
+        
+        
+        String trace = Throwables.getStackTraceAsString(e);
+        reportError(method, "@AutoAnnotation processor threw an exception: %s", trace);
+      }
+    }
+  }
+
+  private void processMethod(ExecutableElement method) {
+    if (!method.getModifiers().contains(Modifier.STATIC)) {
+      throw abortWithError("@AutoAnnotation method must be static", method);
+    }
+
+    TypeElement annotationElement = getAnnotationReturnType(method);
+    TypeMirror annotationTypeMirror = annotationElement.asType();
+
+    Set<Class<?>> wrapperTypesUsedInCollections = wrapperTypesUsedInCollections(method);
+
+    ImmutableMap<String, ExecutableElement> memberMethods = getMemberMethods(annotationElement);
+    Set<TypeMirror> memberTypes = getMemberTypes(memberMethods.values());
+    Set<TypeMirror> referencedTypes = getReferencedTypes(
+        annotationTypeMirror, method, memberTypes, wrapperTypesUsedInCollections);
+    TypeElement methodClass = (TypeElement) method.getEnclosingElement();
+    String pkg = TypeSimplifier.packageNameOf(methodClass);
+    TypeSimplifier typeSimplifier = new TypeSimplifier(
+        typeUtils, pkg, referencedTypes, annotationTypeMirror);
+
+    AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+    ImmutableMap<String, AnnotationValue> defaultValues = getDefaultValues(annotationElement);
+    ImmutableMap<String, Member> members =
+        getMembers(method, memberMethods, typeSimplifier, annotationOutput);
+    ImmutableMap<String, Parameter> parameters =
+        getParameters(annotationElement, method, members, typeSimplifier);
+    validateParameters(annotationElement, method, members, parameters, defaultValues);
+
+    String generatedClassName = generatedClassName(method);
+
+    AutoAnnotationTemplateVars vars = new AutoAnnotationTemplateVars();
+    vars.annotationFullName = annotationElement.toString();
+    vars.annotationName = typeSimplifier.simplify(annotationElement.asType());
+    vars.className = generatedClassName;
+    vars.imports = typeSimplifier.typesToImport();
+    vars.generated = typeSimplifier.simplify(getTypeMirror(Generated.class));
+    vars.arrays = typeSimplifier.simplify(getTypeMirror(Arrays.class));
+    vars.members = members;
+    vars.params = parameters;
+    vars.pkg = pkg;
+    vars.wrapperTypesUsedInCollections = wrapperTypesUsedInCollections;
+    vars.gwtCompatible = isGwtCompatible(annotationElement);
+    String text = vars.toText();
+    text = Reformatter.fixup(text);
+    writeSourceFile(pkg + "." + generatedClassName, text, methodClass);
+  }
+
+  private boolean methodsAreOverloaded(List<ExecutableElement> methods) {
+    boolean overloaded = false;
+    Set<String> classNames = new HashSet<String>();
+    for (ExecutableElement method : methods) {
+      if (!classNames.add(generatedClassName(method))) {
+        overloaded = true;
+        reportError(method, "@AutoAnnotation methods cannot be overloaded");
+      }
+    }
+    return overloaded;
+  }
+
+  private String generatedClassName(ExecutableElement method) {
+    TypeElement type = (TypeElement) method.getEnclosingElement();
+    String name = type.getSimpleName().toString();
+    while (type.getEnclosingElement() instanceof TypeElement) {
+      type = (TypeElement) type.getEnclosingElement();
+      name = type.getSimpleName() + "_" + name;
+    }
+    return "AutoAnnotation_" + name + "_" + method.getSimpleName();
+  }
+
+  private TypeElement getAnnotationReturnType(ExecutableElement method) {
+    TypeMirror returnTypeMirror = method.getReturnType();
+    if (returnTypeMirror.getKind() == TypeKind.DECLARED) {
+      Element returnTypeElement = typeUtils.asElement(method.getReturnType());
+      if (returnTypeElement.getKind() == ElementKind.ANNOTATION_TYPE) {
+        return (TypeElement) returnTypeElement;
+      }
+    }
+    throw abortWithError("Return type of @AutoAnnotation method must be an annotation type, not "
+        + returnTypeMirror, method);
+  }
+
+  private ImmutableMap<String, ExecutableElement> getMemberMethods(TypeElement annotationElement) {
+    ImmutableMap.Builder<String, ExecutableElement> members = ImmutableMap.builder();
+    for (ExecutableElement member :
+        ElementFilter.methodsIn(annotationElement.getEnclosedElements())) {
+      String name = member.getSimpleName().toString();
+      members.put(name, member);
+    }
+    return members.build();
+  }
+
+  private ImmutableMap<String, Member> getMembers(
+      Element context,
+      ImmutableMap<String, ExecutableElement> memberMethods,
+      TypeSimplifier typeSimplifier,
+      AnnotationOutput annotationOutput) {
+    ImmutableMap.Builder<String, Member> members = ImmutableMap.builder();
+    for (Map.Entry<String, ExecutableElement> entry : memberMethods.entrySet()) {
+      ExecutableElement memberMethod = entry.getValue();
+      String name = memberMethod.getSimpleName().toString();
+      members.put(
+          name,
+          new Member(processingEnv, context, memberMethod, typeSimplifier, annotationOutput));
+    }
+    return members.build();
+  }
+
+  private ImmutableMap<String, AnnotationValue> getDefaultValues(TypeElement annotationElement) {
+    ImmutableMap.Builder<String, AnnotationValue> defaultValues = ImmutableMap.builder();
+    for (ExecutableElement member :
+        ElementFilter.methodsIn(annotationElement.getEnclosedElements())) {
+      String name = member.getSimpleName().toString();
+      AnnotationValue defaultValue = member.getDefaultValue();
+      if (defaultValue != null) {
+        defaultValues.put(name, defaultValue);
+      }
+    }
+    return defaultValues.build();
+  }
+
+  private Set<TypeMirror> getMemberTypes(Collection<ExecutableElement> memberMethods) {
+    Set<TypeMirror> types = new TypeMirrorSet();
+    for (ExecutableElement memberMethod : memberMethods) {
+      types.add(memberMethod.getReturnType());
+    }
+    return types;
+  }
+
+  private ImmutableMap<String, Parameter> getParameters(
+      TypeElement annotationElement,
+      ExecutableElement method,
+      Map<String, Member> members,
+      TypeSimplifier typeSimplifier) {
+    ImmutableMap.Builder<String, Parameter> parameters = ImmutableMap.builder();
+    boolean error = false;
+    for (VariableElement parameter : method.getParameters()) {
+      String name = parameter.getSimpleName().toString();
+      Member member = members.get(name);
+      if (member == null) {
+        reportError(parameter,
+            "@AutoAnnotation method parameter '%s' must have the same name as a member of %s",
+            name, annotationElement);
+        error = true;
+      } else {
+        TypeMirror parameterType = parameter.asType();
+        TypeMirror memberType = member.getTypeMirror();
+        if (compatibleTypes(parameterType, memberType)) {
+          parameters.put(name, new Parameter(parameterType, typeSimplifier));
+        } else {
+          reportError(parameter,
+              "@AutoAnnotation method parameter '%s' has type %s but %s.%s has type %s",
+              name, parameterType, annotationElement, name, memberType);
+          error = true;
+        }
+      }
+    }
+    if (error) {
+      throw new AbortProcessingException();
+    }
+    return parameters.build();
+  }
+
+  private void validateParameters(
+      TypeElement annotationElement,
+      ExecutableElement method,
+      ImmutableMap<String, Member> members,
+      ImmutableMap<String, Parameter> parameters,
+      ImmutableMap<String, AnnotationValue> defaultValues) {
+    boolean error = false;
+    for (String memberName : members.keySet()) {
+      if (!parameters.containsKey(memberName) && !defaultValues.containsKey(memberName)) {
+        reportError(method,
+            "@AutoAnnotation method needs a parameter with name '%s' and type %s"
+                + " corresponding to %s.%s, which has no default value",
+            memberName, members.get(memberName).getType(), annotationElement, memberName);
+        error = true;
+      }
+    }
+    if (error) {
+      throw new AbortProcessingException();
+    }
+  }
+
+  
+  private boolean compatibleTypes(TypeMirror parameterType, TypeMirror memberType) {
+    if (typeUtils.isAssignable(parameterType, memberType)) {
+      
+      
+      
+      return true;
+    }
+    
+    
+    
+    if (memberType.getKind() != TypeKind.ARRAY) {
+      return false;
+    }
+    TypeMirror arrayElementType = ((ArrayType) memberType).getComponentType();
+    TypeMirror wrappedArrayElementType = arrayElementType.getKind().isPrimitive()
+        ? typeUtils.boxedClass((PrimitiveType) arrayElementType).asType()
+        : arrayElementType;
+    TypeElement javaUtilCollection =
+        processingEnv.getElementUtils().getTypeElement(Collection.class.getCanonicalName());
+    DeclaredType collectionOfElement =
+        typeUtils.getDeclaredType(javaUtilCollection, wrappedArrayElementType);
+    return typeUtils.isAssignable(parameterType, collectionOfElement);
+  }
+
+  
+  private Set<Class<?>> wrapperTypesUsedInCollections(ExecutableElement method) {
+    TypeElement javaUtilCollection =
+        processingEnv.getElementUtils().getTypeElement(Collection.class.getName());
+    ImmutableSet.Builder<Class<?>> usedInCollections = ImmutableSet.builder();
+    for (Class<?> wrapper : Primitives.allWrapperTypes()) {
+      DeclaredType collectionOfWrapper =
+          typeUtils.getDeclaredType(javaUtilCollection, getTypeMirror(wrapper));
+      for (VariableElement parameter : method.getParameters()) {
+        if (typeUtils.isAssignable(parameter.asType(), collectionOfWrapper)) {
+          usedInCollections.add(wrapper);
+          break;
+        }
+      }
+    }
+    return usedInCollections.build();
+  }
+
+  private Set<TypeMirror> getReferencedTypes(
+      TypeMirror annotation,
+      ExecutableElement method,
+      Set<TypeMirror> memberTypes,
+      Set<Class<?>> wrapperTypesUsedInCollections) {
+    Set<TypeMirror> types = new TypeMirrorSet();
+    types.add(annotation);
+    types.add(getTypeMirror(Generated.class));
+    for (VariableElement parameter : method.getParameters()) {
+      
+      
+      types.add(parameter.asType());
+    }
+    types.addAll(memberTypes);
+    if (containsArrayType(types)) {
+      
+      types.add(getTypeMirror(Arrays.class));
+    }
+    if (!wrapperTypesUsedInCollections.isEmpty()) {
+      
+      
+      types.add(getTypeMirror(Collection.class));
+    }
+    return types;
+  }
+
+  private TypeMirror getTypeMirror(Class<?> c) {
+    return processingEnv.getElementUtils().getTypeElement(c.getName()).asType();
+  }
+
+  private static boolean containsArrayType(Set<TypeMirror> types) {
+    for (TypeMirror type : types) {
+      if (type.getKind() == TypeKind.ARRAY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isGwtCompatible(TypeElement annotationElement) {
+    for (AnnotationMirror annotationMirror : annotationElement.getAnnotationMirrors()) {
+      String name = annotationMirror.getAnnotationType().asElement().getSimpleName().toString();
+      if (name.equals("GwtCompatible")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void writeSourceFile(String className, String text, TypeElement originatingType) {
+    try {
+      JavaFileObject sourceFile =
+          processingEnv.getFiler().createSourceFile(className, originatingType);
+      Writer writer = sourceFile.openWriter();
+      try {
+        writer.write(text);
+      } finally {
+        writer.close();
+      }
+    } catch (IOException e) {
+      
+      
+      
+      
+      
+      
+      processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+          "Could not write generated class " + className + ": " + e);
+    }
+  }
+
+  public static class Member {
+    private final ProcessingEnvironment processingEnv;
+    private final Element context;
+    private final ExecutableElement method;
+    private final TypeSimplifier typeSimplifier;
+    private final AnnotationOutput annotationOutput;
+
+    Member(
+        ProcessingEnvironment processingEnv,
+        Element context,
+        ExecutableElement method,
+        TypeSimplifier typeSimplifier,
+        AnnotationOutput annotationDefaults) {
+      this.processingEnv = processingEnv;
+      this.context = context;
+      this.method = method;
+      this.typeSimplifier = typeSimplifier;
+      this.annotationOutput = annotationDefaults;
+    }
+
+    @Override
+    public String toString() {
+      return method.getSimpleName().toString();
+    }
+
+    public String getType() {
+      return typeSimplifier.simplify(getTypeMirror());
+    }
+
+    public String getComponentType() {
+      Preconditions.checkState(getTypeMirror().getKind() == TypeKind.ARRAY);
+      ArrayType arrayType = (ArrayType) getTypeMirror();
+      return typeSimplifier.simplify(arrayType.getComponentType());
+    }
+
+    public TypeMirror getTypeMirror() {
+      return method.getReturnType();
+    }
+
+    public TypeKind getKind() {
+      return getTypeMirror().getKind();
+    }
+
+    public String getDefaultValue() {
+      AnnotationValue defaultValue = method.getDefaultValue();
+      if (defaultValue == null) {
+        return null;
+      } else {
+        return annotationOutput.sourceFormForInitializer(
+            defaultValue, processingEnv, method.getSimpleName().toString(), context);
+      }
+    }
+  }
+
+  public static class Parameter {
+    private final String typeName;
+    private final TypeKind kind;
+
+    Parameter(TypeMirror type, TypeSimplifier typeSimplifier) {
+      this.typeName = typeSimplifier.simplify(type);
+      this.kind = type.getKind();
+    }
+
+    public String getType() {
+      return typeName;
+    }
+
+    public TypeKind getKind() {
+      return kind;
+    }
+  }
+}
+
+<code block>
+
+package com.google.auto.value.processor;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assert_;
+import static com.google.testing.compile.JavaSourcesSubjectFactory.javaSources;
+
+import com.google.common.collect.ImmutableList;
+import com.google.testing.compile.JavaFileObjects;
+
+import junit.framework.TestCase;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.Writer;
+import java.util.List;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileManager;
+import javax.tools.JavaFileObject;
+import javax.tools.ToolProvider;
+
+
+public class AutoAnnotationCompilationTest extends TestCase {
+  public void testSimple() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public @interface MyAnnotation {",
+        "  MyEnum value();",
+        "}"
+    );
+    JavaFileObject myEnumJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.enums.MyEnum",
+        "package com.example.enums;",
+        "",
+        "public enum MyEnum {",
+        "  ONE",
+        "}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(MyEnum value) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "import javax.annotation.Generated",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final MyEnum value;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(MyEnum value) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = value;",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public MyEnum value() {",
+        "    return value;",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(value);",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (value.equals(that.value()));",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ((127 * " + "value".hashCode() + ") ^ (value.hashCode()));",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(annotationFactoryJavaFile, myAnnotationJavaFile, myEnumJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testGwtSimple() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.google.common.annotations.GwtCompatible;",
+        "",
+        "@GwtCompatible",
+        "public @interface MyAnnotation {",
+        "  int[] value();",
+        "}"
+    );
+    JavaFileObject gwtCompatibleJavaFile = JavaFileObjects.forSourceLines(
+        "com.google.common.annotations.GwtCompatible",
+        "package com.google.common.annotations;",
+        "",
+        "public @interface GwtCompatible {}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(int[] value) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import java.util.Arrays;",
+        "import javax.annotation.Generated;",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final int[] value;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(int[] value) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = Arrays.copyOf(value, value.length);",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public int[] value() {",
+        "    return Arrays.copyOf(value, value.length);",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(Arrays.toString(value));",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (Arrays.equals(value,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).value",
+        "              : that.value()));",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ((127 * " + "value".hashCode() + ") ^ (Arrays.hashCode(value)));",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(
+            annotationFactoryJavaFile, myAnnotationJavaFile, gwtCompatibleJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testCollectionsForArrays() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public @interface MyAnnotation {",
+        "  int[] value();",
+        "  MyEnum[] enums() default {};",
+        "}"
+    );
+    JavaFileObject myEnumJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.enums.MyEnum",
+        "package com.example.enums;",
+        "",
+        "public enum MyEnum {",
+        "  ONE",
+        "}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "",
+        "import java.util.List;",
+        "import java.util.Set;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(",
+        "      List<Integer> value, Set<MyEnum> enums) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value, enums);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "import java.util.Arrays;",
+        "import java.util.Collection;",
+        "import java.util.List;",
+        "import java.util.Set;",
+        "import javax.annotation.Generated",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final int[] value;",
+        "  private final MyEnum[] enums;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(",
+        "      List<Integer> value,",
+        "      Set<MyEnum> enums) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = intArrayFromCollection(value);",
+        "    if (enums == null) {",
+        "      throw new NullPointerException(\"Null enums\");",
+        "    }",
+        "    this.enums = enums.toArray(new MyEnum[enums.size()];",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public int[] value() {",
+        "    return value.clone();",
+        "  }",
+        "",
+        "  @Override public MyEnum[] enums() {",
+        "    return enums.clone();",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(\"value=\");",
+        "    sb.append(Arrays.toString(value));",
+        "    sb.append(\", \");",
+        "    sb.append(\"enums=\");",
+        "    sb.append(Arrays.toString(enums));",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (Arrays.equals(value,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).value",
+        "              : that.value()))",
+        "          && (Arrays.equals(enums,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).enums",
+        "              : that.enums()))",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ",
+        "        ((127 * " + "value".hashCode() + ") ^ (Arrays.hashCode(value))) +",
+        "        ((127 * " + "enums".hashCode() + ") ^ (Arrays.hashCode(enums)));",
+        "  }",
+        "",
+        "  private static int[] intArrayFromCollection(Collection<Integer> c) {",
+        "    int[] a = new int[c.size()];",
+        "    int i = 0;",
+        "    for (int x : c) {",
+        "      a[i++] = x;",
+        "    }",
+        "    return a;",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(annotationFactoryJavaFile, myEnumJavaFile, myAnnotationJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testMissingClass() throws IOException {
+    File tempDir = File.createTempFile("AutoAnnotationCompilationTest", "");
+    assertTrue(tempDir.delete());
+    assertTrue(tempDir.mkdir());
+    try {
+      doTestMissingClass(tempDir);
+    } finally {
+      removeDirectory(tempDir);
+    }
+  }
+
+  private void doTestMissingClass(File tempDir) {
+    
+    
+    
+    
+    
+    
+    
+    
+    JavaFileObject erroneousJavaFileObject = JavaFileObjects.forSourceLines(
+        "com.example.annotations.Erroneous",
+        "package com.example.annotations;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "",
+        "public class Erroneous {",
+        "  @interface Empty {}",
+        "  @AutoAnnotation static Empty newEmpty() {}",
+        "  @NotAutoAnnotation Empty notNewEmpty() {}",
+        "}"
+    );
+    JavaCompiler javaCompiler = ToolProvider.getSystemJavaCompiler();
+    DiagnosticCollector<JavaFileObject> diagnosticCollector =
+        new DiagnosticCollector<JavaFileObject>();
+    JavaCompiler.CompilationTask compilationTask = javaCompiler.getTask(
+        (Writer) null,
+        (JavaFileManager) null,
+        diagnosticCollector,
+        ImmutableList.of("-d", tempDir.toString()),
+        (Iterable<String>) null,
+        ImmutableList.of(erroneousJavaFileObject));
+    compilationTask.setProcessors(ImmutableList.of(new AutoAnnotationProcessor()));
+    boolean result = compilationTask.call();
+    assertThat(result).isFalse();
+    List<Diagnostic<? extends JavaFileObject>> diagnostics = diagnosticCollector.getDiagnostics();
+    assertThat(diagnostics).isNotEmpty();
+    assertThat(diagnostics.get(0).getMessage(null)).contains("NotAutoAnnotation");
+    assertThat(diagnostics.get(0).getMessage(null)).doesNotContain("static");
+  }
+
+  private static void removeDirectory(File dir) {
+    for (File file : dir.listFiles()) {
+      if (file.isDirectory()) {
+        removeDirectory(file);
+      } else {
+        assertTrue(file.delete());
+      }
+    }
+    assertTrue(dir.delete());
+  }
+}
+
+<code block>
+
+package com.google.auto.value.processor;
+
+import com.google.auto.service.AutoService;
+import com.google.auto.value.AutoValue;
+import com.google.common.base.Functions;
+import com.google.common.base.Joiner;
+import com.google.common.base.Optional;
+import com.google.common.base.Throwables;
+import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableBiMap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+
+import java.beans.Introspector;
+import java.io.IOException;
+import java.io.Serializable;
+import java.io.Writer;
+import java.lang.annotation.Annotation;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.annotation.Generated;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+import javax.tools.JavaFileObject;
+
+
+@AutoService(Processor.class)
+public class AutoValueProcessor extends AbstractProcessor {
+  public AutoValueProcessor() {}
+
+  @Override
+  public Set<String> getSupportedAnnotationTypes() {
+    return ImmutableSet.of(AutoValue.class.getName());
+  }
+
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
+  }
+
+  private ErrorReporter errorReporter;
+
+  
+  private final List<String> deferredTypeNames = new ArrayList<String>();
+
+  @Override
+  public synchronized void init(ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    errorReporter = new ErrorReporter(processingEnv);
+  }
+
+  @Override
+  public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    List<TypeElement> deferredTypes = new ArrayList<TypeElement>();
+    for (String deferred : deferredTypeNames) {
+      deferredTypes.add(processingEnv.getElementUtils().getTypeElement(deferred));
+    }
+    if (roundEnv.processingOver()) {
+      
+      
+      
+      for (TypeElement type : deferredTypes) {
+        errorReporter.reportError("Did not generate @AutoValue class for " + type.getQualifiedName()
+            + " because it references undefined types", type);
+      }
+      return false;
+    }
+    Collection<? extends Element> annotatedElements =
+        roundEnv.getElementsAnnotatedWith(AutoValue.class);
+    List<TypeElement> types = new ImmutableList.Builder<TypeElement>()
+        .addAll(deferredTypes)
+        .addAll(ElementFilter.typesIn(annotatedElements))
+        .build();
+    deferredTypeNames.clear();
+    for (TypeElement type : types) {
+      try {
+        processType(type);
+      } catch (AbortProcessingException e) {
+        
+      } catch (MissingTypeException e) {
+        
+        
+        
+        
+        
+        
+        deferredTypeNames.add(type.getQualifiedName().toString());
+      } catch (RuntimeException e) {
+        
+        
+        String trace = Throwables.getStackTraceAsString(e);
+        errorReporter.reportError("@AutoValue processor threw an exception: " + trace, type);
+      }
+    }
+    return false;  
+  }
+
+  private String generatedClassName(TypeElement type, String prefix) {
+    String name = type.getSimpleName().toString();
+    while (type.getEnclosingElement() instanceof TypeElement) {
+      type = (TypeElement) type.getEnclosingElement();
+      name = type.getSimpleName() + "_" + name;
+    }
+    String pkg = TypeSimplifier.packageNameOf(type);
+    String dot = pkg.isEmpty() ? "" : ".";
+    return pkg + dot + prefix + name;
+  }
+
+  private String generatedSubclassName(TypeElement type) {
+    return generatedClassName(type, "AutoValue_");
+  }
+
+  
+  public static class Property {
+    private final String name;
+    private final String identifier;
+    private final ExecutableElement method;
+    private final String type;
+    private final ImmutableList<String> annotations;
+    private final String nullableAnnotation;
+
+    Property(
+        String name,
+        String identifier,
+        ExecutableElement method,
+        String type,
+        TypeSimplifier typeSimplifier) {
+      this.name = name;
+      this.identifier = identifier;
+      this.method = method;
+      this.type = type;
+      this.annotations = buildAnnotations(typeSimplifier);
+      this.nullableAnnotation = buildNullableAnnotation(typeSimplifier);
+    }
+
+    private String buildNullableAnnotation(TypeSimplifier typeSimplifier) {
+      for (AnnotationMirror annotationMirror : method.getAnnotationMirrors()) {
+        String name = annotationMirror.getAnnotationType().asElement().getSimpleName().toString();
+        if (name.equals("Nullable")) {
+          AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+          return annotationOutput.sourceFormForAnnotation(annotationMirror);
+        }
+      }
+      return null;
+    }
+
+    private ImmutableList<String> buildAnnotations(TypeSimplifier typeSimplifier) {
+      ImmutableList.Builder<String> builder = ImmutableList.builder();
+
+      for (AnnotationMirror annotationMirror : method.getAnnotationMirrors()) {
+        TypeElement annotationElement =
+            (TypeElement) annotationMirror.getAnnotationType().asElement();
+        if (annotationElement.getQualifiedName().toString().equals(Override.class.getName())) {
+          
+          
+          continue;
+        }
+        
+        AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+        builder.add(annotationOutput.sourceFormForAnnotation(annotationMirror));
+      }
+
+      return builder.build();
+    }
+
+    
+    @Override
+    public String toString() {
+      return identifier;
+    }
+
+    
+    public String getName() {
+      return name;
+    }
+
+    
+    public String getGetter() {
+      return method.getSimpleName().toString();
+    }
+
+    TypeElement getOwner() {
+      return (TypeElement) method.getEnclosingElement();
+    }
+
+    public TypeMirror getTypeMirror() {
+      return method.getReturnType();
+    }
+
+    public String getType() {
+      return type;
+    }
+
+    public TypeKind getKind() {
+      return method.getReturnType().getKind();
+    }
+
+    public List<String> getAnnotations() {
+      return annotations;
+    }
+
+    public boolean isNullable() {
+      return nullableAnnotation != null;
+    }
+    
+    public String getNullableAnnotation() {
+      return nullableAnnotation;
+    }
+
+    public String getAccess() {
+      Set<Modifier> mods = method.getModifiers();
+      if (mods.contains(Modifier.PUBLIC)) {
+        return "public ";
+      } else if (mods.contains(Modifier.PROTECTED)) {
+        return "protected ";
+      } else {
+        return "";
+      }
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return obj instanceof Property && ((Property) obj).method.equals(method);
+    }
+
+    @Override
+    public int hashCode() {
+      return method.hashCode();
+    }
+  }
+
+  private static boolean isJavaLangObject(TypeElement type) {
+    return type.getSuperclass().getKind() == TypeKind.NONE && type.getKind() == ElementKind.CLASS;
+  }
+
+  private enum ObjectMethodToOverride {
+    NONE, TO_STRING, EQUALS, HASH_CODE
+  }
+
+  private static ObjectMethodToOverride objectMethodToOverride(ExecutableElement method) {
+    String name = method.getSimpleName().toString();
+    switch (method.getParameters().size()) {
+      case 0:
+        if (name.equals("toString")) {
+          return ObjectMethodToOverride.TO_STRING;
+        } else if (name.equals("hashCode")) {
+          return ObjectMethodToOverride.HASH_CODE;
+        }
+        break;
+      case 1:
+        if (name.equals("equals")
+            && method.getParameters().get(0).asType().toString().equals("java.lang.Object")) {
+          return ObjectMethodToOverride.EQUALS;
+        }
+        break;
+    }
+    return ObjectMethodToOverride.NONE;
+  }
+
+  private void findLocalAndInheritedMethods(TypeElement type, List<ExecutableElement> methods) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    Elements elementUtils = processingEnv.getElementUtils();
+    for (TypeMirror superInterface : type.getInterfaces()) {
+      findLocalAndInheritedMethods((TypeElement) typeUtils.asElement(superInterface), methods);
+    }
+    if (type.getSuperclass().getKind() != TypeKind.NONE) {
+      
+      
+      findLocalAndInheritedMethods(
+          (TypeElement) typeUtils.asElement(type.getSuperclass()), methods);
+    }
+    
+    
+    
+    List<ExecutableElement> theseMethods = ElementFilter.methodsIn(type.getEnclosedElements());
+    for (ExecutableElement method : theseMethods) {
+      if (!method.getModifiers().contains(Modifier.PRIVATE)) {
+        boolean alreadySeen = false;
+        for (Iterator<ExecutableElement> methodIter = methods.iterator(); methodIter.hasNext();) {
+          ExecutableElement otherMethod = methodIter.next();
+          if (elementUtils.overrides(method, otherMethod, type)) {
+            methodIter.remove();
+          } else if (method.getSimpleName().equals(otherMethod.getSimpleName())
+              && method.getParameters().equals(otherMethod.getParameters())) {
+            
+            alreadySeen = true;
+          }
+        }
+        if (!alreadySeen) {
+          methods.add(method);
+        }
+      }
+    }
+  }
+
+  private void processType(TypeElement type) {
+    AutoValue autoValue = type.getAnnotation(AutoValue.class);
+    if (autoValue == null) {
+      
+      
+      errorReporter.abortWithError("annotation processor for @AutoValue was invoked with a type"
+          + " that does not have that annotation; this is probably a compiler bug", type);
+    }
+    if (type.getKind() != ElementKind.CLASS) {
+      errorReporter.abortWithError(
+          "@" + AutoValue.class.getName() + " only applies to classes", type);
+    }
+    if (ancestorIsAutoValue(type)) {
+      errorReporter.abortWithError("One @AutoValue class may not extend another", type);
+    }
+    if (implementsAnnotation(type)) {
+      errorReporter.abortWithError("@AutoValue may not be used to implement an annotation"
+          + " interface; try using @AutoAnnotation instead", type);
+    }
+    AutoValueTemplateVars vars = new AutoValueTemplateVars();
+    vars.pkg = TypeSimplifier.packageNameOf(type);
+    vars.origClass = TypeSimplifier.classNameOf(type);
+    vars.simpleClassName = TypeSimplifier.simpleNameOf(vars.origClass);
+    vars.subclass = TypeSimplifier.simpleNameOf(generatedSubclassName(type));
+    vars.types = processingEnv.getTypeUtils();
+    defineVarsForType(type, vars);
+    GwtCompatibility gwtCompatibility = new GwtCompatibility(type);
+    vars.gwtCompatibleAnnotation = gwtCompatibility.gwtCompatibleAnnotationString();
+    String text = vars.toText();
+    text = Reformatter.fixup(text);
+    writeSourceFile(generatedSubclassName(type), text, type);
+    GwtSerialization gwtSerialization = new GwtSerialization(gwtCompatibility, processingEnv, type);
+    gwtSerialization.maybeWriteGwtSerializer(vars);
+  }
+
+  private void defineVarsForType(TypeElement type, AutoValueTemplateVars vars) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    List<ExecutableElement> methods = new ArrayList<ExecutableElement>();
+    findLocalAndInheritedMethods(type, methods);
+    determineObjectMethodsToGenerate(methods, vars);
+    ImmutableSet<ExecutableElement> methodsToImplement = methodsToImplement(methods);
+    Set<TypeMirror> types = new TypeMirrorSet();
+    types.addAll(returnTypesOf(methodsToImplement));
+    TypeMirror javaxAnnotationGenerated = getTypeMirror(Generated.class);
+    types.add(javaxAnnotationGenerated);
+    TypeMirror javaUtilArrays = getTypeMirror(Arrays.class);
+    if (containsArrayType(types)) {
+      
+      
+      types.add(javaUtilArrays);
+    }
+    BuilderSpec builderSpec = new BuilderSpec(type, processingEnv, errorReporter);
+    Optional<BuilderSpec.Builder> builder = builderSpec.getBuilder();
+    ImmutableSet<ExecutableElement> toBuilderMethods;
+    if (builder.isPresent()) {
+      toBuilderMethods = builder.get().toBuilderMethods(typeUtils, methodsToImplement);
+      types.addAll(builder.get().referencedTypes());
+    } else {
+      toBuilderMethods = ImmutableSet.of();
+    }
+    vars.toBuilderMethods =
+        FluentIterable.from(toBuilderMethods).transform(SimpleNameFunction.INSTANCE).toList();
+    Set<ExecutableElement> propertyMethods = Sets.difference(methodsToImplement, toBuilderMethods);
+    String pkg = TypeSimplifier.packageNameOf(type);
+    TypeSimplifier typeSimplifier = new TypeSimplifier(typeUtils, pkg, types, type.asType());
+    vars.imports = typeSimplifier.typesToImport();
+    vars.generated = typeSimplifier.simplify(javaxAnnotationGenerated);
+    vars.arrays = typeSimplifier.simplify(javaUtilArrays);
+    ImmutableBiMap<ExecutableElement, String> methodToPropertyName =
+        methodToPropertyNameMap(propertyMethods);
+    Map<ExecutableElement, String> methodToIdentifier =
+        Maps.newLinkedHashMap(methodToPropertyName);
+    fixReservedIdentifiers(methodToIdentifier);
+    List<Property> props = new ArrayList<Property>();
+    for (ExecutableElement method : propertyMethods) {
+      String propertyType = typeSimplifier.simplify(method.getReturnType());
+      String propertyName = methodToPropertyName.get(method);
+      String identifier = methodToIdentifier.get(method);
+      props.add(new Property(propertyName, identifier, method, propertyType, typeSimplifier));
+    }
+    
+    eclipseHack().reorderProperties(props);
+    vars.props = ImmutableSet.copyOf(props);
+    vars.serialVersionUID = getSerialVersionUID(type);
+    vars.formalTypes = typeSimplifier.formalTypeParametersString(type);
+    vars.actualTypes = TypeSimplifier.actualTypeParametersString(type);
+    vars.wildcardTypes = wildcardTypeParametersString(type);
+    
+    if (builder.isPresent()) {
+      builder.get().defineVars(vars, typeSimplifier, methodToPropertyName);
+    }
+  }
+
+  private ImmutableBiMap<ExecutableElement, String> methodToPropertyNameMap(
+      Iterable<ExecutableElement> propertyMethods) {
+    ImmutableMap.Builder<ExecutableElement, String> builder = ImmutableMap.builder();
+    boolean allGetters = allGetters(propertyMethods);
+    for (ExecutableElement method : propertyMethods) {
+      String methodName = method.getSimpleName().toString();
+      String name = allGetters ? nameWithoutPrefix(methodName) : methodName;
+      builder.put(method, name);
+    }
+    ImmutableMap<ExecutableElement, String> map = builder.build();
+    if (allGetters) {
+      checkDuplicateGetters(map);
+    }
+    return ImmutableBiMap.copyOf(map);
+  }
+
+  private static boolean allGetters(Iterable<ExecutableElement> methods) {
+    for (ExecutableElement method : methods) {
+      String name = method.getSimpleName().toString();
+      
+      boolean get = name.startsWith("get") && !name.equals("get");
+      boolean is = name.startsWith("is") && !name.equals("is")
+          && method.getReturnType().getKind() == TypeKind.BOOLEAN;
+      if (!get && !is) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private String nameWithoutPrefix(String name) {
+    if (name.startsWith("get")) {
+      name = name.substring(3);
+    } else {
+      assert name.startsWith("is");
+      name = name.substring(2);
+    }
+    return Introspector.decapitalize(name);
+  }
+
+  private void checkDuplicateGetters(Map<ExecutableElement, String> methodToIdentifier) {
+    Set<String> seen = Sets.newHashSet();
+    for (Map.Entry<ExecutableElement, String> entry : methodToIdentifier.entrySet()) {
+      if (!seen.add(entry.getValue())) {
+        errorReporter.reportError(
+            "More than one @AutoValue property called " + entry.getValue(), entry.getKey());
+      }
+    }
+  }
+
+  
+  
+  private void fixReservedIdentifiers(Map<ExecutableElement, String> methodToIdentifier) {
+    for (Map.Entry<ExecutableElement, String> entry : methodToIdentifier.entrySet()) {
+      if (SourceVersion.isKeyword(entry.getValue())) {
+        entry.setValue(disambiguate(entry.getValue(), methodToIdentifier.values()));
+      }
+    }
+  }
+
+  private String disambiguate(String name, Collection<String> existingNames) {
+    for (int i = 0; ; i++) {
+      String candidate = name + i;
+      if (!existingNames.contains(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  private Set<TypeMirror> returnTypesOf(Iterable<ExecutableElement> methods) {
+    Set<TypeMirror> returnTypes = new TypeMirrorSet();
+    for (ExecutableElement method : methods) {
+      returnTypes.add(method.getReturnType());
+    }
+    return returnTypes;
+  }
+
+  private static boolean containsArrayType(Set<TypeMirror> types) {
+    for (TypeMirror type : types) {
+      if (type.getKind() == TypeKind.ARRAY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  
+  private static void determineObjectMethodsToGenerate(
+      List<ExecutableElement> methods, AutoValueTemplateVars vars) {
+    
+    
+    
+    
+    vars.equals = false;
+    vars.hashCode = false;
+    vars.toString = false;
+    for (ExecutableElement method : methods) {
+      ObjectMethodToOverride override = objectMethodToOverride(method);
+      boolean canGenerate = method.getModifiers().contains(Modifier.ABSTRACT)
+          || isJavaLangObject((TypeElement) method.getEnclosingElement());
+      switch (override) {
+        case EQUALS:
+          vars.equals = canGenerate;
+          break;
+        case HASH_CODE:
+          vars.hashCode = canGenerate;
+          break;
+        case TO_STRING:
+          vars.toString = canGenerate;
+          break;
+      }
+    }
+  }
+
+  private ImmutableSet<ExecutableElement> methodsToImplement(List<ExecutableElement> methods) {
+    ImmutableSet.Builder<ExecutableElement> toImplement = ImmutableSet.builder();
+    boolean errors = false;
+    for (ExecutableElement method : methods) {
+      if (method.getModifiers().contains(Modifier.ABSTRACT)
+          && objectMethodToOverride(method) == ObjectMethodToOverride.NONE) {
+        if (method.getParameters().isEmpty() && method.getReturnType().getKind() != TypeKind.VOID) {
+          if (isReferenceArrayType(method.getReturnType())) {
+            errorReporter.reportError("An @AutoValue class cannot define an array-valued property"
+                + " unless it is a primitive array", method);
+            errors = true;
+          }
+          toImplement.add(method);
+        } else {
+          
+          
+          
+          
+          errorReporter.reportWarning("@AutoValue classes cannot have abstract methods other than"
+              + " property getters and Builder converters", method);
+        }
+      }
+    }
+    if (errors) {
+      throw new AbortProcessingException();
+    }
+    return toImplement.build();
+  }
+
+  private static boolean isReferenceArrayType(TypeMirror type) {
+    return type.getKind() == TypeKind.ARRAY
+        && !((ArrayType) type).getComponentType().getKind().isPrimitive();
+  }
+
+  private void writeSourceFile(String className, String text, TypeElement originatingType) {
+    try {
+      JavaFileObject sourceFile =
+          processingEnv.getFiler().createSourceFile(className, originatingType);
+      Writer writer = sourceFile.openWriter();
+      try {
+        writer.write(text);
+      } finally {
+        writer.close();
+      }
+    } catch (IOException e) {
+      processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+          "Could not write generated class " + className + ": " + e);
+    }
+  }
+
+  private boolean ancestorIsAutoValue(TypeElement type) {
+    while (true) {
+      TypeMirror parentMirror = type.getSuperclass();
+      if (parentMirror.getKind() == TypeKind.NONE) {
+        return false;
+      }
+      Types typeUtils = processingEnv.getTypeUtils();
+      TypeElement parentElement = (TypeElement) typeUtils.asElement(parentMirror);
+      if (parentElement.getAnnotation(AutoValue.class) != null) {
+        return true;
+      }
+      type = parentElement;
+    }
+  }
+
+  private boolean implementsAnnotation(TypeElement type) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    return typeUtils.isAssignable(type.asType(), getTypeMirror(Annotation.class));
+  }
+
+  
+  
+  private String getSerialVersionUID(TypeElement type) {
+    Types typeUtils = processingEnv.getTypeUtils();
+    TypeMirror serializable = getTypeMirror(Serializable.class);
+    if (typeUtils.isAssignable(type.asType(), serializable)) {
+      List<VariableElement> fields = ElementFilter.fieldsIn(type.getEnclosedElements());
+      for (VariableElement field : fields) {
+        if (field.getSimpleName().toString().equals("serialVersionUID")) {
+          Object value = field.getConstantValue();
+          if (field.getModifiers().containsAll(Arrays.asList(Modifier.STATIC, Modifier.FINAL))
+              && field.asType().getKind() == TypeKind.LONG
+              && value != null) {
+            return value + "L";
+          } else {
+            errorReporter.reportError(
+                "serialVersionUID must be a static final long compile-time constant", field);
+            break;
+          }
+        }
+      }
+    }
+    return "";
+  }
+
+  private TypeMirror getTypeMirror(Class<?> c) {
+    return processingEnv.getElementUtils().getTypeElement(c.getName()).asType();
+  }
+
+  
+  
+  
+  private static String wildcardTypeParametersString(TypeElement type) {
+    List<? extends TypeParameterElement> typeParameters = type.getTypeParameters();
+    if (typeParameters.isEmpty()) {
+      return "";
+    } else {
+      return "<"
+          + Joiner.on(", ").join(
+              FluentIterable.from(typeParameters).transform(Functions.constant("?")))
+          + ">";
+    }
+  }
+
+  private EclipseHack eclipseHack() {
+    return new EclipseHack(processingEnv);
+  }
+}
+
+<code block>
+
+package com.google.auto.value.processor;
+
+import com.google.auto.common.SuperficialValidation;
+import com.google.auto.service.AutoService;
+import com.google.auto.value.AutoAnnotation;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.primitives.Primitives;
+
+import java.io.IOException;
+import java.io.Writer;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.annotation.Generated;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+import javax.tools.JavaFileObject;
+
+
+@AutoService(Processor.class)
+public class AutoAnnotationProcessor extends AbstractProcessor {
+  public AutoAnnotationProcessor() {}
+
+  @Override
+  public Set<String> getSupportedAnnotationTypes() {
+    return ImmutableSet.of(AutoAnnotation.class.getName());
+  }
+
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
+  }
+
+  
+  private void reportError(Element e, String msg, Object... msgParams) {
+    String formattedMessage = String.format(msg, msgParams);
+    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, formattedMessage, e);
+  }
+
+  
+  private AbortProcessingException abortWithError(String msg, Element e) {
+    reportError(e, msg);
+    return new AbortProcessingException();
+  }
+
+  private Types typeUtils;
+
+  @Override
+  public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    typeUtils = processingEnv.getTypeUtils();
+    boolean claimed = (annotations.size() == 1
+        && annotations.iterator().next().getQualifiedName().toString().equals(
+            AutoAnnotation.class.getName()));
+    if (claimed) {
+      process(roundEnv);
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  private void process(RoundEnvironment roundEnv) {
+    Collection<? extends Element> annotatedElements =
+        roundEnv.getElementsAnnotatedWith(AutoAnnotation.class);
+    List<ExecutableElement> methods = ElementFilter.methodsIn(annotatedElements);
+    if (!SuperficialValidation.validateElements(methods) || methodsAreOverloaded(methods)) {
+      return;
+    }
+    for (ExecutableElement method : methods) {
+      try {
+        processMethod(method);
+      } catch (AbortProcessingException e) {
+        
+      } catch (RuntimeException e) {
+        
+        
+        String trace = Throwables.getStackTraceAsString(e);
+        reportError(method, "@AutoAnnotation processor threw an exception: %s", trace);
+      }
+    }
+  }
+
+  private void processMethod(ExecutableElement method) {
+    if (!method.getModifiers().contains(Modifier.STATIC)) {
+      throw abortWithError("@AutoAnnotation method must be static", method);
+    }
+
+    TypeElement annotationElement = getAnnotationReturnType(method);
+    TypeMirror annotationTypeMirror = annotationElement.asType();
+
+    Set<Class<?>> wrapperTypesUsedInCollections = wrapperTypesUsedInCollections(method);
+
+    ImmutableMap<String, ExecutableElement> memberMethods = getMemberMethods(annotationElement);
+    Set<TypeMirror> memberTypes = getMemberTypes(memberMethods.values());
+    Set<TypeMirror> referencedTypes = getReferencedTypes(
+        annotationTypeMirror, method, memberTypes, wrapperTypesUsedInCollections);
+    TypeElement methodClass = (TypeElement) method.getEnclosingElement();
+    String pkg = TypeSimplifier.packageNameOf(methodClass);
+    TypeSimplifier typeSimplifier = new TypeSimplifier(
+        typeUtils, pkg, referencedTypes, annotationTypeMirror);
+
+    AnnotationOutput annotationOutput = new AnnotationOutput(typeSimplifier);
+    ImmutableMap<String, AnnotationValue> defaultValues = getDefaultValues(annotationElement);
+    ImmutableMap<String, Member> members =
+        getMembers(method, memberMethods, typeSimplifier, annotationOutput);
+    ImmutableMap<String, Parameter> parameters =
+        getParameters(annotationElement, method, members, typeSimplifier);
+    validateParameters(annotationElement, method, members, parameters, defaultValues);
+
+    String generatedClassName = generatedClassName(method);
+
+    AutoAnnotationTemplateVars vars = new AutoAnnotationTemplateVars();
+    vars.annotationFullName = annotationElement.toString();
+    vars.annotationName = typeSimplifier.simplify(annotationElement.asType());
+    vars.className = generatedClassName;
+    vars.imports = typeSimplifier.typesToImport();
+    vars.generated = typeSimplifier.simplify(getTypeMirror(Generated.class));
+    vars.arrays = typeSimplifier.simplify(getTypeMirror(Arrays.class));
+    vars.members = members;
+    vars.params = parameters;
+    vars.pkg = pkg;
+    vars.wrapperTypesUsedInCollections = wrapperTypesUsedInCollections;
+    vars.gwtCompatible = isGwtCompatible(annotationElement);
+    String text = vars.toText();
+    text = Reformatter.fixup(text);
+    writeSourceFile(pkg + "." + generatedClassName, text, methodClass);
+  }
+
+  private boolean methodsAreOverloaded(List<ExecutableElement> methods) {
+    boolean overloaded = false;
+    Set<String> classNames = new HashSet<String>();
+    for (ExecutableElement method : methods) {
+      if (!classNames.add(generatedClassName(method))) {
+        overloaded = true;
+        reportError(method, "@AutoAnnotation methods cannot be overloaded");
+      }
+    }
+    return overloaded;
+  }
+
+  private String generatedClassName(ExecutableElement method) {
+    TypeElement type = (TypeElement) method.getEnclosingElement();
+    String name = type.getSimpleName().toString();
+    while (type.getEnclosingElement() instanceof TypeElement) {
+      type = (TypeElement) type.getEnclosingElement();
+      name = type.getSimpleName() + "_" + name;
+    }
+    return "AutoAnnotation_" + name + "_" + method.getSimpleName();
+  }
+
+  private TypeElement getAnnotationReturnType(ExecutableElement method) {
+    TypeMirror returnTypeMirror = method.getReturnType();
+    if (returnTypeMirror.getKind() == TypeKind.DECLARED) {
+      Element returnTypeElement = typeUtils.asElement(method.getReturnType());
+      if (returnTypeElement.getKind() == ElementKind.ANNOTATION_TYPE) {
+        return (TypeElement) returnTypeElement;
+      }
+    }
+    throw abortWithError("Return type of @AutoAnnotation method must be an annotation type, not "
+        + returnTypeMirror, method);
+  }
+
+  private ImmutableMap<String, ExecutableElement> getMemberMethods(TypeElement annotationElement) {
+    ImmutableMap.Builder<String, ExecutableElement> members = ImmutableMap.builder();
+    for (ExecutableElement member :
+        ElementFilter.methodsIn(annotationElement.getEnclosedElements())) {
+      String name = member.getSimpleName().toString();
+      members.put(name, member);
+    }
+    return members.build();
+  }
+
+  private ImmutableMap<String, Member> getMembers(
+      Element context,
+      ImmutableMap<String, ExecutableElement> memberMethods,
+      TypeSimplifier typeSimplifier,
+      AnnotationOutput annotationOutput) {
+    ImmutableMap.Builder<String, Member> members = ImmutableMap.builder();
+    for (Map.Entry<String, ExecutableElement> entry : memberMethods.entrySet()) {
+      ExecutableElement memberMethod = entry.getValue();
+      String name = memberMethod.getSimpleName().toString();
+      members.put(
+          name,
+          new Member(processingEnv, context, memberMethod, typeSimplifier, annotationOutput));
+    }
+    return members.build();
+  }
+
+  private ImmutableMap<String, AnnotationValue> getDefaultValues(TypeElement annotationElement) {
+    ImmutableMap.Builder<String, AnnotationValue> defaultValues = ImmutableMap.builder();
+    for (ExecutableElement member :
+        ElementFilter.methodsIn(annotationElement.getEnclosedElements())) {
+      String name = member.getSimpleName().toString();
+      AnnotationValue defaultValue = member.getDefaultValue();
+      if (defaultValue != null) {
+        defaultValues.put(name, defaultValue);
+      }
+    }
+    return defaultValues.build();
+  }
+
+  private Set<TypeMirror> getMemberTypes(Collection<ExecutableElement> memberMethods) {
+    Set<TypeMirror> types = new TypeMirrorSet();
+    for (ExecutableElement memberMethod : memberMethods) {
+      types.add(memberMethod.getReturnType());
+    }
+    return types;
+  }
+
+  private ImmutableMap<String, Parameter> getParameters(
+      TypeElement annotationElement,
+      ExecutableElement method,
+      Map<String, Member> members,
+      TypeSimplifier typeSimplifier) {
+    ImmutableMap.Builder<String, Parameter> parameters = ImmutableMap.builder();
+    boolean error = false;
+    for (VariableElement parameter : method.getParameters()) {
+      String name = parameter.getSimpleName().toString();
+      Member member = members.get(name);
+      if (member == null) {
+        reportError(parameter,
+            "@AutoAnnotation method parameter '%s' must have the same name as a member of %s",
+            name, annotationElement);
+        error = true;
+      } else {
+        TypeMirror parameterType = parameter.asType();
+        TypeMirror memberType = member.getTypeMirror();
+        if (compatibleTypes(parameterType, memberType)) {
+          parameters.put(name, new Parameter(parameterType, typeSimplifier));
+        } else {
+          reportError(parameter,
+              "@AutoAnnotation method parameter '%s' has type %s but %s.%s has type %s",
+              name, parameterType, annotationElement, name, memberType);
+          error = true;
+        }
+      }
+    }
+    if (error) {
+      throw new AbortProcessingException();
+    }
+    return parameters.build();
+  }
+
+  private void validateParameters(
+      TypeElement annotationElement,
+      ExecutableElement method,
+      ImmutableMap<String, Member> members,
+      ImmutableMap<String, Parameter> parameters,
+      ImmutableMap<String, AnnotationValue> defaultValues) {
+    boolean error = false;
+    for (String memberName : members.keySet()) {
+      if (!parameters.containsKey(memberName) && !defaultValues.containsKey(memberName)) {
+        reportError(method,
+            "@AutoAnnotation method needs a parameter with name '%s' and type %s"
+                + " corresponding to %s.%s, which has no default value",
+            memberName, members.get(memberName).getType(), annotationElement, memberName);
+        error = true;
+      }
+    }
+    if (error) {
+      throw new AbortProcessingException();
+    }
+  }
+
+  
+  private boolean compatibleTypes(TypeMirror parameterType, TypeMirror memberType) {
+    if (typeUtils.isAssignable(parameterType, memberType)) {
+      
+      
+      
+      return true;
+    }
+    
+    
+    
+    if (memberType.getKind() != TypeKind.ARRAY) {
+      return false;
+    }
+    TypeMirror arrayElementType = ((ArrayType) memberType).getComponentType();
+    TypeMirror wrappedArrayElementType = arrayElementType.getKind().isPrimitive()
+        ? typeUtils.boxedClass((PrimitiveType) arrayElementType).asType()
+        : arrayElementType;
+    TypeElement javaUtilCollection =
+        processingEnv.getElementUtils().getTypeElement(Collection.class.getCanonicalName());
+    DeclaredType collectionOfElement =
+        typeUtils.getDeclaredType(javaUtilCollection, wrappedArrayElementType);
+    return typeUtils.isAssignable(parameterType, collectionOfElement);
+  }
+
+  
+  private Set<Class<?>> wrapperTypesUsedInCollections(ExecutableElement method) {
+    TypeElement javaUtilCollection =
+        processingEnv.getElementUtils().getTypeElement(Collection.class.getName());
+    ImmutableSet.Builder<Class<?>> usedInCollections = ImmutableSet.builder();
+    for (Class<?> wrapper : Primitives.allWrapperTypes()) {
+      DeclaredType collectionOfWrapper =
+          typeUtils.getDeclaredType(javaUtilCollection, getTypeMirror(wrapper));
+      for (VariableElement parameter : method.getParameters()) {
+        if (typeUtils.isAssignable(parameter.asType(), collectionOfWrapper)) {
+          usedInCollections.add(wrapper);
+          break;
+        }
+      }
+    }
+    return usedInCollections.build();
+  }
+
+  private Set<TypeMirror> getReferencedTypes(
+      TypeMirror annotation,
+      ExecutableElement method,
+      Set<TypeMirror> memberTypes,
+      Set<Class<?>> wrapperTypesUsedInCollections) {
+    Set<TypeMirror> types = new TypeMirrorSet();
+    types.add(annotation);
+    types.add(getTypeMirror(Generated.class));
+    for (VariableElement parameter : method.getParameters()) {
+      
+      
+      types.add(parameter.asType());
+    }
+    types.addAll(memberTypes);
+    if (containsArrayType(types)) {
+      
+      types.add(getTypeMirror(Arrays.class));
+    }
+    if (!wrapperTypesUsedInCollections.isEmpty()) {
+      
+      
+      types.add(getTypeMirror(Collection.class));
+    }
+    return types;
+  }
+
+  private TypeMirror getTypeMirror(Class<?> c) {
+    return processingEnv.getElementUtils().getTypeElement(c.getName()).asType();
+  }
+
+  private static boolean containsArrayType(Set<TypeMirror> types) {
+    for (TypeMirror type : types) {
+      if (type.getKind() == TypeKind.ARRAY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isGwtCompatible(TypeElement annotationElement) {
+    for (AnnotationMirror annotationMirror : annotationElement.getAnnotationMirrors()) {
+      String name = annotationMirror.getAnnotationType().asElement().getSimpleName().toString();
+      if (name.equals("GwtCompatible")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void writeSourceFile(String className, String text, TypeElement originatingType) {
+    try {
+      JavaFileObject sourceFile =
+          processingEnv.getFiler().createSourceFile(className, originatingType);
+      Writer writer = sourceFile.openWriter();
+      try {
+        writer.write(text);
+      } finally {
+        writer.close();
+      }
+    } catch (IOException e) {
+      processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+          "Could not write generated class " + className + ": " + e);
+    }
+  }
+
+  public static class Member {
+    private final ProcessingEnvironment processingEnv;
+    private final Element context;
+    private final ExecutableElement method;
+    private final TypeSimplifier typeSimplifier;
+    private final AnnotationOutput annotationOutput;
+
+    Member(
+        ProcessingEnvironment processingEnv,
+        Element context,
+        ExecutableElement method,
+        TypeSimplifier typeSimplifier,
+        AnnotationOutput annotationDefaults) {
+      this.processingEnv = processingEnv;
+      this.context = context;
+      this.method = method;
+      this.typeSimplifier = typeSimplifier;
+      this.annotationOutput = annotationDefaults;
+    }
+
+    @Override
+    public String toString() {
+      return method.getSimpleName().toString();
+    }
+
+    public String getType() {
+      return typeSimplifier.simplify(getTypeMirror());
+    }
+
+    public String getComponentType() {
+      Preconditions.checkState(getTypeMirror().getKind() == TypeKind.ARRAY);
+      ArrayType arrayType = (ArrayType) getTypeMirror();
+      return typeSimplifier.simplify(arrayType.getComponentType());
+    }
+
+    public TypeMirror getTypeMirror() {
+      return method.getReturnType();
+    }
+
+    public TypeKind getKind() {
+      return getTypeMirror().getKind();
+    }
+
+    public String getDefaultValue() {
+      AnnotationValue defaultValue = method.getDefaultValue();
+      if (defaultValue == null) {
+        return null;
+      } else {
+        return annotationOutput.sourceFormForInitializer(
+            defaultValue, processingEnv, method.getSimpleName().toString(), context);
+      }
+    }
+  }
+
+  public static class Parameter {
+    private final String typeName;
+    private final TypeKind kind;
+
+    Parameter(TypeMirror type, TypeSimplifier typeSimplifier) {
+      this.typeName = typeSimplifier.simplify(type);
+      this.kind = type.getKind();
+    }
+
+    public String getType() {
+      return typeName;
+    }
+
+    public TypeKind getKind() {
+      return kind;
+    }
+  }
+}
+
+<code block>
+
+package com.google.auto.value.processor;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assert_;
+import static com.google.testing.compile.JavaSourcesSubjectFactory.javaSources;
+
+import com.google.common.collect.ImmutableList;
+import com.google.testing.compile.JavaFileObjects;
+
+import junit.framework.TestCase;
+
+import java.io.Writer;
+import java.util.List;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileManager;
+import javax.tools.JavaFileObject;
+import javax.tools.ToolProvider;
+
+
+public class AutoAnnotationCompilationTest extends TestCase {
+  public void testSimple() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public @interface MyAnnotation {",
+        "  MyEnum value();",
+        "}"
+    );
+    JavaFileObject myEnumJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.enums.MyEnum",
+        "package com.example.enums;",
+        "",
+        "public enum MyEnum {",
+        "  ONE",
+        "}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(MyEnum value) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "import javax.annotation.Generated",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final MyEnum value;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(MyEnum value) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = value;",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public MyEnum value() {",
+        "    return value;",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(value);",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (value.equals(that.value()));",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ((127 * " + "value".hashCode() + ") ^ (value.hashCode()));",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(annotationFactoryJavaFile, myAnnotationJavaFile, myEnumJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testGwtSimple() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.google.common.annotations.GwtCompatible;",
+        "",
+        "@GwtCompatible",
+        "public @interface MyAnnotation {",
+        "  int[] value();",
+        "}"
+    );
+    JavaFileObject gwtCompatibleJavaFile = JavaFileObjects.forSourceLines(
+        "com.google.common.annotations.GwtCompatible",
+        "package com.google.common.annotations;",
+        "",
+        "public @interface GwtCompatible {}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(int[] value) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import java.util.Arrays;",
+        "import javax.annotation.Generated;",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final int[] value;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(int[] value) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = Arrays.copyOf(value, value.length);",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public int[] value() {",
+        "    return Arrays.copyOf(value, value.length);",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(Arrays.toString(value));",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (Arrays.equals(value,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).value",
+        "              : that.value()));",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ((127 * " + "value".hashCode() + ") ^ (Arrays.hashCode(value)));",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(
+            annotationFactoryJavaFile, myAnnotationJavaFile, gwtCompatibleJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testCollectionsForArrays() {
+    JavaFileObject myAnnotationJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.annotations.MyAnnotation",
+        "package com.example.annotations;",
+        "",
+        "import com.example.enums.MyEnum;",
+        "",
+        "public @interface MyAnnotation {",
+        "  int[] value();",
+        "  MyEnum[] enums() default {};",
+        "}"
+    );
+    JavaFileObject myEnumJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.enums.MyEnum",
+        "package com.example.enums;",
+        "",
+        "public enum MyEnum {",
+        "  ONE",
+        "}"
+    );
+    JavaFileObject annotationFactoryJavaFile = JavaFileObjects.forSourceLines(
+        "com.example.factories.AnnotationFactory",
+        "package com.example.factories;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "",
+        "import java.util.List;",
+        "import java.util.Set;",
+        "",
+        "public class AnnotationFactory {",
+        "  @AutoAnnotation",
+        "  public static MyAnnotation newMyAnnotation(",
+        "      List<Integer> value, Set<MyEnum> enums) {",
+        "    return new AutoAnnotation_AnnotationFactory_newMyAnnotation(value, enums);",
+        "  }",
+        "}");
+    JavaFileObject expectedOutput = JavaFileObjects.forSourceLines(
+        "com.example.factories.AutoAnnotation_AnnotationFactory_newMyAnnotation",
+        "package com.example.factories;",
+        "",
+        "import com.example.annotations.MyAnnotation;",
+        "import com.example.enums.MyEnum;",
+        "import java.util.Arrays;",
+        "import java.util.Collection;",
+        "import java.util.List;",
+        "import java.util.Set;",
+        "import javax.annotation.Generated",
+        "",
+        "@Generated(\"" + AutoAnnotationProcessor.class.getName() + "\")",
+        "final class AutoAnnotation_AnnotationFactory_newMyAnnotation implements MyAnnotation {",
+        "  private final int[] value;",
+        "  private final MyEnum[] enums;",
+        "",
+        "  AutoAnnotation_AnnotationFactory_newMyAnnotation(",
+        "      List<Integer> value,",
+        "      Set<MyEnum> enums) {",
+        "    if (value == null) {",
+        "      throw new NullPointerException(\"Null value\");",
+        "    }",
+        "    this.value = intArrayFromCollection(value);",
+        "    if (enums == null) {",
+        "      throw new NullPointerException(\"Null enums\");",
+        "    }",
+        "    this.enums = enums.toArray(new MyEnum[enums.size()];",
+        "  }",
+        "",
+        "  @Override public Class<? extends MyAnnotation> annotationType() {",
+        "    return MyAnnotation.class;",
+        "  }",
+        "",
+        "  @Override public int[] value() {",
+        "    return value.clone();",
+        "  }",
+        "",
+        "  @Override public MyEnum[] enums() {",
+        "    return enums.clone();",
+        "  }",
+        "",
+        "  @Override public String toString() {",
+        "    StringBuilder sb = new StringBuilder(\"@com.example.annotations.MyAnnotation(\");",
+        "    sb.append(\"value=\");",
+        "    sb.append(Arrays.toString(value));",
+        "    sb.append(\", \");",
+        "    sb.append(\"enums=\");",
+        "    sb.append(Arrays.toString(enums));",
+        "    return sb.append(')').toString();",
+        "  }",
+        "",
+        "  @Override public boolean equals(Object o) {",
+        "    if (o == this) {",
+        "      return true;",
+        "    }",
+        "    if (o instanceof MyAnnotation) {",
+        "      MyAnnotation that = (MyAnnotation) o;",
+        "      return (Arrays.equals(value,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).value",
+        "              : that.value()))",
+        "          && (Arrays.equals(enums,",
+        "          (that instanceof AutoAnnotation_AnnotationFactory_newMyAnnotation)",
+        "              ? ((AutoAnnotation_AnnotationFactory_newMyAnnotation) that).enums",
+        "              : that.enums()))",
+        "    }",
+        "    return false;",
+        "  }",
+        "",
+        "  @Override public int hashCode() {",
+        "    return ",
+        "        ((127 * " + "value".hashCode() + ") ^ (Arrays.hashCode(value))) +",
+        "        ((127 * " + "enums".hashCode() + ") ^ (Arrays.hashCode(enums)));",
+        "  }",
+        "",
+        "  private static int[] intArrayFromCollection(Collection<Integer> c) {",
+        "    int[] a = new int[c.size()];",
+        "    int i = 0;",
+        "    for (int x : c) {",
+        "      a[i++] = x;",
+        "    }",
+        "    return a;",
+        "  }",
+        "}"
+    );
+    assert_().about(javaSources())
+        .that(ImmutableList.of(annotationFactoryJavaFile, myEnumJavaFile, myAnnotationJavaFile))
+        .processedWith(new AutoAnnotationProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedOutput);
+  }
+
+  public void testMissingClass() {
+    
+    
+    
+    
+    
+    
+    
+    
+    JavaFileObject erroneousJavaFileObject = JavaFileObjects.forSourceLines(
+        "com.example.annotations.Erroneous",
+        "package com.example.annotations;",
+        "",
+        "import com.google.auto.value.AutoAnnotation;",
+        "",
+        "public class Erroneous {",
+        "  @interface Empty {}",
+        "  @AutoAnnotation static Empty newEmpty() {}",
+        "  @NotAutoAnnotation Empty notNewEmpty() {}",
+        "}"
+    );
+    JavaCompiler javaCompiler = ToolProvider.getSystemJavaCompiler();
+    DiagnosticCollector<JavaFileObject> diagnosticCollector =
+        new DiagnosticCollector<JavaFileObject>();
+    JavaCompiler.CompilationTask compilationTask = javaCompiler.getTask(
+        (Writer) null, (JavaFileManager) null, diagnosticCollector, (Iterable<String>) null,
+        (Iterable<String>) null, ImmutableList.of(erroneousJavaFileObject));
+    compilationTask.setProcessors(ImmutableList.of(new AutoAnnotationProcessor()));
+    boolean result = compilationTask.call();
+    assertThat(result).isFalse();
+    List<Diagnostic<? extends JavaFileObject>> diagnostics = diagnosticCollector.getDiagnostics();
+    assertThat(diagnostics).isNotEmpty();
+    assertThat(diagnostics.get(0).getMessage(null)).contains("NotAutoAnnotation");
+    assertThat(diagnostics.get(0).getMessage(null)).doesNotContain("static");
+  }
+}
+
+<code block>
+
+package com.google.auto.common;
+
+import static com.google.auto.common.SuperficialValidation.validateElement;
+import static com.google.common.base.Preconditions.checkState;
+import static javax.lang.model.element.ElementKind.PACKAGE;
+import static javax.tools.Diagnostic.Kind.ERROR;
+
+import com.google.common.base.Ascii;
+import com.google.common.base.Optional;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSetMultimap;
+import com.google.common.collect.Multimaps;
+import com.google.common.collect.SetMultimap;
+import com.google.common.collect.Sets;
+
+import java.lang.annotation.Annotation;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Messager;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.PackageElement;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ErrorType;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.SimpleElementVisitor6;
+
+
+public abstract class BasicAnnotationProcessor extends AbstractProcessor {
+  
+  private final Set<String> deferredPackageNames = Sets.newLinkedHashSet();
+  private final Set<String> deferredTypeNames = Sets.newLinkedHashSet();
+  private final String processorName = getClass().getCanonicalName();
+
+  private Elements elements;
+  private Messager messager;
+  private ImmutableList<? extends ProcessingStep> steps;
+
+  @Override
+  public final synchronized void init(ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    this.elements = processingEnv.getElementUtils();
+    this.messager = processingEnv.getMessager();
+    this.steps = ImmutableList.copyOf(initSteps());
+  }
+
+  
+  protected abstract Iterable<? extends ProcessingStep> initSteps();
+
+  
+  protected void postProcess() {}
+
+  private ImmutableSet<? extends Class<? extends Annotation>> getSupportedAnnotationClasses() {
+    checkState(steps != null);
+    ImmutableSet.Builder<Class<? extends Annotation>> builder = ImmutableSet.builder();
+    for (ProcessingStep step : steps) {
+      builder.addAll(step.annotations());
+    }
+    return builder.build();
+  }
+
+  
+  @Override
+  public final ImmutableSet<String> getSupportedAnnotationTypes() {
+    ImmutableSet.Builder<String> builder = ImmutableSet.builder();
+    for (Class<? extends Annotation> annotationClass : getSupportedAnnotationClasses()) {
+      builder.add(annotationClass.getCanonicalName());
+    }
+    return builder.build();
+  }
+
+  private static final String INVALID_ELEMENT_MESSAGE_FORMAT = "%s was unable to process %s"
+      + " because not all of its dependencies could be resolved. Check for compilation errors or a"
+      + " circular dependency with generated code.";
+
+  @Override
+  public final boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    checkState(elements != null);
+    checkState(messager != null);
+    checkState(steps != null);
+
+    ImmutableMap<String, Optional<? extends Element>> deferredElements = deferredElements();
+
+    deferredTypeNames.clear();
+    deferredPackageNames.clear();
+
+    
+    if (roundEnv.processingOver()) {
+      reportMissingElements(deferredElements);
+      return false;
+    }
+
+    process(validElements(deferredElements, roundEnv));
+
+    postProcess();
+
+    return false;
+  }
+
+  
+  private ImmutableMap<String, Optional<? extends Element>> deferredElements() {
+    ImmutableMap.Builder<String, Optional<? extends Element>> deferredElements =
+        ImmutableMap.builder();
+    for (String deferredTypeName : deferredTypeNames) {
+      deferredElements.put(
+          deferredTypeName, Optional.fromNullable(elements.getTypeElement(deferredTypeName)));
+    }
+
+    for (String deferredPackageName : deferredPackageNames) {
+      deferredElements.put(
+          deferredPackageName,
+          Optional.fromNullable(elements.getPackageElement(deferredPackageName)));
+    }
+
+    return deferredElements.build();
+  }
+
+  private void reportMissingElements(
+      Map<String, ? extends Optional<? extends Element>> missingElements) {
+    for (Entry<String, ? extends Optional<? extends Element>> missingElementEntry :
+        missingElements.entrySet()) {
+      Optional<? extends Element> missingElement = missingElementEntry.getValue();
+      if (missingElement.isPresent()) {
+        processingEnv
+            .getMessager()
+            .printMessage(
+                ERROR,
+                String.format(
+                    INVALID_ELEMENT_MESSAGE_FORMAT,
+                    processorName,
+                    "this " + Ascii.toLowerCase(missingElement.get().getKind().name())),
+                missingElement.get());
+      } else {
+        processingEnv
+            .getMessager()
+            .printMessage(
+                ERROR,
+                String.format(
+                    INVALID_ELEMENT_MESSAGE_FORMAT, processorName, missingElementEntry.getKey()));
+      }
+    }
+  }
+
+  
+  private ImmutableSetMultimap<Class<? extends Annotation>, Element> validElements(
+      ImmutableMap<String, Optional<? extends Element>> deferredElements,
+      RoundEnvironment roundEnv) {
+    ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element>
+        deferredElementsByAnnotationBuilder = ImmutableSetMultimap.builder();
+    for (Entry<String, Optional<? extends Element>> deferredTypeElementEntry :
+        deferredElements.entrySet()) {
+      Optional<? extends Element> deferredElement = deferredTypeElementEntry.getValue();
+      if (deferredElement.isPresent()) {
+        findAnnotatedElements(deferredElement.get(), getSupportedAnnotationClasses(),
+            deferredElementsByAnnotationBuilder);
+      } else {
+        deferredTypeNames.add(deferredTypeElementEntry.getKey());
+      }
+    }
+
+    ImmutableSetMultimap<Class<? extends Annotation>, Element> deferredElementsByAnnotation =
+        deferredElementsByAnnotationBuilder.build();
+
+    ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element> validElements =
+        ImmutableSetMultimap.builder();
+
+    Set<String> validPackageNames = Sets.newLinkedHashSet();
+    Set<String> validTypeNames = Sets.newLinkedHashSet();
+
+    
+    for (Class<? extends Annotation> annotationClass : getSupportedAnnotationClasses()) {
+      
+      
+      TypeElement annotationType = elements.getTypeElement(annotationClass.getCanonicalName());
+      Set<? extends Element> elementsAnnotatedWith =
+          (annotationType == null)
+              ? ImmutableSet.<Element>of()
+              : roundEnv.getElementsAnnotatedWith(annotationType);
+      for (Element annotatedElement :
+          Sets.union(elementsAnnotatedWith, deferredElementsByAnnotation.get(annotationClass))) {
+        if (annotatedElement.getKind().equals(PACKAGE)) {
+          PackageElement annotatedPackageElement = (PackageElement) annotatedElement;
+          String annotatedPackageName = annotatedPackageElement.getQualifiedName().toString();
+          boolean validPackage =
+              validPackageNames.contains(annotatedPackageName)
+                  || (!deferredPackageNames.contains(annotatedPackageName)
+                      && validateElement(annotatedPackageElement));
+          if (validPackage) {
+            validElements.put(annotationClass, annotatedPackageElement);
+            validPackageNames.add(annotatedPackageName);
+          } else {
+            deferredPackageNames.add(annotatedPackageName);
+          }
+        } else {
+          TypeElement enclosingType = getEnclosingType(annotatedElement);
+          String enclosingTypeName = enclosingType.getQualifiedName().toString();
+          boolean validEnclosingType =
+              validTypeNames.contains(enclosingTypeName)
+                  || (!deferredTypeNames.contains(enclosingTypeName)
+                      && validateElement(enclosingType));
+          if (validEnclosingType) {
+            validElements.put(annotationClass, annotatedElement);
+            validTypeNames.add(enclosingTypeName);
+          } else {
+            deferredTypeNames.add(enclosingTypeName);
+          }
+        }
+      }
+    }
+
+    return validElements.build();
+  }
+
+  
+  private void process(ImmutableSetMultimap<Class<? extends Annotation>, Element> validElements) {
+    for (ProcessingStep step : steps) {
+      SetMultimap<Class<? extends Annotation>, Element> filteredMap =
+          Multimaps.filterKeys(validElements, Predicates.in(step.annotations()));
+      if (!filteredMap.isEmpty()) {
+        step.process(filteredMap);
+      }
+    }
+  }
+
+  private static void findAnnotatedElements(Element element,
+      ImmutableSet<? extends Class<? extends Annotation>> annotationClasses,
+      ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element> builder) {
+    for (Element enclosedElement : element.getEnclosedElements()) {
+      findAnnotatedElements(enclosedElement, annotationClasses, builder);
+    }
+    
+    if (element instanceof ExecutableElement) {
+      for (Element parameterElement : ((ExecutableElement) element).getParameters()) {
+        findAnnotatedElements(parameterElement, annotationClasses, builder);
+      }
+    }
+    for (Class<? extends Annotation> annotationClass : annotationClasses) {
+      if (MoreElements.isAnnotationPresent(element, annotationClass)) {
+        builder.put(annotationClass, element);
+      }
+    }
+  }
+
+  
+  
+  private static TypeElement getEnclosingType(Element element) {
+    return element.accept(new SimpleElementVisitor6<TypeElement, Void>() {
+      @Override protected TypeElement defaultAction(Element e, Void p) {
+        return e.getEnclosingElement().accept(this, p);
+      }
+
+      @Override public TypeElement visitType(TypeElement e, Void p) {
+        return e;
+      }
+
+      @Override public TypeElement visitPackage(PackageElement e, Void p) {
+        throw new IllegalArgumentException();
+      }
+    }, null);
+  }
+
+  
+  public interface ProcessingStep {
+    
+    Set<? extends Class<? extends Annotation>> annotations();
+
+    
+    void process(SetMultimap<Class<? extends Annotation>, Element> elementsByAnnotation);
+  }
+}
+
+<code block>
+
+package com.google.auto.common;
+
+import static com.google.auto.common.SuperficialValidation.validateElement;
+import static com.google.common.base.Preconditions.checkState;
+import static javax.lang.model.element.ElementKind.PACKAGE;
+import static javax.tools.Diagnostic.Kind.ERROR;
+
+import com.google.common.base.Ascii;
+import com.google.common.base.Optional;
+import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSetMultimap;
+import com.google.common.collect.Multimaps;
+import com.google.common.collect.SetMultimap;
+import com.google.common.collect.Sets;
+
+import java.lang.annotation.Annotation;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Messager;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.PackageElement;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ErrorType;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.SimpleElementVisitor6;
+
+
+public abstract class BasicAnnotationProcessor extends AbstractProcessor {
+  
+  private final Set<String> deferredPackageNames = Sets.newLinkedHashSet();
+  private final Set<String> deferredTypeNames = Sets.newLinkedHashSet();
+  private final String processorName = getClass().getCanonicalName();
+
+  private Elements elements;
+  private Messager messager;
+  private ImmutableList<? extends ProcessingStep> steps;
+
+  @Override
+  public final synchronized void init(ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    this.elements = processingEnv.getElementUtils();
+    this.messager = processingEnv.getMessager();
+    this.steps = ImmutableList.copyOf(initSteps());
+  }
+
+  
+  protected abstract Iterable<? extends ProcessingStep> initSteps();
+
+  
+  protected void postProcess() {}
+
+  private ImmutableSet<? extends Class<? extends Annotation>> getSupportedAnnotationClasses() {
+    checkState(steps != null);
+    ImmutableSet.Builder<Class<? extends Annotation>> builder = ImmutableSet.builder();
+    for (ProcessingStep step : steps) {
+      builder.addAll(step.annotations());
+    }
+    return builder.build();
+  }
+
+  
+  @Override
+  public final ImmutableSet<String> getSupportedAnnotationTypes() {
+    ImmutableSet.Builder<String> builder = ImmutableSet.builder();
+    for (Class<? extends Annotation> annotationClass : getSupportedAnnotationClasses()) {
+      builder.add(annotationClass.getCanonicalName());
+    }
+    return builder.build();
+  }
+
+  private static final String INVALID_ELEMENT_MESSAGE_FORMAT = "%s was unable to process %s"
+      + " because not all of its dependencies could be resolved. Check for compilation errors or a"
+      + " circular dependency with generated code.";
+
+  @Override
+  public final boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    checkState(elements != null);
+    checkState(messager != null);
+    checkState(steps != null);
+
+    
+    ImmutableMap.Builder<String, Optional<? extends Element>> deferredElementsBuilder =
+        ImmutableMap.builder();
+    for (String deferredTypeName : deferredTypeNames) {
+      deferredElementsBuilder.put(deferredTypeName,
+          Optional.fromNullable(elements.getTypeElement(deferredTypeName)));
+    }
+    for (String deferredPackageName : deferredPackageNames) {
+      deferredElementsBuilder.put(deferredPackageName,
+          Optional.fromNullable(elements.getPackageElement(deferredPackageName)));
+    }
+    ImmutableMap<String, Optional<? extends Element>> deferredElements =
+        deferredElementsBuilder.build();
+
+    deferredTypeNames.clear();
+    deferredPackageNames.clear();
+
+    
+    if (roundEnv.processingOver()) {
+      reportMissingElements(deferredElements);
+      return false;
+    }
+
+    
+    
+    ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element>
+        deferredElementsByAnnotationBuilder = ImmutableSetMultimap.builder();
+    for (Entry<String, Optional<? extends Element>> deferredTypeElementEntry :
+        deferredElements.entrySet()) {
+      Optional<? extends Element> deferredElement = deferredTypeElementEntry.getValue();
+      if (deferredElement.isPresent()) {
+        findAnnotatedElements(deferredElement.get(), getSupportedAnnotationClasses(),
+            deferredElementsByAnnotationBuilder);
+      } else {
+        deferredTypeNames.add(deferredTypeElementEntry.getKey());
+      }
+    }
+
+    ImmutableSetMultimap<Class<? extends Annotation>, Element> deferredElementsByAnnotation =
+        deferredElementsByAnnotationBuilder.build();
+
+    ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element> elementsByAnnotationBuilder =
+        ImmutableSetMultimap.builder();
+
+    Set<String> validPackageNames = Sets.newLinkedHashSet();
+    Set<String> validTypeNames = Sets.newLinkedHashSet();
+
+    
+    for (Class<? extends Annotation> annotationClass : getSupportedAnnotationClasses()) {
+      
+      
+      TypeElement annotationType = elements.getTypeElement(annotationClass.getCanonicalName());
+      Set<? extends Element> elementsAnnotatedWith = (annotationType == null)
+          ? ImmutableSet.<Element>of()
+          : roundEnv.getElementsAnnotatedWith(annotationType);
+      for (Element annotatedElement : Sets.union(
+          elementsAnnotatedWith,
+          deferredElementsByAnnotation.get(annotationClass))) {
+        if (annotatedElement.getKind().equals(PACKAGE)) {
+          PackageElement annotatedPackageElement = (PackageElement) annotatedElement;
+          String annotatedPackageName = annotatedPackageElement.getQualifiedName().toString();
+          boolean validPackage = validPackageNames.contains(annotatedPackageName)
+              || (!deferredPackageNames.contains(annotatedPackageName)
+                  && validateElement(annotatedPackageElement));
+          if (validPackage) {
+            elementsByAnnotationBuilder.put(annotationClass, annotatedPackageElement);
+            validPackageNames.add(annotatedPackageName);
+          } else {
+            deferredPackageNames.add(annotatedPackageName);
+          }
+        } else {
+          TypeElement enclosingType = getEnclosingType(annotatedElement);
+          String enclosingTypeName = enclosingType.getQualifiedName().toString();
+          boolean validEnclosingType = validTypeNames.contains(enclosingTypeName)
+              || (!deferredTypeNames.contains(enclosingTypeName)
+                  && validateElement(enclosingType));
+          if (validEnclosingType) {
+            elementsByAnnotationBuilder.put(annotationClass, annotatedElement);
+            validTypeNames.add(enclosingTypeName);
+          } else {
+            deferredTypeNames.add(enclosingTypeName);
+          }
+        }
+      }
+    }
+
+    ImmutableSetMultimap<Class<? extends Annotation>, Element> elementsByAnnotation =
+        elementsByAnnotationBuilder.build();
+
+    
+    for (ProcessingStep step : steps) {
+      SetMultimap<Class<? extends Annotation>, Element> filteredMap =
+          Multimaps.filterKeys(elementsByAnnotation, Predicates.in(step.annotations()));
+      if (!filteredMap.isEmpty()) {
+        step.process(filteredMap);
+      }
+    }
+
+    postProcess();
+
+    return false;
+  }
+
+  private void reportMissingElements(
+      Map<String, ? extends Optional<? extends Element>> missingElements) {
+    for (Entry<String, ? extends Optional<? extends Element>> missingElementEntry :
+        missingElements.entrySet()) {
+      Optional<? extends Element> missingElement = missingElementEntry.getValue();
+      if (missingElement.isPresent()) {
+        processingEnv.getMessager().printMessage(ERROR,
+            String.format(INVALID_ELEMENT_MESSAGE_FORMAT, processorName,
+                "this " + Ascii.toLowerCase(missingElement.get().getKind().name())),
+                missingElement.get());
+      } else {
+        processingEnv.getMessager().printMessage(ERROR,
+            String.format(INVALID_ELEMENT_MESSAGE_FORMAT, processorName,
+                missingElementEntry.getKey()));
+      }
+    }
+  }
+
+  private static void findAnnotatedElements(Element element,
+      ImmutableSet<? extends Class<? extends Annotation>> annotationClasses,
+      ImmutableSetMultimap.Builder<Class<? extends Annotation>, Element> builder) {
+    for (Element enclosedElement : element.getEnclosedElements()) {
+      findAnnotatedElements(enclosedElement, annotationClasses, builder);
+    }
+    
+    if (element instanceof ExecutableElement) {
+      for (Element parameterElement : ((ExecutableElement) element).getParameters()) {
+        findAnnotatedElements(parameterElement, annotationClasses, builder);
+      }
+    }
+    for (Class<? extends Annotation> annotationClass : annotationClasses) {
+      if (MoreElements.isAnnotationPresent(element, annotationClass)) {
+        builder.put(annotationClass, element);
+      }
+    }
+  }
+
+  
+  
+  private static TypeElement getEnclosingType(Element element) {
+    return element.accept(new SimpleElementVisitor6<TypeElement, Void>() {
+      @Override protected TypeElement defaultAction(Element e, Void p) {
+        return e.getEnclosingElement().accept(this, p);
+      }
+
+      @Override public TypeElement visitType(TypeElement e, Void p) {
+        return e;
+      }
+
+      @Override public TypeElement visitPackage(PackageElement e, Void p) {
+        throw new IllegalArgumentException();
+      }
+    }, null);
+  }
+
+  
+  public interface ProcessingStep {
+    
+    Set<? extends Class<? extends Annotation>> annotations();
+
+    
+    void process(SetMultimap<Class<? extends Annotation>, Element> elementsByAnnotation);
+  }
+}

@@ -1,0 +1,5 @@
+Java_Projects/schematic/schematic-c1a9dd63/curr/schematic-samples/src/main/java/net/simonvt/schematic/sample/database/NotesProvider.java
+Java_Projects/schematic/schematic-c1a9dd63/curr/schematic-compiler/src/main/java/net/simonvt/schematic/compiler/ContentProviderWriter.java
+Java_Projects/schematic/schematic-c1a9dd63/curr/schematic-annotations/src/main/java/net/simonvt/schematic/annotation/NotifyBulkInsert.java
+Java_Projects/schematic/schematic-c1a9dd63/prev/schematic-samples/src/main/java/net/simonvt/schematic/sample/database/NotesProvider.java
+Java_Projects/schematic/schematic-c1a9dd63/prev/schematic-compiler/src/main/java/net/simonvt/schematic/compiler/ContentProviderWriter.java

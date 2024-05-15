@@ -1,0 +1,2883 @@
+
+
+package cascading.stats;
+
+import java.io.Serializable;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+
+import cascading.flow.Flow;
+import cascading.management.state.ClientState;
+import cascading.util.ProcessLogger;
+
+
+public abstract class CascadingStats<Child> implements ProvidesCounters, Serializable
+  {
+  public static final String STATS_STORE_INTERVAL = "cascading.stats.store.interval";
+
+  
+  public static void setStatsStoreInterval( Map<Object, Object> properties, long intervalMs )
+    {
+    if( intervalMs <= 0 )
+      throw new IllegalArgumentException( "interval must be greater than zero, got: " + intervalMs );
+
+    properties.put( STATS_STORE_INTERVAL, Long.toString( intervalMs ) );
+    }
+
+  public enum Type
+    {
+      CASCADE, FLOW, STEP, NODE, SLICE, ATTEMPT;
+
+    public boolean isChild( Type type )
+      {
+      return ordinal() < type.ordinal();
+      }
+    }
+
+  public enum Status
+    {
+      PENDING( false ), SKIPPED( true ), STARTED( false ), SUBMITTED( false ), RUNNING( false ), SUCCESSFUL( true ), STOPPED( true ), FAILED( true );
+
+    boolean isFinished = false; 
+
+    Status( boolean isFinished )
+      {
+      this.isFinished = isFinished;
+      }
+
+    public boolean isFinished()
+      {
+      return isFinished;
+      }
+    }
+
+  private transient String prefixID; 
+
+  
+  final String name;
+  protected final ClientState clientState;
+
+  
+  Status status = Status.PENDING;
+
+  Set<StatsListener> listeners;
+
+  
+  long pendingTime;
+  
+  long startTime;
+  
+  long submitTime;
+  
+  long runTime;
+  
+  long finishedTime;
+  
+  Throwable throwable;
+
+  protected CascadingStats( String name, ClientState clientState )
+    {
+    this.name = name;
+    this.clientState = clientState;
+    }
+
+  
+  public void prepare()
+    {
+    clientState.startService();
+    }
+
+  
+  public void cleanup()
+    {
+    clientState.stopService();
+    }
+
+  
+  public abstract String getID();
+
+  
+  public String getName()
+    {
+    return name;
+    }
+
+  public abstract Type getType();
+
+  
+  public Throwable getThrowable()
+    {
+    return throwable;
+    }
+
+  
+  public boolean isPending()
+    {
+    return status == Status.PENDING;
+    }
+
+  
+  public boolean isSkipped()
+    {
+    return status == Status.SKIPPED;
+    }
+
+  
+  public boolean isStarted()
+    {
+    return status == Status.STARTED;
+    }
+
+  
+  public boolean isSubmitted()
+    {
+    return status == Status.SUBMITTED;
+    }
+
+  
+  public boolean isRunning()
+    {
+    return status == Status.RUNNING;
+    }
+
+  
+  public boolean isEngaged()
+    {
+    return isStarted() || isSubmitted() || isRunning();
+    }
+
+  
+  public boolean isSuccessful()
+    {
+    return status == Status.SUCCESSFUL;
+    }
+
+  
+  public boolean isFailed()
+    {
+    return status == Status.FAILED;
+    }
+
+  
+  public boolean isStopped()
+    {
+    return status == Status.STOPPED;
+    }
+
+  
+  public boolean isFinished()
+    {
+    return status == Status.SUCCESSFUL || status == Status.FAILED || status == Status.STOPPED || status == Status.SKIPPED;
+    }
+
+  
+  public Status getStatus()
+    {
+    return status;
+    }
+
+  
+  public void recordStats()
+    {
+    clientState.recordStats( this );
+    }
+
+  public abstract void recordInfo();
+
+  
+  public synchronized void markPending()
+    {
+    markPendingTime();
+
+    fireListeners( null, Status.PENDING );
+
+    recordStats();
+    recordInfo();
+    }
+
+  protected void markPendingTime()
+    {
+    if( pendingTime == 0 )
+      pendingTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markStartedThenRunning()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.STARTED + ", is already " + status );
+
+    markStartToRunTime();
+    markStarted();
+    markRunning();
+    }
+
+  protected void markStartToRunTime()
+    {
+    startTime = submitTime = runTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markStarted()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.STARTED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.STARTED;
+    markStartTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.start( startTime );
+    clientState.setStatus( status, startTime );
+    recordStats();
+    }
+
+  protected void markStartTime()
+    {
+    if( startTime == 0 )
+      startTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markSubmitted()
+    {
+    if( status == Status.SUBMITTED )
+      return;
+
+    if( status != Status.STARTED )
+      throw new IllegalStateException( "may not mark as " + Status.SUBMITTED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SUBMITTED;
+    markSubmitTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.submit( submitTime );
+    clientState.setStatus( status, submitTime );
+    recordStats();
+    recordInfo();
+    }
+
+  protected void markSubmitTime()
+    {
+    if( submitTime == 0 )
+      submitTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markRunning()
+    {
+    if( status == Status.RUNNING )
+      return;
+
+    if( status != Status.STARTED && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.RUNNING + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.RUNNING;
+    markRunTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.run( runTime );
+    clientState.setStatus( status, runTime );
+    recordStats();
+    }
+
+  protected void markRunTime()
+    {
+    if( runTime == 0 )
+      runTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markSuccessful()
+    {
+    if( status != Status.RUNNING && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.SUCCESSFUL + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SUCCESSFUL;
+    markFinishedTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    clientState.stop( finishedTime );
+    recordStats();
+    recordInfo();
+    }
+
+  private void markFinishedTime()
+    {
+    finishedTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markFailed( Throwable throwable )
+    {
+    if( status != Status.STARTED && status != Status.RUNNING && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.FAILED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.FAILED;
+    markFinishedTime();
+    this.throwable = throwable;
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    clientState.stop( finishedTime );
+    recordStats();
+    recordInfo();
+    }
+
+  
+  public synchronized void markStopped()
+    {
+    if( status != Status.PENDING && status != Status.STARTED && status != Status.SUBMITTED && status != Status.RUNNING )
+      throw new IllegalStateException( "may not mark as " + Status.STOPPED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.STOPPED;
+    markFinishedTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    recordStats();
+    recordInfo();
+    clientState.stop( finishedTime );
+    }
+
+  
+  public synchronized void markSkipped()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.SKIPPED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SKIPPED;
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, System.currentTimeMillis() );
+    recordStats();
+    }
+
+  
+  public long getPendingTime()
+    {
+    return pendingTime;
+    }
+
+  
+  public long getStartTime()
+    {
+    return startTime;
+    }
+
+  
+  public long getSubmitTime()
+    {
+    return submitTime;
+    }
+
+  
+  public long getRunTime()
+    {
+    return runTime;
+    }
+
+  
+  public long getFinishedTime()
+    {
+    return finishedTime;
+    }
+
+  
+  public long getDuration()
+    {
+    if( finishedTime != 0 )
+      return finishedTime - startTime;
+    else
+      return 0;
+    }
+
+  
+  public long getCurrentDuration()
+    {
+    if( finishedTime != 0 )
+      return finishedTime - startTime;
+    else
+      return System.currentTimeMillis() - startTime;
+    }
+
+  @Override
+  public Collection<String> getCountersFor( Class<? extends Enum> group )
+    {
+    return getCountersFor( group.getName() );
+    }
+
+  
+  public abstract Collection<String> getCounterGroupsMatching( String regex );
+
+  
+  public void captureDetail()
+    {
+    captureDetail( Type.ATTEMPT );
+    }
+
+  public abstract void captureDetail( Type depth );
+
+  
+  public abstract Collection<Child> getChildren();
+
+  
+  public abstract Child getChildWith( String id );
+
+  public synchronized void addListener( StatsListener statsListener )
+    {
+    if( listeners == null )
+      listeners = new LinkedHashSet<>();
+
+    listeners.add( statsListener );
+    }
+
+  public synchronized boolean removeListener( StatsListener statsListener )
+    {
+    return listeners != null && listeners.remove( statsListener );
+    }
+
+  protected synchronized void fireListeners( CascadingStats.Status fromStatus, CascadingStats.Status toStatus )
+    {
+    if( listeners == null )
+      return;
+
+    for( StatsListener listener : listeners )
+      {
+      try
+        {
+        listener.notify( this, fromStatus, toStatus );
+        }
+      catch( Throwable throwable )
+        {
+        logWarn( "error during listener notification, continuing with remaining listener notification", throwable );
+        }
+      }
+    }
+
+  protected abstract ProcessLogger getProcessLogger();
+
+  protected String getStatsString()
+    {
+    String string = "status=" + status + ", startTime=" + startTime;
+
+    if( finishedTime != 0 )
+      string += ", duration=" + ( finishedTime - startTime );
+
+    return string;
+    }
+
+  @Override
+  public String toString()
+    {
+    return "Cascading{" + getStatsString() + '}';
+    }
+
+  protected void logInfo( String message, Object... arguments )
+    {
+    getProcessLogger().logInfo( getPrefix() + message, arguments );
+    }
+
+  protected void logDebug( String message, Object... arguments )
+    {
+    getProcessLogger().logDebug( getPrefix() + message, arguments );
+    }
+
+  protected void logWarn( String message, Object... arguments )
+    {
+    getProcessLogger().logWarn( getPrefix() + message, arguments );
+    }
+
+  protected void logError( String message, Object... arguments )
+    {
+    getProcessLogger().logError( getPrefix() + message, arguments );
+    }
+
+  protected void logError( String message, Throwable throwable )
+    {
+    getProcessLogger().logError( getPrefix() + message, throwable );
+    }
+
+  private String getPrefix()
+    {
+    if( prefixID == null )
+      prefixID = getType().name().toLowerCase() + "[" + getID().substring( 0, 5 ) + "] ";
+
+    return prefixID;
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.hadoop;
+
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import cascading.flow.FlowNode;
+import cascading.management.state.ClientState;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+
+
+public abstract class BaseHadoopNodeStats<JobStatus, Counters> extends FlowNodeStats
+  {
+  protected final Map<String, FlowSliceStats> sliceStatsMap = new LinkedHashMap<>();
+  protected CounterCache<JobStatus, Counters> counterCache;
+
+  protected boolean allChildrenFinished;
+
+  private boolean hasCapturedFinalDetail;
+
+  
+  protected BaseHadoopNodeStats( FlowNode flowNode, ClientState clientState )
+    {
+    super( flowNode, clientState );
+    }
+
+  @Override
+  public long getLastSuccessfulCounterFetchTime()
+    {
+    if( counterCache != null )
+      return counterCache.getLastSuccessfulFetch();
+
+    return -1;
+    }
+
+  public boolean isAllChildrenFinished()
+    {
+    return allChildrenFinished;
+    }
+
+  
+  @Override
+  public Collection<String> getCounterGroups()
+    {
+    return counterCache.getCounterGroups();
+    }
+
+  
+  @Override
+  public Collection<String> getCounterGroupsMatching( String regex )
+    {
+    return counterCache.getCounterGroupsMatching( regex );
+    }
+
+  
+  @Override
+  public Collection<String> getCountersFor( String group )
+    {
+    return counterCache.getCountersFor( group );
+    }
+
+  
+  @Override
+  public long getCounterValue( Enum counter )
+    {
+    return counterCache.getCounterValue( counter );
+    }
+
+  
+  @Override
+  public long getCounterValue( String group, String counter )
+    {
+    return counterCache.getCounterValue( group, counter );
+    }
+
+  protected synchronized Counters cachedCounters( boolean force )
+    {
+    return counterCache.cachedCounters( force );
+    }
+
+  @Override
+  public Collection<FlowSliceStats> getChildren()
+    {
+    synchronized( sliceStatsMap )
+      {
+      return Collections.unmodifiableCollection( sliceStatsMap.values() );
+      }
+    }
+
+  @Override
+  public FlowSliceStats getChildWith( String id )
+    {
+    return sliceStatsMap.get( id );
+    }
+
+  @Override
+  public final synchronized void captureDetail( Type depth )
+    {
+    boolean finished = isFinished();
+
+    if( finished && hasCapturedFinalDetail )
+      return;
+
+    if( !getType().isChild( depth ) )
+      return;
+
+    boolean success = captureChildDetailInternal();
+
+    if( success )
+      logDebug( "captured remote node statistic details" );
+
+    if( allChildrenFinished )
+      logInfo( "all children are in finished state" );
+
+    hasCapturedFinalDetail = finished && success && allChildrenFinished;
+    }
+
+  
+  protected abstract boolean captureChildDetailInternal();
+
+  
+  @Override
+  public synchronized void recordChildStats()
+    {
+    try
+      {
+      cachedCounters( true );
+      }
+    catch( Exception exception )
+      {
+      
+      }
+
+    if( !clientState.isEnabled() )
+      return;
+
+    captureDetail( Type.ATTEMPT );
+
+    
+    
+    try
+      {
+      
+      for( FlowSliceStats value : sliceStatsMap.values() )
+        clientState.record( value.getID(), value );
+      }
+    catch( Exception exception )
+      {
+      logError( "unable to record node stats", exception );
+      }
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.hadoop;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import cascading.flow.FlowNode;
+import cascading.management.state.ClientState;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+import cascading.util.Util;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapred.JobClient;
+import org.apache.hadoop.mapred.RunningJob;
+import org.apache.hadoop.mapred.TaskCompletionEvent;
+import org.apache.hadoop.mapred.TaskID;
+import org.apache.hadoop.mapred.TaskReport;
+
+
+public class HadoopNodeStats extends BaseHadoopNodeStats<FlowNodeStats, Map<String, Map<String, Long>>>
+  {
+  private Map<TaskID, String> sliceIDCache = new HashMap<TaskID, String>( 4999 ); 
+
+  private HadoopStepStats parentStepStats;
+  private HadoopSliceStats.Kind kind;
+
+  
+  protected HadoopNodeStats( final HadoopStepStats parentStepStats, Configuration configuration, HadoopSliceStats.Kind kind, FlowNode flowNode, ClientState clientState )
+    {
+    super( flowNode, clientState );
+    this.parentStepStats = parentStepStats;
+    this.kind = kind;
+
+    this.counterCache = new HadoopNodeCounterCache( this, configuration );
+    }
+
+  @Override
+  public String getKind()
+    {
+    if( kind == null )
+      return null;
+
+    return kind.name();
+    }
+
+  private Status getParentStatus()
+    {
+    return parentStepStats.getStatus();
+    }
+
+  @Override
+  protected boolean captureChildDetailInternal()
+    {
+    JobClient jobClient = parentStepStats.getJobClient();
+    RunningJob runningJob = parentStepStats.getJobStatusClient();
+
+    if( jobClient == null || runningJob == null )
+      return false;
+
+    try
+      {
+      TaskReport[] taskReports; 
+
+      if( kind == HadoopSliceStats.Kind.MAPPER )
+        taskReports = jobClient.getMapTaskReports( runningJob.getID() );
+      else
+        taskReports = jobClient.getReduceTaskReports( runningJob.getID() );
+
+      addTaskStats( taskReports, false );
+
+      return true;
+      }
+    catch( IOException exception )
+      {
+      logWarn( "unable to retrieve slice stats via task reports", exception );
+      }
+
+    return false;
+    }
+
+  protected void addTaskStats( TaskReport[] taskReports, boolean skipLast )
+    {
+    long lastFetch = System.currentTimeMillis();
+    boolean fetchedAreFinished = true;
+
+    synchronized( sliceStatsMap )
+      {
+      for( int i = 0; i < taskReports.length - ( skipLast ? 1 : 0 ); i++ )
+        {
+        TaskReport taskReport = taskReports[ i ];
+
+        if( taskReport == null )
+          {
+          logWarn( "found empty task report" );
+          continue;
+          }
+
+        String id = getSliceIDFor( taskReport.getTaskID() );
+        HadoopSliceStats sliceStats = new HadoopSliceStats( id, getParentStatus(), kind, taskReport, lastFetch );
+        sliceStatsMap.put( id, sliceStats );
+
+        if( !sliceStats.getStatus().isFinished() )
+          fetchedAreFinished = false;
+        }
+      }
+
+    allChildrenFinished = fetchedAreFinished;
+    }
+
+  protected void addAttempt( TaskCompletionEvent event )
+    {
+    
+    String sliceID = sliceIDCache.get( event.getTaskAttemptId().getTaskID() );
+
+    if( sliceID == null )
+      return;
+
+    FlowSliceStats stats;
+
+    synchronized( sliceStatsMap )
+      {
+      stats = sliceStatsMap.get( sliceID );
+      }
+
+    if( stats == null )
+      return;
+
+    ( (HadoopSliceStats) stats ).addAttempt( event );
+    }
+
+  private String getSliceIDFor( TaskID taskID )
+    {
+    
+    String id = sliceIDCache.get( taskID );
+
+    if( id == null )
+      {
+      id = Util.createUniqueID();
+      sliceIDCache.put( taskID, id );
+      }
+
+    return id;
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.tez;
+
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
+
+import cascading.CascadingException;
+import cascading.flow.FlowNode;
+import cascading.flow.hadoop.util.HadoopUtil;
+import cascading.flow.stream.annotations.StreamMode;
+import cascading.management.state.ClientState;
+import cascading.property.PropertyUtil;
+import cascading.stats.FlowSliceStats;
+import cascading.stats.hadoop.BaseHadoopNodeStats;
+import cascading.stats.tez.util.TaskStatus;
+import cascading.stats.tez.util.TimelineClient;
+import cascading.tap.Tap;
+import cascading.util.Util;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.tez.common.counters.TezCounters;
+import org.apache.tez.dag.api.TezException;
+import org.apache.tez.dag.api.client.DAGClient;
+import org.apache.tez.dag.api.client.Progress;
+import org.apache.tez.dag.api.client.StatusGetOpts;
+import org.apache.tez.dag.api.client.VertexStatus;
+import org.apache.tez.dag.api.oldrecords.TaskState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static cascading.stats.tez.util.TezStatsUtil.STATUS_GET_COUNTERS;
+import static cascading.util.Util.formatDurationFromMillis;
+import static cascading.util.Util.isEmpty;
+
+
+public class TezNodeStats extends BaseHadoopNodeStats<DAGClient, TezCounters>
+  {
+  private static final Logger LOG = LoggerFactory.getLogger( TezNodeStats.class );
+
+  
+  public static final String TIMELINE_FETCH_LIMIT = "cascading.stats.timeline.fetch.limit";
+  public static final int DEFAULT_FETCH_LIMIT = 500;
+
+  private static int fetchLimit = -1;
+
+  public enum Kind
+    {
+      SPLIT, PARTITIONED
+    }
+
+  private TezStepStats parentStepStats;
+  private Kind kind;
+
+  private String vertexID;
+  private int totalTaskCount;
+  private int succeededTaskCount;
+  private int failedTaskCount;
+  private int killedTaskCount;
+  private int runningTaskCount;
+
+  private static void setFetchLimit( Configuration configuration )
+    {
+    if( fetchLimit > -1 )
+      return;
+
+    fetchLimit = PropertyUtil.getIntProperty( HadoopUtil.createProperties( configuration ), TIMELINE_FETCH_LIMIT, DEFAULT_FETCH_LIMIT );
+
+    if( fetchLimit < 2 )
+      {
+      LOG.warn( "property: {}, was set to: {}, may not be less than 2, setting to 2", TIMELINE_FETCH_LIMIT, fetchLimit );
+      fetchLimit = 2;
+      }
+    }
+
+  protected TezNodeStats( final TezStepStats parentStepStats, FlowNode flowNode, ClientState clientState, Configuration configuration )
+    {
+    super( flowNode, clientState );
+
+    setFetchLimit( configuration );
+
+    this.parentStepStats = parentStepStats;
+    this.kind = getStreamedTaps( flowNode ).isEmpty() ? Kind.PARTITIONED : Kind.SPLIT;
+
+    this.counterCache = new TezCounterCache<DAGClient>( this, configuration )
+    {
+    @Override
+    protected DAGClient getJobStatusClient()
+      {
+      return parentStepStats.getJobStatusClient();
+      }
+
+    protected TezCounters getCounters( DAGClient dagClient ) throws IOException
+      {
+      VertexStatus vertexStatus = updateProgress( dagClient, STATUS_GET_COUNTERS );
+
+      if( vertexStatus == null )
+        return null;
+
+      TezCounters vertexCounters = vertexStatus.getVertexCounters();
+
+      if( vertexCounters == null )
+        logWarn( "could not retrieve vertex counters in stats status: {}, and vertex state: {}", getStatus(), vertexStatus.getState() );
+
+      return vertexCounters;
+      }
+    };
+    }
+
+  
+  private Set<Tap> getStreamedTaps( FlowNode flowNode )
+    {
+    Set<Tap> taps = new HashSet<>( flowNode.getSourceTaps() );
+
+    taps.remove( flowNode.getSourceElements( StreamMode.Accumulated ) );
+
+    return taps;
+    }
+
+  @Override
+  public String getKind()
+    {
+    if( kind == null )
+      return null;
+
+    return kind.name();
+    }
+
+  private String retrieveVertexID( DAGClient dagClient )
+    {
+    if( vertexID != null || !( dagClient instanceof TimelineClient ) )
+      return vertexID;
+
+    try
+      {
+      vertexID = ( (TimelineClient) dagClient ).getVertexID( getID() );
+      }
+    catch( IOException | CascadingException | TezException exception )
+      {
+      logWarn( "unable to get vertex id", exception );
+      }
+
+    return vertexID;
+    }
+
+  public int getTotalTaskCount()
+    {
+    return totalTaskCount;
+    }
+
+  public int getSucceededTaskCount()
+    {
+    return succeededTaskCount;
+    }
+
+  public int getFailedTaskCount()
+    {
+    return failedTaskCount;
+    }
+
+  public int getKilledTaskCount()
+    {
+    return killedTaskCount;
+    }
+
+  public int getRunningTaskCount()
+    {
+    return runningTaskCount;
+    }
+
+  @Override
+  protected boolean captureChildDetailInternal()
+    {
+    if( allChildrenFinished )
+      return true;
+
+    DAGClient dagClient = parentStepStats.getJobStatusClient();
+
+    if( dagClient == null )
+      return false;
+
+    
+    if( dagClient instanceof TimelineClient )
+      return withTimelineServer( (TimelineClient) dagClient );
+
+    
+    return withoutTimelineServer( dagClient );
+    }
+
+  private boolean withTimelineServer( TimelineClient timelineClient )
+    {
+    updateProgress( (DAGClient) timelineClient, null ); 
+
+    if( getTotalTaskCount() == 0 ) 
+      return false;
+
+    if( sliceStatsMap.size() == getTotalTaskCount() )
+      return updateAllTasks( timelineClient );
+
+    return fetchAllTasks( timelineClient );
+    }
+
+  private boolean updateAllTasks( TimelineClient timelineClient )
+    {
+    if( allChildrenFinished )
+      return true;
+
+    long startTime = System.currentTimeMillis();
+
+    int count = 0;
+
+    for( FlowSliceStats sliceStats : sliceStatsMap.values() )
+      {
+      if( sliceStats.getStatus().isFinished() )
+        continue;
+
+      TaskStatus taskStatus = getTaskStatusFor( timelineClient, sliceStats.getProcessSliceID() );
+
+      updateSliceWith( (TezSliceStats) sliceStats, taskStatus, System.currentTimeMillis() );
+
+      count++;
+      }
+
+    if( count == 0 )
+      allChildrenFinished = true;
+
+    logInfo( "updated {} slices in: {}", count, formatDurationFromMillis( System.currentTimeMillis() - startTime ) );
+
+    return sliceStatsMap.size() == getTotalTaskCount();
+    }
+
+  private boolean fetchAllTasks( TimelineClient timelineClient )
+    {
+    long startTime = System.currentTimeMillis();
+    String fromTaskId = null;
+    int startSize = sliceStatsMap.size();
+    int iteration = 0;
+    boolean continueIterating = true;
+    boolean retrievedAreFinished = true;
+
+    while( continueIterating && sliceStatsMap.size() != getTotalTaskCount() )
+      {
+      long lastFetch = System.currentTimeMillis();
+
+      
+      Iterator<TaskStatus> vertexChildren = getTaskStatusIterator( timelineClient, fromTaskId );
+
+      if( vertexChildren == null )
+        return false;
+
+      int added = 0;
+      int updated = 0;
+
+      while( vertexChildren.hasNext() )
+        {
+        TaskStatus taskStatus = vertexChildren.next();
+
+        fromTaskId = taskStatus.getTaskID();
+
+        TezSliceStats sliceStats = (TezSliceStats) sliceStatsMap.get( fromTaskId );
+
+        if( sliceStats == null )
+          {
+          added++;
+
+          sliceStats = new TezSliceStats( Util.createUniqueID(), kind, this.getStatus(), fromTaskId );
+
+          sliceStatsMap.put( sliceStats.getProcessSliceID(), sliceStats );
+          }
+        else
+          {
+          updated++;
+          }
+
+        updateSliceWith( sliceStats, taskStatus, lastFetch );
+
+        if( !sliceStats.getStatus().isFinished() )
+          retrievedAreFinished = false;
+        }
+
+      int retrieved = added + updated;
+
+      if( added == 0 && updated == 1 ) 
+        continueIterating = false;
+      else
+        continueIterating = retrieved != 0;
+
+      if( continueIterating )
+        logInfo( "iteration retrieved: {}, added {}, updated {} slices in iteration: {}, fetch limit: {}", retrieved, added, updated, ++iteration, fetchLimit );
+      }
+
+    int total = sliceStatsMap.size();
+    int added = total - startSize;
+    int remaining = getTotalTaskCount() - total;
+    String duration = formatDurationFromMillis( System.currentTimeMillis() - startTime );
+
+    if( total == getTotalTaskCount() && retrievedAreFinished )
+      allChildrenFinished = true;
+
+    if( iteration == 0 && total == 0 )
+      logInfo( "no slices stats available yet, expecting: {}", remaining );
+    else
+      logInfo( "added {} slices, in iterations: {}, with duration: {}, total fetched: {}, remaining: {}", added, iteration, duration, total, remaining );
+
+    return total == getTotalTaskCount();
+    }
+
+  private void updateSliceWith( TezSliceStats sliceStats, TaskStatus taskStatus, long lastFetch )
+    {
+    if( taskStatus == null )
+      return;
+
+    sliceStats.setStatus( getStatusForTaskStatus( taskStatus.getStatus() ) ); 
+
+    Map<String, Map<String, Long>> counters = taskStatus.getCounters();
+
+    sliceStats.setCounters( counters ); 
+
+    if( counters != null )
+      sliceStats.setLastFetch( lastFetch );
+    }
+
+  private TaskStatus getTaskStatusFor( TimelineClient timelineClient, String taskID )
+    {
+    try
+      {
+      return timelineClient.getVertexChild( taskID );
+      }
+    catch( TezException exception )
+      {
+      logWarn( "unable to get slice stat from timeline server for task id: {}", taskID, exception );
+      }
+
+    return null;
+    }
+
+  private Iterator<TaskStatus> getTaskStatusIterator( TimelineClient timelineClient, String startTaskID )
+    {
+    try
+      {
+      String vertexID = retrieveVertexID( (DAGClient) timelineClient );
+
+      if( vertexID == null )
+        {
+        logWarn( "unable to get slice stats from timeline server, did not retrieve valid vertex id for vertex name: {}", getID() );
+        return null;
+        }
+
+      return timelineClient.getVertexChildren( vertexID, fetchLimit, startTaskID );
+      }
+    catch( IOException | CascadingException | TezException exception )
+      {
+      logWarn( "unable to get slice stats from timeline server", exception );
+      }
+
+    return null;
+    }
+
+  private boolean withoutTimelineServer( DAGClient dagClient )
+    {
+    VertexStatus vertexStatus = updateProgress( dagClient, STATUS_GET_COUNTERS );
+
+    if( vertexStatus == null || getTotalTaskCount() == 0 )
+      return false;
+
+    int total = sliceStatsMap.size();
+
+    if( total == 0 ) 
+      logWarn( "'" + YarnConfiguration.TIMELINE_SERVICE_ENABLED + "' is disabled, task level counters cannot be retrieved" );
+
+    for( int i = total; i < totalTaskCount; i++ )
+      {
+      TezSliceStats sliceStats = new TezSliceStats( Util.createUniqueID(), kind, this.getStatus(), null );
+
+      
+      sliceStatsMap.put( sliceStats.getID(), sliceStats );
+      }
+
+    
+    Iterator<FlowSliceStats> iterator = sliceStatsMap.values().iterator();
+
+    for( int i = 0; i < runningTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.RUNNING );
+
+    for( int i = 0; i < succeededTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.SUCCESSFUL );
+
+    for( int i = 0; i < failedTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.FAILED );
+
+    for( int i = 0; i < killedTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.STOPPED );
+
+    List<String> diagnostics = vertexStatus.getDiagnostics();
+
+    for( String diagnostic : diagnostics )
+      logInfo( "vertex diagnostics: {}", diagnostic );
+
+    return true;
+    }
+
+  private Status getStatusForTaskStatus( @Nullable String status )
+    {
+    if( isEmpty( status ) )
+      return null;
+
+    TaskState state = TaskState.valueOf( status );
+
+    switch( state )
+      {
+      case NEW:
+        return Status.PENDING;
+      case SCHEDULED:
+        return Status.SUBMITTED;
+      case RUNNING:
+        return Status.RUNNING;
+      case SUCCEEDED:
+        return Status.SUCCESSFUL;
+      case FAILED:
+        return Status.FAILED;
+      case KILLED:
+        return Status.STOPPED;
+      }
+
+    return null;
+    }
+
+  private VertexStatus updateProgress( DAGClient dagClient, Set<StatusGetOpts> statusGetOpts )
+    {
+    VertexStatus vertexStatus = null;
+
+    try
+      {
+      vertexStatus = dagClient.getVertexStatus( getID(), statusGetOpts );
+      }
+    catch( IOException | TezException exception )
+      {
+      logWarn( "unable to get vertex status for: {}", getID(), exception );
+      }
+
+    if( vertexStatus == null )
+      return null;
+
+    Progress progress = vertexStatus.getProgress();
+
+    totalTaskCount = progress.getTotalTaskCount();
+    runningTaskCount = progress.getRunningTaskCount();
+    succeededTaskCount = progress.getSucceededTaskCount();
+    failedTaskCount = progress.getFailedTaskCount();
+    killedTaskCount = progress.getKilledTaskCount();
+
+    return vertexStatus;
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.tez;
+
+import java.util.Collection;
+import java.util.List;
+
+import cascading.PlatformTestCase;
+import cascading.cascade.Cascade;
+import cascading.cascade.CascadeConnector;
+import cascading.flow.Flow;
+import cascading.flow.SliceCounters;
+import cascading.operation.regex.RegexParser;
+import cascading.operation.state.Counter;
+import cascading.pipe.Each;
+import cascading.pipe.GroupBy;
+import cascading.pipe.Pipe;
+import cascading.stats.CascadeStats;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+import cascading.stats.FlowStats;
+import cascading.tap.SinkMode;
+import cascading.tap.Tap;
+import cascading.tuple.Fields;
+import org.junit.Test;
+
+import static data.InputData.inputFileApache;
+
+
+public class TezStatsPlatformTest extends PlatformTestCase
+  {
+  enum TestEnum
+    {
+      FIRST, SECOND, THIRD
+    }
+
+  public TezStatsPlatformTest()
+    {
+    super( true, 1, 4 );
+    }
+
+  @Test
+  public void testStatsCounters() throws Exception
+    {
+    getPlatform().copyFromLocal( inputFileApache );
+
+    Tap source = getPlatform().getTextFile( inputFileApache );
+
+    Pipe pipe = new Pipe( "first" );
+
+    pipe = new Each( pipe, new Fields( "line" ), new RegexParser( new Fields( "ip" ), "^[^ ]*" ), new Fields( "ip" ) );
+    pipe = new GroupBy( pipe, new Fields( "ip" ) );
+    pipe = new Each( pipe, new Counter( TestEnum.FIRST ) );
+    pipe = new GroupBy( pipe, new Fields( "ip" ) );
+    pipe = new Each( pipe, new Counter( TestEnum.FIRST ) );
+    pipe = new Each( pipe, new Counter( TestEnum.SECOND ) );
+
+    Tap sink1 = getPlatform().getTextFile( getOutputPath( "flowstats1" ), SinkMode.REPLACE );
+    Tap sink2 = getPlatform().getTextFile( getOutputPath( "flowstats2" ), SinkMode.REPLACE );
+
+    Flow flow1 = getPlatform().getFlowConnector().connect( "stats1 test", source, sink1, pipe );
+    Flow flow2 = getPlatform().getFlowConnector().connect( "stats2 test", source, sink2, pipe );
+
+    Cascade cascade = new CascadeConnector().connect( flow1, flow2 );
+
+    cascade.complete();
+
+    CascadeStats cascadeStats = cascade.getCascadeStats();
+
+    assertNotNull( cascadeStats.getID() );
+
+    assertEquals( 1, cascadeStats.getCounterGroupsMatching( "cascading\\.stats\\..*" ).size() );
+    assertEquals( 2, cascadeStats.getCountersFor( TestEnum.class.getName() ).size() );
+    assertEquals( 2, cascadeStats.getCountersFor( TestEnum.class ).size() );
+    assertEquals( 40, cascadeStats.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 20, cascadeStats.getCounterValue( TestEnum.SECOND ) );
+
+    
+    assertEquals( 0, cascadeStats.getCounterValue( TestEnum.THIRD ) );
+    assertEquals( 0, cascadeStats.getCounterValue( "FOO", "BAR" ) );
+
+    FlowStats flowStats1 = flow1.getFlowStats();
+
+    assertNotNull( flowStats1.getID() );
+
+    assertEquals( 20, flowStats1.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 10, flowStats1.getCounterValue( TestEnum.SECOND ) );
+
+    
+    assertEquals( 0, flowStats1.getCounterValue( TestEnum.THIRD ) );
+    assertEquals( 0, flowStats1.getCounterValue( "FOO", "BAR" ) );
+
+    FlowStats flowStats2 = flow2.getFlowStats();
+
+    assertNotNull( flowStats2.getID() );
+
+    assertEquals( 20, flowStats2.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 10, flowStats2.getCounterValue( TestEnum.SECOND ) );
+
+    cascadeStats.captureDetail();
+
+    assertEquals( 1, flowStats1.getStepsCount() );
+    assertEquals( 1, flowStats2.getStepsCount() );
+
+    TezStepStats stats1 = (TezStepStats) flowStats1.getFlowStepStats().get( 0 );
+
+    assertNotNull( stats1.getID() );
+
+    if( getPlatform().isUseCluster() )
+      {
+      assertTrue( stats1.getCounterValue( SliceCounters.Process_Duration ) != 0L );
+
+      List<FlowNodeStats> flowNodeStats = stats1.getFlowNodeStats();
+
+      assertTrue( flowNodeStats.get( 0 ).getCounterValue( SliceCounters.Process_Duration ) != 0L );
+
+      assertEquals( 3, flowNodeStats.size() );
+
+      FlowNodeStats node1 = flowNodeStats.get( 0 );
+      FlowNodeStats node2 = flowNodeStats.get( 1 );
+      FlowNodeStats node3 = flowNodeStats.get( 2 );
+
+      assertEquals( 1, node1.getChildren().size() );
+      assertEquals( 4, node2.getChildren().size() );
+      assertEquals( 4, node3.getChildren().size() );
+
+      assertTrue( ( (TezNodeStats) node1 ).isAllChildrenFinished() );
+      assertTrue( ( (TezNodeStats) node2 ).isAllChildrenFinished() );
+      assertTrue( ( (TezNodeStats) node3 ).isAllChildrenFinished() );
+
+      boolean foundCounter = false;
+
+      Collection<FlowSliceStats> children = node2.getChildren();
+      for( FlowSliceStats flowSliceStats : children )
+        {
+        TezSliceStats sliceStats = (TezSliceStats) flowSliceStats;
+
+        if( sliceStats.getCounters().containsKey( TestEnum.FIRST.getDeclaringClass().getName() ) )
+          {
+          foundCounter = true;
+          assertTrue( sliceStats.getCounterValue( TestEnum.FIRST ) > 0 ); 
+          }
+        }
+
+      assertTrue( "did not find counter in any slice", foundCounter );
+      }
+
+    TezStepStats stats2 = (TezStepStats) flowStats2.getFlowStepStats().get( 0 );
+
+    assertNotNull( stats2.getID() );
+
+    if( getPlatform().isUseCluster() )
+      {
+      List<FlowNodeStats> flowNodeStats = stats2.getFlowNodeStats();
+      assertEquals( 3, flowNodeStats.size() );
+
+      FlowNodeStats node1 = flowNodeStats.get( 0 );
+      FlowNodeStats node2 = flowNodeStats.get( 1 );
+      FlowNodeStats node3 = flowNodeStats.get( 2 );
+
+      assertEquals( 1, node1.getChildren().size() );
+      assertEquals( 4, node2.getChildren().size() );
+      assertEquals( 4, node3.getChildren().size() );
+
+      assertTrue( ( (TezNodeStats) node1 ).isAllChildrenFinished() );
+      assertTrue( ( (TezNodeStats) node2 ).isAllChildrenFinished() );
+      assertTrue( ( (TezNodeStats) node3 ).isAllChildrenFinished() );
+      }
+    }
+  }
+
+<code block>
+
+
+package cascading.stats;
+
+import java.io.Serializable;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+
+import cascading.flow.Flow;
+import cascading.management.state.ClientState;
+import cascading.util.ProcessLogger;
+
+
+public abstract class CascadingStats<Child> implements ProvidesCounters, Serializable
+  {
+  public static final String STATS_STORE_INTERVAL = "cascading.stats.store.interval";
+
+  
+  public static void setStatsStoreInterval( Map<Object, Object> properties, long intervalMs )
+    {
+    if( intervalMs <= 0 )
+      throw new IllegalArgumentException( "interval must be greater than zero, got: " + intervalMs );
+
+    properties.put( STATS_STORE_INTERVAL, Long.toString( intervalMs ) );
+    }
+
+  public enum Type
+    {
+      CASCADE, FLOW, STEP, NODE, SLICE, ATTEMPT;
+
+    public boolean isChild( Type type )
+      {
+      return ordinal() < type.ordinal();
+      }
+    }
+
+  public enum Status
+    {
+      PENDING( false ), SKIPPED( true ), STARTED( false ), SUBMITTED( false ), RUNNING( false ), SUCCESSFUL( true ), STOPPED( true ), FAILED( true );
+
+    boolean isFinished = false; 
+
+    Status( boolean isFinished )
+      {
+      this.isFinished = isFinished;
+      }
+
+    public boolean isFinished()
+      {
+      return isFinished;
+      }
+    }
+
+  
+  final String name;
+  protected final ClientState clientState;
+
+  
+  Status status = Status.PENDING;
+
+  Set<StatsListener> listeners;
+
+  
+  long pendingTime;
+  
+  long startTime;
+  
+  long submitTime;
+  
+  long runTime;
+  
+  long finishedTime;
+  
+  Throwable throwable;
+
+  protected CascadingStats( String name, ClientState clientState )
+    {
+    this.name = name;
+    this.clientState = clientState;
+    }
+
+  
+  public void prepare()
+    {
+    clientState.startService();
+    }
+
+  
+  public void cleanup()
+    {
+    clientState.stopService();
+    }
+
+  
+  public abstract String getID();
+
+  
+  public String getName()
+    {
+    return name;
+    }
+
+  public abstract Type getType();
+
+  
+  public Throwable getThrowable()
+    {
+    return throwable;
+    }
+
+  
+  public boolean isPending()
+    {
+    return status == Status.PENDING;
+    }
+
+  
+  public boolean isSkipped()
+    {
+    return status == Status.SKIPPED;
+    }
+
+  
+  public boolean isStarted()
+    {
+    return status == Status.STARTED;
+    }
+
+  
+  public boolean isSubmitted()
+    {
+    return status == Status.SUBMITTED;
+    }
+
+  
+  public boolean isRunning()
+    {
+    return status == Status.RUNNING;
+    }
+
+  
+  public boolean isEngaged()
+    {
+    return isStarted() || isSubmitted() || isRunning();
+    }
+
+  
+  public boolean isSuccessful()
+    {
+    return status == Status.SUCCESSFUL;
+    }
+
+  
+  public boolean isFailed()
+    {
+    return status == Status.FAILED;
+    }
+
+  
+  public boolean isStopped()
+    {
+    return status == Status.STOPPED;
+    }
+
+  
+  public boolean isFinished()
+    {
+    return status == Status.SUCCESSFUL || status == Status.FAILED || status == Status.STOPPED || status == Status.SKIPPED;
+    }
+
+  
+  public Status getStatus()
+    {
+    return status;
+    }
+
+  
+  public void recordStats()
+    {
+    clientState.recordStats( this );
+    }
+
+  public abstract void recordInfo();
+
+  
+  public synchronized void markPending()
+    {
+    markPendingTime();
+
+    fireListeners( null, Status.PENDING );
+
+    recordStats();
+    recordInfo();
+    }
+
+  protected void markPendingTime()
+    {
+    if( pendingTime == 0 )
+      pendingTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markStartedThenRunning()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.STARTED + ", is already " + status );
+
+    markStartToRunTime();
+    markStarted();
+    markRunning();
+    }
+
+  protected void markStartToRunTime()
+    {
+    startTime = submitTime = runTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markStarted()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.STARTED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.STARTED;
+    markStartTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.start( startTime );
+    clientState.setStatus( status, startTime );
+    recordStats();
+    }
+
+  protected void markStartTime()
+    {
+    if( startTime == 0 )
+      startTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markSubmitted()
+    {
+    if( status == Status.SUBMITTED )
+      return;
+
+    if( status != Status.STARTED )
+      throw new IllegalStateException( "may not mark as " + Status.SUBMITTED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SUBMITTED;
+    markSubmitTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.submit( submitTime );
+    clientState.setStatus( status, submitTime );
+    recordStats();
+    recordInfo();
+    }
+
+  protected void markSubmitTime()
+    {
+    if( submitTime == 0 )
+      submitTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markRunning()
+    {
+    if( status == Status.RUNNING )
+      return;
+
+    if( status != Status.STARTED && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.RUNNING + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.RUNNING;
+    markRunTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.run( runTime );
+    clientState.setStatus( status, runTime );
+    recordStats();
+    }
+
+  protected void markRunTime()
+    {
+    if( runTime == 0 )
+      runTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markSuccessful()
+    {
+    if( status != Status.RUNNING && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.SUCCESSFUL + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SUCCESSFUL;
+    markFinishedTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    clientState.stop( finishedTime );
+    recordStats();
+    recordInfo();
+    }
+
+  private void markFinishedTime()
+    {
+    finishedTime = System.currentTimeMillis();
+    }
+
+  
+  public synchronized void markFailed( Throwable throwable )
+    {
+    if( status != Status.STARTED && status != Status.RUNNING && status != Status.SUBMITTED )
+      throw new IllegalStateException( "may not mark as " + Status.FAILED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.FAILED;
+    markFinishedTime();
+    this.throwable = throwable;
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    clientState.stop( finishedTime );
+    recordStats();
+    recordInfo();
+    }
+
+  
+  public synchronized void markStopped()
+    {
+    if( status != Status.PENDING && status != Status.STARTED && status != Status.SUBMITTED && status != Status.RUNNING )
+      throw new IllegalStateException( "may not mark as " + Status.STOPPED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.STOPPED;
+    markFinishedTime();
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, finishedTime );
+    recordStats();
+    recordInfo();
+    clientState.stop( finishedTime );
+    }
+
+  
+  public synchronized void markSkipped()
+    {
+    if( status != Status.PENDING )
+      throw new IllegalStateException( "may not mark as " + Status.SKIPPED + ", is already " + status );
+
+    Status priorStatus = status;
+    status = Status.SKIPPED;
+
+    fireListeners( priorStatus, status );
+
+    clientState.setStatus( status, System.currentTimeMillis() );
+    recordStats();
+    }
+
+  
+  public long getPendingTime()
+    {
+    return pendingTime;
+    }
+
+  
+  public long getStartTime()
+    {
+    return startTime;
+    }
+
+  
+  public long getSubmitTime()
+    {
+    return submitTime;
+    }
+
+  
+  public long getRunTime()
+    {
+    return runTime;
+    }
+
+  
+  public long getFinishedTime()
+    {
+    return finishedTime;
+    }
+
+  
+  public long getDuration()
+    {
+    if( finishedTime != 0 )
+      return finishedTime - startTime;
+    else
+      return 0;
+    }
+
+  
+  public long getCurrentDuration()
+    {
+    if( finishedTime != 0 )
+      return finishedTime - startTime;
+    else
+      return System.currentTimeMillis() - startTime;
+    }
+
+  @Override
+  public Collection<String> getCountersFor( Class<? extends Enum> group )
+    {
+    return getCountersFor( group.getName() );
+    }
+
+  
+  public abstract Collection<String> getCounterGroupsMatching( String regex );
+
+  
+  public void captureDetail()
+    {
+    captureDetail( Type.ATTEMPT );
+    }
+
+  public abstract void captureDetail( Type depth );
+
+  
+  public abstract Collection<Child> getChildren();
+
+  
+  public abstract Child getChildWith( String id );
+
+  public synchronized void addListener( StatsListener statsListener )
+    {
+    if( listeners == null )
+      listeners = new LinkedHashSet<>();
+
+    listeners.add( statsListener );
+    }
+
+  public synchronized boolean removeListener( StatsListener statsListener )
+    {
+    return listeners != null && listeners.remove( statsListener );
+    }
+
+  protected synchronized void fireListeners( CascadingStats.Status fromStatus, CascadingStats.Status toStatus )
+    {
+    if( listeners == null )
+      return;
+
+    for( StatsListener listener : listeners )
+      {
+      try
+        {
+        listener.notify( this, fromStatus, toStatus );
+        }
+      catch( Throwable throwable )
+        {
+        getProcessLogger().logWarn( "error during listener notification, continuing with remaining listener notification", throwable );
+        }
+      }
+    }
+
+  protected abstract ProcessLogger getProcessLogger();
+
+  protected String getStatsString()
+    {
+    String string = "status=" + status + ", startTime=" + startTime;
+
+    if( finishedTime != 0 )
+      string += ", duration=" + ( finishedTime - startTime );
+
+    return string;
+    }
+
+  @Override
+  public String toString()
+    {
+    return "Cascading{" + getStatsString() + '}';
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.hadoop;
+
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import cascading.flow.FlowNode;
+import cascading.management.state.ClientState;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+
+
+public abstract class BaseHadoopNodeStats<JobStatus, Counters> extends FlowNodeStats
+  {
+  protected final Map<String, FlowSliceStats> sliceStatsMap = new LinkedHashMap<>();
+  protected CounterCache<JobStatus, Counters> counterCache;
+
+  private boolean hasCapturedFinalDetail;
+
+  
+  protected BaseHadoopNodeStats( FlowNode flowNode, ClientState clientState )
+    {
+    super( flowNode, clientState );
+    }
+
+  @Override
+  public long getLastSuccessfulCounterFetchTime()
+    {
+    if( counterCache != null )
+      return counterCache.getLastSuccessfulFetch();
+
+    return -1;
+    }
+
+  
+  @Override
+  public Collection<String> getCounterGroups()
+    {
+    return counterCache.getCounterGroups();
+    }
+
+  
+  @Override
+  public Collection<String> getCounterGroupsMatching( String regex )
+    {
+    return counterCache.getCounterGroupsMatching( regex );
+    }
+
+  
+  @Override
+  public Collection<String> getCountersFor( String group )
+    {
+    return counterCache.getCountersFor( group );
+    }
+
+  
+  @Override
+  public long getCounterValue( Enum counter )
+    {
+    return counterCache.getCounterValue( counter );
+    }
+
+  
+  @Override
+  public long getCounterValue( String group, String counter )
+    {
+    return counterCache.getCounterValue( group, counter );
+    }
+
+  protected synchronized Counters cachedCounters( boolean force )
+    {
+    return counterCache.cachedCounters( force );
+    }
+
+  @Override
+  public Collection<FlowSliceStats> getChildren()
+    {
+    synchronized( sliceStatsMap )
+      {
+      return Collections.unmodifiableCollection( sliceStatsMap.values() );
+      }
+    }
+
+  @Override
+  public FlowSliceStats getChildWith( String id )
+    {
+    return sliceStatsMap.get( id );
+    }
+
+  @Override
+  public final synchronized void captureDetail( Type depth )
+    {
+    boolean finished = isFinished();
+
+    if( finished && hasCapturedFinalDetail )
+      return;
+
+    if( !getType().isChild( depth ) )
+      return;
+
+    boolean success = captureChildDetailInternal();
+
+    if( success )
+      getProcessLogger().logDebug( "captured remote node statistic details" );
+
+    hasCapturedFinalDetail = finished && success;
+    }
+
+  
+  protected abstract boolean captureChildDetailInternal();
+
+  
+  @Override
+  public synchronized void recordChildStats()
+    {
+    try
+      {
+      cachedCounters( true );
+      }
+    catch( Exception exception )
+      {
+      
+      }
+
+    if( !clientState.isEnabled() )
+      return;
+
+    captureDetail( Type.ATTEMPT );
+
+    
+    
+    try
+      {
+      
+      for( FlowSliceStats value : sliceStatsMap.values() )
+        clientState.record( value.getID(), value );
+      }
+    catch( Exception exception )
+      {
+      getProcessLogger().logError( "unable to record node stats", exception );
+      }
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.hadoop;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import cascading.flow.FlowNode;
+import cascading.management.state.ClientState;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+import cascading.util.Util;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapred.JobClient;
+import org.apache.hadoop.mapred.RunningJob;
+import org.apache.hadoop.mapred.TaskCompletionEvent;
+import org.apache.hadoop.mapred.TaskID;
+import org.apache.hadoop.mapred.TaskReport;
+
+
+public class HadoopNodeStats extends BaseHadoopNodeStats<FlowNodeStats, Map<String, Map<String, Long>>>
+  {
+  private Map<TaskID, String> sliceIDCache = new HashMap<TaskID, String>( 4999 ); 
+
+  private HadoopStepStats parentStepStats;
+  private HadoopSliceStats.Kind kind;
+
+  
+  protected HadoopNodeStats( final HadoopStepStats parentStepStats, Configuration configuration, HadoopSliceStats.Kind kind, FlowNode flowNode, ClientState clientState )
+    {
+    super( flowNode, clientState );
+    this.parentStepStats = parentStepStats;
+    this.kind = kind;
+
+    this.counterCache = new HadoopNodeCounterCache( this, configuration );
+    }
+
+  @Override
+  public String getKind()
+    {
+    if( kind == null )
+      return null;
+
+    return kind.name();
+    }
+
+  private Status getParentStatus()
+    {
+    return parentStepStats.getStatus();
+    }
+
+  @Override
+  protected boolean captureChildDetailInternal()
+    {
+    JobClient jobClient = parentStepStats.getJobClient();
+    RunningJob runningJob = parentStepStats.getJobStatusClient();
+
+    if( jobClient == null || runningJob == null )
+      return false;
+
+    try
+      {
+      TaskReport[] taskReports; 
+
+      if( kind == HadoopSliceStats.Kind.MAPPER )
+        taskReports = jobClient.getMapTaskReports( runningJob.getID() );
+      else
+        taskReports = jobClient.getReduceTaskReports( runningJob.getID() );
+
+      addTaskStats( taskReports, false );
+
+      return true;
+      }
+    catch( IOException exception )
+      {
+      getProcessLogger().logWarn( "unable to retrieve slice stats via task reports", exception );
+      }
+
+    return false;
+    }
+
+  protected void addTaskStats( TaskReport[] taskReports, boolean skipLast )
+    {
+    long lastFetch = System.currentTimeMillis();
+
+    synchronized( sliceStatsMap )
+      {
+      for( int i = 0; i < taskReports.length - ( skipLast ? 1 : 0 ); i++ )
+        {
+        TaskReport taskReport = taskReports[ i ];
+
+        if( taskReport == null )
+          {
+          getProcessLogger().logWarn( "found empty task report" );
+          continue;
+          }
+
+        String id = getSliceIDFor( taskReport.getTaskID() );
+        sliceStatsMap.put( id, new HadoopSliceStats( id, getParentStatus(), kind, taskReport, lastFetch ) );
+        }
+      }
+    }
+
+  protected void addAttempt( TaskCompletionEvent event )
+    {
+    
+    String sliceID = sliceIDCache.get( event.getTaskAttemptId().getTaskID() );
+
+    if( sliceID == null )
+      return;
+
+    FlowSliceStats stats;
+
+    synchronized( sliceStatsMap )
+      {
+      stats = sliceStatsMap.get( sliceID );
+      }
+
+    if( stats == null )
+      return;
+
+    ( (HadoopSliceStats) stats ).addAttempt( event );
+    }
+
+  private String getSliceIDFor( TaskID taskID )
+    {
+    
+    String id = sliceIDCache.get( taskID );
+
+    if( id == null )
+      {
+      id = Util.createUniqueID();
+      sliceIDCache.put( taskID, id );
+      }
+
+    return id;
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.tez;
+
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
+
+import cascading.CascadingException;
+import cascading.flow.FlowNode;
+import cascading.flow.hadoop.util.HadoopUtil;
+import cascading.flow.stream.annotations.StreamMode;
+import cascading.management.state.ClientState;
+import cascading.property.PropertyUtil;
+import cascading.stats.FlowSliceStats;
+import cascading.stats.hadoop.BaseHadoopNodeStats;
+import cascading.stats.tez.util.TaskStatus;
+import cascading.stats.tez.util.TimelineClient;
+import cascading.tap.Tap;
+import cascading.util.Util;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.tez.common.counters.TezCounters;
+import org.apache.tez.dag.api.TezException;
+import org.apache.tez.dag.api.client.DAGClient;
+import org.apache.tez.dag.api.client.Progress;
+import org.apache.tez.dag.api.client.StatusGetOpts;
+import org.apache.tez.dag.api.client.VertexStatus;
+import org.apache.tez.dag.api.oldrecords.TaskState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static cascading.stats.tez.util.TezStatsUtil.STATUS_GET_COUNTERS;
+import static cascading.util.Util.formatDurationFromMillis;
+import static cascading.util.Util.isEmpty;
+
+
+public class TezNodeStats extends BaseHadoopNodeStats<DAGClient, TezCounters>
+  {
+  private static final Logger LOG = LoggerFactory.getLogger( TezNodeStats.class );
+
+  
+  public static final String TIMELINE_FETCH_LIMIT = "cascading.stats.timeline.fetch.limit";
+  public static final int DEFAULT_FETCH_LIMIT = 500;
+
+  private static int fetchLimit = -1;
+
+  private transient String prefixID; 
+
+  public enum Kind
+    {
+      SPLIT, PARTITIONED
+    }
+
+  private TezStepStats parentStepStats;
+  private Kind kind;
+
+  private String vertexID;
+  private int totalTaskCount;
+  private int succeededTaskCount;
+  private int failedTaskCount;
+  private int killedTaskCount;
+  private int runningTaskCount;
+  private boolean allTasksAreFinished;
+
+  private static void setFetchLimit( Configuration configuration )
+    {
+    if( fetchLimit > -1 )
+      return;
+
+    fetchLimit = PropertyUtil.getIntProperty( HadoopUtil.createProperties( configuration ), TIMELINE_FETCH_LIMIT, DEFAULT_FETCH_LIMIT );
+
+    if( fetchLimit < 2 )
+      {
+      LOG.warn( "property: {}, was set to: {}, may not be less than 2, setting to 2", TIMELINE_FETCH_LIMIT, fetchLimit );
+      fetchLimit = 2;
+      }
+    }
+
+  protected TezNodeStats( final TezStepStats parentStepStats, FlowNode flowNode, ClientState clientState, Configuration configuration )
+    {
+    super( flowNode, clientState );
+
+    setFetchLimit( configuration );
+
+    this.parentStepStats = parentStepStats;
+    this.kind = getStreamedTaps( flowNode ).isEmpty() ? Kind.PARTITIONED : Kind.SPLIT;
+
+    this.counterCache = new TezCounterCache<DAGClient>( this, configuration )
+    {
+    @Override
+    protected DAGClient getJobStatusClient()
+      {
+      return parentStepStats.getJobStatusClient();
+      }
+
+    protected TezCounters getCounters( DAGClient dagClient ) throws IOException
+      {
+      VertexStatus vertexStatus = updateProgress( dagClient, STATUS_GET_COUNTERS );
+
+      if( vertexStatus == null )
+        return null;
+
+      TezCounters vertexCounters = vertexStatus.getVertexCounters();
+
+      if( vertexCounters == null )
+        logWarn( "could not retrieve vertex counters in stats status: {}, and vertex state: {}", getStatus(), vertexStatus.getState() );
+
+      return vertexCounters;
+      }
+    };
+    }
+
+  
+  private Set<Tap> getStreamedTaps( FlowNode flowNode )
+    {
+    Set<Tap> taps = new HashSet<>( flowNode.getSourceTaps() );
+
+    taps.remove( flowNode.getSourceElements( StreamMode.Accumulated ) );
+
+    return taps;
+    }
+
+  @Override
+  public String getKind()
+    {
+    if( kind == null )
+      return null;
+
+    return kind.name();
+    }
+
+  private String retrieveVertexID( DAGClient dagClient )
+    {
+    if( vertexID != null || !( dagClient instanceof TimelineClient ) )
+      return vertexID;
+
+    try
+      {
+      vertexID = ( (TimelineClient) dagClient ).getVertexID( getID() );
+      }
+    catch( IOException | CascadingException | TezException exception )
+      {
+      logWarn( "unable to get vertex id", exception );
+      }
+
+    return vertexID;
+    }
+
+  public int getTotalTaskCount()
+    {
+    return totalTaskCount;
+    }
+
+  public int getSucceededTaskCount()
+    {
+    return succeededTaskCount;
+    }
+
+  public int getFailedTaskCount()
+    {
+    return failedTaskCount;
+    }
+
+  public int getKilledTaskCount()
+    {
+    return killedTaskCount;
+    }
+
+  public int getRunningTaskCount()
+    {
+    return runningTaskCount;
+    }
+
+  @Override
+  protected boolean captureChildDetailInternal()
+    {
+    DAGClient dagClient = parentStepStats.getJobStatusClient();
+
+    if( dagClient == null )
+      return false;
+
+    
+    if( dagClient instanceof TimelineClient )
+      return withTimelineServer( (TimelineClient) dagClient );
+
+    
+    return withoutTimelineServer( dagClient );
+    }
+
+  private boolean withTimelineServer( TimelineClient timelineClient )
+    {
+    updateProgress( (DAGClient) timelineClient, null ); 
+
+    if( sliceStatsMap.size() == getTotalTaskCount() )
+      return updateAllTasks( timelineClient );
+
+    return fetchAllTasks( timelineClient );
+    }
+
+  private boolean updateAllTasks( TimelineClient timelineClient )
+    {
+    if( allTasksAreFinished )
+      return true;
+
+    long startTime = System.currentTimeMillis();
+
+    int count = 0;
+
+    for( FlowSliceStats sliceStats : sliceStatsMap.values() )
+      {
+      if( sliceStats.getStatus().isFinished() )
+        continue;
+
+      TaskStatus taskStatus = getTaskStatusFor( timelineClient, sliceStats.getProcessSliceID() );
+
+      updateSliceWith( (TezSliceStats) sliceStats, taskStatus, System.currentTimeMillis() );
+
+      count++;
+      }
+
+    if( count == 0 )
+      allTasksAreFinished = true;
+
+    logInfo( "updated {} slices in: {}", count, formatDurationFromMillis( System.currentTimeMillis() - startTime ) );
+
+    return sliceStatsMap.size() == getTotalTaskCount();
+    }
+
+  private boolean fetchAllTasks( TimelineClient timelineClient )
+    {
+    long startTime = System.currentTimeMillis();
+    String fromTaskId = null;
+    int startSize = sliceStatsMap.size();
+    int iteration = 0;
+    boolean continueIterating = true;
+
+    while( continueIterating && sliceStatsMap.size() != getTotalTaskCount() )
+      {
+      long lastFetch = System.currentTimeMillis();
+
+      
+      Iterator<TaskStatus> vertexChildren = getTaskStatusIterator( timelineClient, fromTaskId );
+
+      if( vertexChildren == null )
+        return false;
+
+      int added = 0;
+      int updated = 0;
+
+      while( vertexChildren.hasNext() )
+        {
+        TaskStatus taskStatus = vertexChildren.next();
+
+        fromTaskId = taskStatus.getTaskID();
+
+        TezSliceStats sliceStats = (TezSliceStats) sliceStatsMap.get( fromTaskId );
+
+        if( sliceStats == null )
+          {
+          added++;
+
+          sliceStats = new TezSliceStats( Util.createUniqueID(), kind, this.getStatus(), fromTaskId );
+
+          sliceStatsMap.put( sliceStats.getProcessSliceID(), sliceStats );
+          }
+        else
+          {
+          updated++;
+          }
+
+        updateSliceWith( sliceStats, taskStatus, lastFetch );
+        }
+
+      int retrieved = added + updated;
+
+      if( added == 0 && updated == 1 ) 
+        continueIterating = false;
+      else
+        continueIterating = retrieved != 0;
+
+      if( continueIterating )
+        logInfo( "iteration retrieved: {}, added {}, updated {} slices in iteration: {}, fetch limit: {}", retrieved, added, updated, ++iteration, fetchLimit );
+      }
+
+    int total = sliceStatsMap.size();
+    int added = total - startSize;
+    int remaining = getTotalTaskCount() - total;
+    String duration = formatDurationFromMillis( System.currentTimeMillis() - startTime );
+
+    if( iteration == 0 && total == 0 )
+      logInfo( "no slices stats available yet, expecting: {}", remaining );
+    else
+      logInfo( "added {} slices, in iterations: {}, with duration: {}, total fetched: {}, remaining: {}", added, iteration, duration, total, remaining );
+
+    return total == getTotalTaskCount();
+    }
+
+  private void updateSliceWith( TezSliceStats sliceStats, TaskStatus taskStatus, long lastFetch )
+    {
+    if( taskStatus == null )
+      return;
+
+    sliceStats.setStatus( getStatusForTaskStatus( taskStatus.getStatus() ) ); 
+
+    Map<String, Map<String, Long>> counters = taskStatus.getCounters();
+
+    sliceStats.setCounters( counters ); 
+
+    if( counters != null )
+      sliceStats.setLastFetch( lastFetch );
+    }
+
+  private TaskStatus getTaskStatusFor( TimelineClient timelineClient, String taskID )
+    {
+    try
+      {
+      return timelineClient.getVertexChild( taskID );
+      }
+    catch( TezException exception )
+      {
+      logWarn( "unable to get slice stat from timeline server for task id: {}", taskID, exception );
+      }
+
+    return null;
+    }
+
+  private Iterator<TaskStatus> getTaskStatusIterator( TimelineClient timelineClient, String startTaskID )
+    {
+    try
+      {
+      String vertexID = retrieveVertexID( (DAGClient) timelineClient );
+
+      if( vertexID == null )
+        {
+        logWarn( "unable to get slice stats from timeline server, did not retrieve valid vertex id for vertex name: {}", getID() );
+        return null;
+        }
+
+      return timelineClient.getVertexChildren( vertexID, fetchLimit, startTaskID );
+      }
+    catch( IOException | CascadingException | TezException exception )
+      {
+      logWarn( "unable to get slice stats from timeline server", exception );
+      }
+
+    return null;
+    }
+
+  private boolean withoutTimelineServer( DAGClient dagClient )
+    {
+    VertexStatus vertexStatus = updateProgress( dagClient, STATUS_GET_COUNTERS );
+
+    if( vertexStatus == null )
+      return false;
+
+    int total = sliceStatsMap.size();
+
+    if( total == 0 ) 
+      logWarn( "'" + YarnConfiguration.TIMELINE_SERVICE_ENABLED + "' is disabled, task level counters cannot be retrieved" );
+
+    for( int i = total; i < totalTaskCount; i++ )
+      {
+      TezSliceStats sliceStats = new TezSliceStats( Util.createUniqueID(), kind, this.getStatus(), null );
+
+      
+      sliceStatsMap.put( sliceStats.getID(), sliceStats );
+      }
+
+    
+    Iterator<FlowSliceStats> iterator = sliceStatsMap.values().iterator();
+
+    for( int i = 0; i < runningTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.RUNNING );
+
+    for( int i = 0; i < succeededTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.SUCCESSFUL );
+
+    for( int i = 0; i < failedTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.FAILED );
+
+    for( int i = 0; i < killedTaskCount && iterator.hasNext(); i++ )
+      ( (TezSliceStats) iterator.next() ).setStatus( Status.STOPPED );
+
+    List<String> diagnostics = vertexStatus.getDiagnostics();
+
+    for( String diagnostic : diagnostics )
+      logInfo( "vertex diagnostics: {}", diagnostic );
+
+    return true;
+    }
+
+  private Status getStatusForTaskStatus( @Nullable String status )
+    {
+    if( isEmpty( status ) )
+      return null;
+
+    TaskState state = TaskState.valueOf( status );
+
+    switch( state )
+      {
+      case NEW:
+        return Status.PENDING;
+      case SCHEDULED:
+        return Status.SUBMITTED;
+      case RUNNING:
+        return Status.RUNNING;
+      case SUCCEEDED:
+        return Status.SUCCESSFUL;
+      case FAILED:
+        return Status.FAILED;
+      case KILLED:
+        return Status.STOPPED;
+      }
+
+    return null;
+    }
+
+  private VertexStatus updateProgress( DAGClient dagClient, Set<StatusGetOpts> statusGetOpts )
+    {
+    VertexStatus vertexStatus = null;
+
+    try
+      {
+      vertexStatus = dagClient.getVertexStatus( getID(), statusGetOpts );
+      }
+    catch( IOException | TezException exception )
+      {
+      logWarn( "unable to get vertex status for: {}", getID(), exception );
+      }
+
+    if( vertexStatus == null )
+      return null;
+
+    Progress progress = vertexStatus.getProgress();
+
+    totalTaskCount = progress.getTotalTaskCount();
+    runningTaskCount = progress.getRunningTaskCount();
+    succeededTaskCount = progress.getSucceededTaskCount();
+    failedTaskCount = progress.getFailedTaskCount();
+    killedTaskCount = progress.getKilledTaskCount();
+
+    return vertexStatus;
+    }
+
+  protected void logInfo( String message, Object... arguments )
+    {
+    getProcessLogger().logInfo( getPrefix() + message, arguments );
+    }
+
+  protected void logDebug( String message, Object... arguments )
+    {
+    getProcessLogger().logDebug( getPrefix() + message, arguments );
+    }
+
+  protected void logWarn( String message, Object... arguments )
+    {
+    getProcessLogger().logWarn( getPrefix() + message, arguments );
+    }
+
+  private String getPrefix()
+    {
+    if( prefixID == null )
+      prefixID = "[" + getID().substring( 0, 5 ) + "] ";
+
+    return prefixID;
+    }
+  }
+
+<code block>
+
+
+package cascading.stats.tez;
+
+import java.util.Collection;
+import java.util.List;
+
+import cascading.PlatformTestCase;
+import cascading.cascade.Cascade;
+import cascading.cascade.CascadeConnector;
+import cascading.flow.Flow;
+import cascading.flow.SliceCounters;
+import cascading.operation.regex.RegexParser;
+import cascading.operation.state.Counter;
+import cascading.pipe.Each;
+import cascading.pipe.GroupBy;
+import cascading.pipe.Pipe;
+import cascading.stats.CascadeStats;
+import cascading.stats.FlowNodeStats;
+import cascading.stats.FlowSliceStats;
+import cascading.stats.FlowStats;
+import cascading.tap.SinkMode;
+import cascading.tap.Tap;
+import cascading.tuple.Fields;
+import org.junit.Test;
+
+import static data.InputData.inputFileApache;
+
+
+public class TezStatsPlatformTest extends PlatformTestCase
+  {
+  enum TestEnum
+    {
+      FIRST, SECOND, THIRD
+    }
+
+  public TezStatsPlatformTest()
+    {
+    super( true, 1, 4 );
+    }
+
+  @Test
+  public void testStatsCounters() throws Exception
+    {
+    getPlatform().copyFromLocal( inputFileApache );
+
+    Tap source = getPlatform().getTextFile( inputFileApache );
+
+    Pipe pipe = new Pipe( "first" );
+
+    pipe = new Each( pipe, new Fields( "line" ), new RegexParser( new Fields( "ip" ), "^[^ ]*" ), new Fields( "ip" ) );
+    pipe = new GroupBy( pipe, new Fields( "ip" ) );
+    pipe = new Each( pipe, new Counter( TestEnum.FIRST ) );
+    pipe = new GroupBy( pipe, new Fields( "ip" ) );
+    pipe = new Each( pipe, new Counter( TestEnum.FIRST ) );
+    pipe = new Each( pipe, new Counter( TestEnum.SECOND ) );
+
+    Tap sink1 = getPlatform().getTextFile( getOutputPath( "flowstats1" ), SinkMode.REPLACE );
+    Tap sink2 = getPlatform().getTextFile( getOutputPath( "flowstats2" ), SinkMode.REPLACE );
+
+    Flow flow1 = getPlatform().getFlowConnector().connect( "stats1 test", source, sink1, pipe );
+    Flow flow2 = getPlatform().getFlowConnector().connect( "stats2 test", source, sink2, pipe );
+
+    Cascade cascade = new CascadeConnector().connect( flow1, flow2 );
+
+    cascade.complete();
+
+    CascadeStats cascadeStats = cascade.getCascadeStats();
+
+    assertNotNull( cascadeStats.getID() );
+
+    assertEquals( 1, cascadeStats.getCounterGroupsMatching( "cascading\\.stats\\..*" ).size() );
+    assertEquals( 2, cascadeStats.getCountersFor( TestEnum.class.getName() ).size() );
+    assertEquals( 2, cascadeStats.getCountersFor( TestEnum.class ).size() );
+    assertEquals( 40, cascadeStats.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 20, cascadeStats.getCounterValue( TestEnum.SECOND ) );
+
+    
+    assertEquals( 0, cascadeStats.getCounterValue( TestEnum.THIRD ) );
+    assertEquals( 0, cascadeStats.getCounterValue( "FOO", "BAR" ) );
+
+    FlowStats flowStats1 = flow1.getFlowStats();
+
+    assertNotNull( flowStats1.getID() );
+
+    assertEquals( 20, flowStats1.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 10, flowStats1.getCounterValue( TestEnum.SECOND ) );
+
+    
+    assertEquals( 0, flowStats1.getCounterValue( TestEnum.THIRD ) );
+    assertEquals( 0, flowStats1.getCounterValue( "FOO", "BAR" ) );
+
+    FlowStats flowStats2 = flow2.getFlowStats();
+
+    assertNotNull( flowStats2.getID() );
+
+    assertEquals( 20, flowStats2.getCounterValue( TestEnum.FIRST ) );
+    assertEquals( 10, flowStats2.getCounterValue( TestEnum.SECOND ) );
+
+    cascadeStats.captureDetail();
+
+    assertEquals( 1, flowStats1.getStepsCount() );
+    assertEquals( 1, flowStats2.getStepsCount() );
+
+    TezStepStats stats1 = (TezStepStats) flowStats1.getFlowStepStats().get( 0 );
+
+    assertNotNull( stats1.getID() );
+
+    if( getPlatform().isUseCluster() )
+      {
+      assertTrue( stats1.getCounterValue( SliceCounters.Process_Duration ) != 0L );
+
+      List<FlowNodeStats> flowNodeStats = stats1.getFlowNodeStats();
+
+      assertTrue( flowNodeStats.get( 0 ).getCounterValue( SliceCounters.Process_Duration ) != 0L );
+
+      assertEquals( 3, flowNodeStats.size() );
+
+      FlowNodeStats node1 = flowNodeStats.get( 0 );
+      FlowNodeStats node2 = flowNodeStats.get( 1 );
+      FlowNodeStats node3 = flowNodeStats.get( 2 );
+
+      assertEquals( 1, node1.getChildren().size() );
+      assertEquals( 4, node2.getChildren().size() );
+      assertEquals( 4, node3.getChildren().size() );
+
+      boolean foundCounter = false;
+
+      Collection<FlowSliceStats> children = node2.getChildren();
+      for( FlowSliceStats flowSliceStats : children )
+        {
+        TezSliceStats sliceStats = (TezSliceStats) flowSliceStats;
+
+        if( sliceStats.getCounters().containsKey( TestEnum.FIRST.getDeclaringClass().getName() ) )
+          {
+          foundCounter = true;
+          assertTrue( sliceStats.getCounterValue( TestEnum.FIRST ) > 0 ); 
+          }
+        }
+
+      assertTrue( "did not find counter in any slice", foundCounter );
+      }
+
+    TezStepStats stats2 = (TezStepStats) flowStats2.getFlowStepStats().get( 0 );
+
+    assertNotNull( stats2.getID() );
+
+    if( getPlatform().isUseCluster() )
+      {
+      List<FlowNodeStats> flowNodeStats = stats2.getFlowNodeStats();
+      assertEquals( 3, flowNodeStats.size() );
+
+      FlowNodeStats node1 = flowNodeStats.get( 0 );
+      FlowNodeStats node2 = flowNodeStats.get( 1 );
+      FlowNodeStats node3 = flowNodeStats.get( 2 );
+
+      assertEquals( 1, node1.getChildren().size() );
+      assertEquals( 4, node2.getChildren().size() );
+      assertEquals( 4, node3.getChildren().size() );
+      }
+    }
+  }

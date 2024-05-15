@@ -1,0 +1,4 @@
+Java_Projects/greenDAO/greenDAO-d6d9dd43/curr/DaoTest/src/de/greenrobot/daotest/customtype/MyTimestampConverter.java
+Java_Projects/greenDAO/greenDAO-d6d9dd43/curr/DaoCore/src/de/greenrobot/dao/converter/PropertyConverter.java
+Java_Projects/greenDAO/greenDAO-d6d9dd43/prev/DaoTest/src/de/greenrobot/daotest/customtype/MyTimestampConverter.java
+Java_Projects/greenDAO/greenDAO-d6d9dd43/prev/DaoCore/src/de/greenrobot/dao/PropertyConverter.java

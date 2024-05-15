@@ -1,0 +1,9 @@
+Java_Projects/mortar/mortar-72dda340/curr/mortar-dagger1/src/main/java/mortar/dagger1support/ObjectGraphService.java
+Java_Projects/mortar/mortar-72dda340/curr/mortar-dagger1/src/test/java/mortar/ObjectGraphServiceTest.java
+Java_Projects/mortar/mortar-72dda340/curr/mortar/src/main/java/mortar/bundler/BundleServiceRunner.java
+Java_Projects/mortar/mortar-72dda340/curr/mortar/src/test/java/mortar/MortarScopeTest.java
+Java_Projects/mortar/mortar-72dda340/curr/mortar/src/test/java/mortar/bundler/BundleServiceTest.java
+Java_Projects/mortar/mortar-72dda340/prev/mortar-dagger1/src/main/java/mortar/dagger1support/ObjectGraphService.java
+Java_Projects/mortar/mortar-72dda340/prev/mortar-dagger1/src/test/java/mortar/ObjectGraphServiceTest.java
+Java_Projects/mortar/mortar-72dda340/prev/mortar/src/main/java/mortar/bundler/BundleServiceRunner.java
+Java_Projects/mortar/mortar-72dda340/prev/mortar/src/test/java/mortar/MortarScopeTest.java

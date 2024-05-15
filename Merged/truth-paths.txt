@@ -1,0 +1,7 @@
+Java_Projects/truth/truth-200f1577/curr/core/src/main/java/com/google/common/truth/IterableSubject.java
+Java_Projects/truth/truth-200f1577/curr/core/src/test/java/com/google/common/truth/ListTest.java
+Java_Projects/truth/truth-200f1577/prev/core/src/main/java/com/google/common/truth/IterableSubject.java
+Java_Projects/truth/truth-200f1577/prev/core/src/test/java/com/google/common/truth/ListTest.java
+Java_Projects/truth/truth-1768840b/curr/core/src/test/java/com/google/common/truth/IterableTest.java
+Java_Projects/truth/truth-1768840b/prev/core/src/test/java/com/google/common/truth/IterableTest.java
+Java_Projects/truth/truth-1768840b/prev/core/src/test/java/com/google/common/truth/ListTest.java

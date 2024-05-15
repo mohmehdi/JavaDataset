@@ -1,0 +1,2393 @@
+
+package rx.observables;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+
+import rx.Observable;
+import rx.Subscriber;
+import rx.Subscription;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.internal.operators.BlockingOperatorLatest;
+import rx.internal.operators.BlockingOperatorMostRecent;
+import rx.internal.operators.BlockingOperatorNext;
+import rx.internal.operators.BlockingOperatorToFuture;
+import rx.internal.operators.BlockingOperatorToIterator;
+import rx.internal.util.UtilityFunctions;
+
+
+public final class BlockingObservable<T> {
+
+    private final Observable<? extends T> o;
+
+    private BlockingObservable(Observable<? extends T> o) {
+        this.o = o;
+    }
+
+    
+    public static <T> BlockingObservable<T> from(final Observable<? extends T> o) {
+        return new BlockingObservable<T>(o);
+    }
+
+    
+    public void forEach(final Action1<? super T> onNext) {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<Throwable> exceptionFromOnError = new AtomicReference<Throwable>();
+
+        
+        Subscription subscription = o.subscribe(new Subscriber<T>() {
+            @Override
+            public void onCompleted() {
+                latch.countDown();
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+                exceptionFromOnError.set(e);
+                latch.countDown();
+            }
+
+            @Override
+            public void onNext(T args) {
+                onNext.call(args);
+            }
+        });
+        awaitForComplete(latch, subscription);
+
+        if (exceptionFromOnError.get() != null) {
+            if (exceptionFromOnError.get() instanceof RuntimeException) {
+                throw (RuntimeException) exceptionFromOnError.get();
+            } else {
+                throw new RuntimeException(exceptionFromOnError.get());
+            }
+        }
+    }
+
+    
+    public Iterator<T> getIterator() {
+        return BlockingOperatorToIterator.toIterator(o);
+    }
+
+    
+    public T first() {
+        return blockForSingle(o.first());
+    }
+
+    
+    public T first(Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.first(predicate));
+    }
+
+    
+    public T firstOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).firstOrDefault(defaultValue));
+    }
+
+    
+    public T firstOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).firstOrDefault(defaultValue));
+    }
+
+    
+    public T last() {
+        return blockForSingle(o.last());
+    }
+
+    
+    public T last(final Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.last(predicate));
+    }
+
+    
+    public T lastOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).lastOrDefault(defaultValue));
+    }
+
+    
+    public T lastOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).lastOrDefault(defaultValue));
+    }
+
+    
+    public Iterable<T> mostRecent(T initialValue) {
+        return BlockingOperatorMostRecent.mostRecent(o, initialValue);
+    }
+
+    
+    public Iterable<T> next() {
+        return BlockingOperatorNext.next(o);
+    }
+
+    
+    public Iterable<T> latest() {
+        return BlockingOperatorLatest.latest(o);
+    }
+
+    
+    public T single() {
+        return blockForSingle(o.single());
+    }
+
+    
+    public T single(Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.single(predicate));
+    }
+
+    
+    public T singleOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).singleOrDefault(defaultValue));
+    }
+
+    
+    public T singleOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).singleOrDefault(defaultValue));
+    }
+
+    
+    public Future<T> toFuture() {
+        return BlockingOperatorToFuture.toFuture(o);
+    }
+
+    
+    public Iterable<T> toIterable() {
+        return new Iterable<T>() {
+            @Override
+            public Iterator<T> iterator() {
+                return getIterator();
+            }
+        };
+    }
+
+    
+    private T blockForSingle(final Observable<? extends T> observable) {
+        final AtomicReference<T> returnItem = new AtomicReference<T>();
+        final AtomicReference<Throwable> returnException = new AtomicReference<Throwable>();
+        final CountDownLatch latch = new CountDownLatch(1);
+
+        Subscription subscription = observable.subscribe(new Subscriber<T>() {
+            @Override
+            public void onCompleted() {
+                latch.countDown();
+            }
+
+            @Override
+            public void onError(final Throwable e) {
+                returnException.set(e);
+                latch.countDown();
+            }
+
+            @Override
+            public void onNext(final T item) {
+                returnItem.set(item);
+            }
+        });
+        awaitForComplete(latch, subscription);
+
+        if (returnException.get() != null) {
+            if (returnException.get() instanceof RuntimeException) {
+                throw (RuntimeException) returnException.get();
+            } else {
+                throw new RuntimeException(returnException.get());
+            }
+        }
+
+        return returnItem.get();
+    }
+
+    private void awaitForComplete(CountDownLatch latch, Subscription subscription) {
+        if (latch.getCount() == 0) {
+            
+            
+            return;
+        }
+        
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            subscription.unsubscribe();
+            
+            
+            Thread.currentThread().interrupt();
+            
+            throw new RuntimeException("Interrupted while waiting for subscription to complete.", e);
+        }
+    }
+}
+
+<code block>
+
+package rx.internal.operators;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
+import rx.Notification;
+import rx.Observable;
+import rx.Subscriber;
+import rx.Subscription;
+import rx.exceptions.Exceptions;
+
+
+public final class BlockingOperatorToIterator {
+    private BlockingOperatorToIterator() {
+        throw new IllegalStateException("No instances!");
+    }
+
+    
+    public static <T> Iterator<T> toIterator(Observable<? extends T> source) {
+        final BlockingQueue<Notification<? extends T>> notifications = new LinkedBlockingQueue<Notification<? extends T>>();
+
+        
+        final Subscription subscription = source.materialize().subscribe(new Subscriber<Notification<? extends T>>() {
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                notifications.offer(Notification.<T>createOnError(e));
+            }
+
+            @Override
+            public void onNext(Notification<? extends T> args) {
+                notifications.offer(args);
+            }
+        });
+
+        return new Iterator<T>() {
+            private Notification<? extends T> buf;
+
+            @Override
+            public boolean hasNext() {
+                if (buf == null) {
+                    buf = take();
+                }
+                if (buf.isOnError()) {
+                    throw Exceptions.propagate(buf.getThrowable());
+                }
+                return !buf.isOnCompleted();
+            }
+
+            @Override
+            public T next() {
+                if (hasNext()) {
+                    T result = buf.getValue();
+                    buf = null;
+                    return result;
+                }
+                throw new NoSuchElementException();
+            }
+
+            private Notification<? extends T> take() {
+                try {
+                    Notification<? extends T> poll = notifications.poll();
+                    if (poll != null) {
+                        return poll;
+                    }
+                    return notifications.take();
+                } catch (InterruptedException e) {
+                    subscription.unsubscribe();
+                    throw Exceptions.propagate(e);
+                }
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException("Read-only iterator");
+            }
+        };
+    }
+
+}
+
+<code block>
+
+package rx.observables;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import rx.Observable;
+import rx.Observable.OnSubscribe;
+import rx.Subscriber;
+import rx.exceptions.TestException;
+import rx.functions.Action0;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.schedulers.Schedulers;
+import rx.subscriptions.Subscriptions;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+public class BlockingObservableTest {
+
+    @Mock
+    Subscriber<Integer> w;
+
+    @Before
+    public void before() {
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    public void testLast() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+
+        assertEquals("three", obs.last());
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testLastEmptyObservable() {
+        BlockingObservable<Object> obs = BlockingObservable.from(Observable.empty());
+        obs.last();
+    }
+
+    @Test
+    public void testLastOrDefault() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 0, -1));
+        int last = observable.lastOrDefault(-100, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args >= 0;
+            }
+        });
+        assertEquals(0, last);
+    }
+
+    @Test
+    public void testLastOrDefault1() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("three", observable.lastOrDefault("default"));
+    }
+
+    @Test
+    public void testLastOrDefault2() {
+        BlockingObservable<Object> observable = BlockingObservable.from(Observable.empty());
+        assertEquals("default", observable.lastOrDefault("default"));
+    }
+
+    @Test
+    public void testLastOrDefaultWithPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 0, -1));
+        int last = observable.lastOrDefault(0, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args < 0;
+            }
+        });
+
+        assertEquals(-1, last);
+    }
+
+    @Test
+    public void testLastOrDefaultWrongPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(-1, -2, -3));
+        int last = observable.lastOrDefault(0, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args >= 0;
+            }
+        });
+        assertEquals(0, last);
+    }
+
+    @Test
+    public void testLastWithPredicate() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("two", obs.last(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String s) {
+                return s.length() == 3;
+            }
+        }));
+    }
+
+    @Test
+    public void testSingle() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one"));
+        assertEquals("one", observable.single());
+    }
+
+    @Test
+    public void testSingleDefault() {
+        BlockingObservable<Object> observable = BlockingObservable.from(Observable.empty());
+        assertEquals("default", observable.singleOrDefault("default"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleDefaultPredicateMatchesMoreThanOne() {
+        BlockingObservable.from(Observable.just("one", "two")).singleOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() == 3;
+            }
+        });
+    }
+
+    @Test
+    public void testSingleDefaultPredicateMatchesNothing() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two"));
+        String result = observable.singleOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() == 4;
+            }
+        });
+        assertEquals("default", result);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleDefaultWithMoreThanOne() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        observable.singleOrDefault("default");
+    }
+
+    @Test
+    public void testSingleWithPredicateDefault() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "four"));
+        assertEquals("four", observable.single(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String s) {
+                return s.length() == 4;
+            }
+        }));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleWrong() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 2));
+        observable.single();
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testSingleWrongPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(-1));
+        observable.single(new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args > 0;
+            }
+        });
+    }
+
+    @Test
+    public void testToIterable() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+
+        Iterator<String> it = obs.toIterable().iterator();
+
+        assertEquals(true, it.hasNext());
+        assertEquals("one", it.next());
+
+        assertEquals(true, it.hasNext());
+        assertEquals("two", it.next());
+
+        assertEquals(true, it.hasNext());
+        assertEquals("three", it.next());
+
+        assertEquals(false, it.hasNext());
+
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testToIterableNextOnly() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterator<Integer> it = obs.toIterable().iterator();
+
+        Assert.assertEquals((Integer) 1, it.next());
+        Assert.assertEquals((Integer) 2, it.next());
+        Assert.assertEquals((Integer) 3, it.next());
+
+        it.next();
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testToIterableNextOnlyTwice() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterator<Integer> it = obs.toIterable().iterator();
+
+        Assert.assertEquals((Integer) 1, it.next());
+        Assert.assertEquals((Integer) 2, it.next());
+        Assert.assertEquals((Integer) 3, it.next());
+
+        boolean exc = false;
+        try {
+            it.next();
+        } catch (NoSuchElementException ex) {
+            exc = true;
+        }
+        Assert.assertEquals(true, exc);
+
+        it.next();
+    }
+
+    @Test
+    public void testToIterableManyTimes() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterable<Integer> iter = obs.toIterable();
+
+        for (int j = 0; j < 3; j++) {
+            Iterator<Integer> it = iter.iterator();
+
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 1, it.next());
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 2, it.next());
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 3, it.next());
+            Assert.assertFalse(it.hasNext());
+        }
+    }
+
+    @Test(expected = TestException.class)
+    public void testToIterableWithException() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.create(new Observable.OnSubscribe<String>() {
+
+            @Override
+            public void call(Subscriber<? super String> observer) {
+                observer.onNext("one");
+                observer.onError(new TestException());
+            }
+        }));
+
+        Iterator<String> it = obs.toIterable().iterator();
+
+        assertEquals(true, it.hasNext());
+        assertEquals("one", it.next());
+
+        assertEquals(true, it.hasNext());
+        it.next();
+
+    }
+
+    @Test
+    public void testForEachWithError() {
+        try {
+            BlockingObservable.from(Observable.create(new Observable.OnSubscribe<String>() {
+
+                @Override
+                public void call(final Subscriber<? super String> observer) {
+                    new Thread(new Runnable() {
+
+                        @Override
+                        public void run() {
+                            observer.onNext("one");
+                            observer.onNext("two");
+                            observer.onNext("three");
+                            observer.onCompleted();
+                        }
+                    }).start();
+                }
+            })).forEach(new Action1<String>() {
+
+                @Override
+                public void call(String t1) {
+                    throw new RuntimeException("fail");
+                }
+            });
+            fail("we expect an exception to be thrown");
+        } catch (Throwable e) {
+            
+        }
+    }
+
+    @Test
+    public void testFirst() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("one", observable.first());
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testFirstWithEmpty() {
+        BlockingObservable.from(Observable.<String> empty()).first();
+    }
+
+    @Test
+    public void testFirstWithPredicate() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.first(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 3;
+            }
+        });
+        assertEquals("three", first);
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testFirstWithPredicateAndEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        observable.first(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 5;
+            }
+        });
+    }
+
+    @Test
+    public void testFirstOrDefault() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("one", observable.firstOrDefault("default"));
+    }
+
+    @Test
+    public void testFirstOrDefaultWithEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.<String>empty());
+        assertEquals("default", observable.firstOrDefault("default"));
+    }
+
+    @Test
+    public void testFirstOrDefaultWithPredicate() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.firstOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 3;
+            }
+        });
+        assertEquals("three", first);
+    }
+
+    @Test
+    public void testFirstOrDefaultWithPredicateAndEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.firstOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 5;
+            }
+        });
+        assertEquals("default", first);
+    }
+
+    @Test
+    public void testSingleOrDefaultUnsubscribe() throws InterruptedException {
+        final CountDownLatch unsubscribe = new CountDownLatch(1);
+        Observable<Integer> o = Observable.create(new OnSubscribe<Integer>() {
+            @Override
+            public void call(Subscriber<? super Integer> subscriber) {
+                subscriber.add(Subscriptions.create(new Action0() {
+                    @Override
+                    public void call() {
+                        unsubscribe.countDown();
+                    }
+                }));
+                subscriber.onNext(1);
+                subscriber.onNext(2);
+                
+            }
+        }).subscribeOn(Schedulers.newThread());
+        try {
+            o.toBlocking().singleOrDefault(-1);
+            fail("Expected IllegalArgumentException because there are 2 elements");
+        } catch (IllegalArgumentException e) {
+            
+        }
+        assertTrue("Timeout means `unsubscribe` is not called", unsubscribe.await(30, TimeUnit.SECONDS));
+    }
+
+    private Action1<BlockingObservable<Void>> singleAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.single();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromSingleWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("single()", singleAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileSingleOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("single()", singleAction);
+    }
+
+    private Action1<BlockingObservable<Void>> forEachAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.forEach(new Action1<Void>() {
+                @Override
+                public void call(final Void aVoid) {
+                    
+                }
+            });
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromForEachWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("forEach()", forEachAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileForEachOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("forEach()", forEachAction);
+    }
+
+    private Action1<BlockingObservable<Void>> firstAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.first();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromFirstWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("first()", firstAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileFirstOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("first()", firstAction);
+    }
+
+    private Action1<BlockingObservable<Void>> lastAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.last();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromLastWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("last()", lastAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileLastOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("last()", lastAction);
+    }
+
+    private Action1<BlockingObservable<Void>> latestAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.latest().iterator().next();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromLatestWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("latest()", latestAction);
+    }
+
+    
+
+    private Action1<BlockingObservable<Void>> nextAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.next().iterator().next();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromNextWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("next()", nextAction);
+    }
+
+    
+
+    private Action1<BlockingObservable<Void>> getIteratorAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.getIterator().next();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromGetIteratorWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("getIterator()", getIteratorAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileGetIteratorOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("getIterator()", getIteratorAction);
+    }
+
+    private Action1<BlockingObservable<Void>> toIterableAction = new Action1<BlockingObservable<Void>>() {
+        @Override
+        public void call(final BlockingObservable<Void> o) {
+            o.toIterable().iterator().next();
+        }
+    };
+
+    @Test
+    public void testUnsubscribeFromToIterableWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("toIterable()", toIterableAction);
+    }
+
+    @Test
+    public void testNoInterruptedExceptionWhenInterruptedWhileToIterableOnSynchronousObservable() throws InterruptedException {
+        new InterruptionTests().assertNoInterruptedExceptionWhenSynchronous("toIterable()", toIterableAction);
+    }
+
+    
+    private static class InterruptionTests {
+
+        private boolean isUnSubscribed;
+        private final AtomicReference<RuntimeException> errorRef = new AtomicReference<RuntimeException>();
+        private CountDownLatch latch = new CountDownLatch(1);
+
+        private Action0 createOnUnsubscribe() {
+            return new Action0() {
+                @Override
+                public void call() {
+                    isUnSubscribed = true;
+                }
+            };
+        }
+
+        private Observable<Void> createNeverObservable() {
+            return Observable.<Void>never().doOnUnsubscribe(createOnUnsubscribe());
+        }
+
+        private Observable<Void> createSynchronousObservable() {
+            return Observable.from(new Iterable<Void>() {
+                @Override
+                public Iterator<Void> iterator() {
+                    return new Iterator<Void>() {
+                        private boolean nextCalled = false;
+
+                        @Override
+                        public boolean hasNext() {
+                            return !(nextCalled && Thread.currentThread().isInterrupted());
+                        }
+
+                        @Override
+                        public Void next() {
+                            nextCalled = true;
+                            return null;
+                        }
+
+                        @Override
+                        public void remove() {
+                            throw new UnsupportedOperationException("Read-only iterator.");
+                        }
+                    };
+                }
+            }).takeLast(1).doOnUnsubscribe(createOnUnsubscribe());
+        }
+
+        private <T> void startBlockingAndInterrupt(final Observable<T> observable, final Action1<BlockingObservable<T>> blockingAction) {
+            Thread subscriptionThread = new Thread() {
+                @Override
+                public void run() {
+                    try {
+                        blockingAction.call(observable.toBlocking());
+                    } catch (RuntimeException e) {
+                        errorRef.set(e);
+                    }
+                    latch.countDown();
+                }
+            };
+            subscriptionThread.start();
+            subscriptionThread.interrupt();
+        }
+
+        void assertUnsubscribeIsInvoked(final String method, final Action1<BlockingObservable<Void>> blockingAction)
+            throws InterruptedException {
+            startBlockingAndInterrupt(createNeverObservable(), blockingAction);
+            assertTrue("Timeout means interruption is not performed", latch.await(30, TimeUnit.SECONDS));
+            assertNotNull("InterruptedException is not thrown", getInterruptedExceptionOrNull());
+            assertTrue("'unsubscribe' is not invoked when thread is interrupted for " + method, isUnSubscribed);
+        }
+
+        void assertNoInterruptedExceptionWhenSynchronous(final String method, final Action1<BlockingObservable<Void>> blockingAction)
+            throws InterruptedException {
+            startBlockingAndInterrupt(createSynchronousObservable(), blockingAction);
+            assertTrue("Timeout means interruption is not performed", latch.await(30, TimeUnit.SECONDS));
+            assertNull("'InterruptedException' is thrown when observable is synchronous for " + method, getInterruptedExceptionOrNull());
+        }
+
+        private InterruptedException getInterruptedExceptionOrNull() {
+            RuntimeException error = errorRef.get();
+            if (error == null) {
+                return null;
+            }
+            Throwable cause = error.getCause();
+            if (cause instanceof InterruptedException) {
+                return (InterruptedException) cause;
+            }
+            throw error;
+        }
+
+    }
+
+}
+
+<code block>
+
+package rx.internal.operators;
+
+import org.junit.Assert;
+import org.junit.Test;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import rx.Observable;
+import rx.Subscriber;
+import rx.exceptions.TestException;
+import rx.observables.BlockingObservable;
+import rx.schedulers.Schedulers;
+import rx.subjects.BehaviorSubject;
+import rx.subjects.PublishSubject;
+import rx.subjects.Subject;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static rx.internal.operators.BlockingOperatorNext.next;
+
+public class BlockingOperatorNextTest {
+
+    private void fireOnNextInNewThread(final Subject<String, String> o, final String value) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    
+                }
+                o.onNext(value);
+            }
+        }.start();
+    }
+
+    private void fireOnErrorInNewThread(final Subject<String, String> o) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    
+                }
+                o.onError(new TestException());
+            }
+        }.start();
+    }
+
+    @Test
+    public void testNext() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        fireOnNextInNewThread(obs, "two");
+        assertTrue(it.hasNext());
+        assertEquals("two", it.next());
+
+        fireOnNextInNewThread(obs, "three");
+        try {
+            assertEquals("three", it.next());
+        } catch (NoSuchElementException e) {
+            fail("Calling next() without hasNext() should wait for next fire");
+        }
+
+        obs.onCompleted();
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+
+        
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithError() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        fireOnErrorInNewThread(obs);
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    @Test
+    public void testNextWithEmpty() {
+        Observable<String> obs = Observable.<String> empty().observeOn(Schedulers.newThread());
+        Iterator<String> it = next(obs).iterator();
+
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+
+        
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testOnError() throws Throwable {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+
+        obs.onError(new TestException());
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+            
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    @Test
+    public void testOnErrorInNewThread() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+
+        fireOnErrorInNewThread(obs);
+
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+            
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    private void assertErrorAfterObservableFail(Iterator<String> it) {
+        
+        try {
+            it.hasNext();
+            fail("hasNext should throw a TestException");
+        } catch (TestException e) {
+        }
+        try {
+            it.next();
+            fail("next should throw a TestException");
+        } catch (TestException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithOnlyUsingNextMethod() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertEquals("one", it.next());
+
+        fireOnNextInNewThread(obs, "two");
+        assertEquals("two", it.next());
+
+        obs.onCompleted();
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithCallingHasNextMultipleTimes() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        obs.onCompleted();
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    
+    @Test
+    public void testNoBufferingOrBlockingOfSequence() throws Throwable {
+        final CountDownLatch finished = new CountDownLatch(1);
+        final int COUNT = 30;
+        final CountDownLatch timeHasPassed = new CountDownLatch(COUNT);
+        final AtomicBoolean running = new AtomicBoolean(true);
+        final AtomicInteger count = new AtomicInteger(0);
+        final Observable<Integer> obs = Observable.create(new Observable.OnSubscribe<Integer>() {
+
+            @Override
+            public void call(final Subscriber<? super Integer> o) {
+                new Thread(new Runnable() {
+
+                    @Override
+                    public void run() {
+                        try {
+                            while (running.get()) {
+                                o.onNext(count.incrementAndGet());
+                                timeHasPassed.countDown();
+                            }
+                            o.onCompleted();
+                        } catch (Throwable e) {
+                            o.onError(e);
+                        } finally {
+                            finished.countDown();
+                        }
+                    }
+                }).start();
+            }
+
+        });
+
+        Iterator<Integer> it = next(obs).iterator();
+
+        assertTrue(it.hasNext());
+        int a = it.next();
+        assertTrue(it.hasNext());
+        int b = it.next();
+        
+        assertTrue("a and b should be different", a != b);
+
+        
+        timeHasPassed.await(8000, TimeUnit.MILLISECONDS);
+
+        assertTrue(it.hasNext());
+        int c = it.next();
+
+        assertTrue("c should not just be the next in sequence", c != (b + 1));
+        assertTrue("expected that c [" + c + "] is higher than or equal to " + COUNT, c >= COUNT);
+
+        assertTrue(it.hasNext());
+        int d = it.next();
+        assertTrue(d > c);
+
+        
+        running.set(false);
+
+        finished.await();
+
+        assertFalse(it.hasNext());
+
+        System.out.println("a: " + a + " b: " + b + " c: " + c);
+    }
+
+    @Test 
+    public void testSingleSourceManyIterators() throws InterruptedException {
+        Observable<Long> o = Observable.interval(100, TimeUnit.MILLISECONDS);
+        PublishSubject<Void> terminal = PublishSubject.create();
+        BlockingObservable<Long> source = o.takeUntil(terminal).toBlocking();
+
+        Iterable<Long> iter = source.next();
+
+        for (int j = 0; j < 3; j++) {
+            BlockingOperatorNext.NextIterator<Long> it = (BlockingOperatorNext.NextIterator<Long>)iter.iterator();
+
+            for (long i = 0; i < 10; i++) {
+                Assert.assertEquals(true, it.hasNext());
+                Assert.assertEquals(j + "th iteration next", Long.valueOf(i), it.next());
+            }
+            terminal.onNext(null);
+        }
+    }
+    
+    @Test
+    public void testSynchronousNext() {
+        assertEquals(1, BehaviorSubject.create(1).take(1).toBlocking().single().intValue());
+        assertEquals(2, BehaviorSubject.create(2).toBlocking().toIterable().iterator().next().intValue());
+        assertEquals(3, BehaviorSubject.create(3).toBlocking().next().iterator().next().intValue());
+    }
+}
+
+<code block>
+
+package rx.observables;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+
+import rx.Observable;
+import rx.Subscriber;
+import rx.Subscription;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.internal.operators.BlockingOperatorLatest;
+import rx.internal.operators.BlockingOperatorMostRecent;
+import rx.internal.operators.BlockingOperatorNext;
+import rx.internal.operators.BlockingOperatorToFuture;
+import rx.internal.operators.BlockingOperatorToIterator;
+import rx.internal.util.UtilityFunctions;
+
+
+public final class BlockingObservable<T> {
+
+    private final Observable<? extends T> o;
+
+    private BlockingObservable(Observable<? extends T> o) {
+        this.o = o;
+    }
+
+    
+    public static <T> BlockingObservable<T> from(final Observable<? extends T> o) {
+        return new BlockingObservable<T>(o);
+    }
+
+    
+    public void forEach(final Action1<? super T> onNext) {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<Throwable> exceptionFromOnError = new AtomicReference<Throwable>();
+
+        
+        Subscription subscription = o.subscribe(new Subscriber<T>() {
+            @Override
+            public void onCompleted() {
+                latch.countDown();
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+                exceptionFromOnError.set(e);
+                latch.countDown();
+            }
+
+            @Override
+            public void onNext(T args) {
+                onNext.call(args);
+            }
+        });
+        
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            subscription.unsubscribe();
+            
+            
+            Thread.currentThread().interrupt();
+            
+            throw new RuntimeException("Interrupted while waiting for subscription to complete.", e);
+        }
+
+        if (exceptionFromOnError.get() != null) {
+            if (exceptionFromOnError.get() instanceof RuntimeException) {
+                throw (RuntimeException) exceptionFromOnError.get();
+            } else {
+                throw new RuntimeException(exceptionFromOnError.get());
+            }
+        }
+    }
+
+    
+    public Iterator<T> getIterator() {
+        return BlockingOperatorToIterator.toIterator(o);
+    }
+
+    
+    public T first() {
+        return blockForSingle(o.first());
+    }
+
+    
+    public T first(Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.first(predicate));
+    }
+
+    
+    public T firstOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).firstOrDefault(defaultValue));
+    }
+
+    
+    public T firstOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).firstOrDefault(defaultValue));
+    }
+
+    
+    public T last() {
+        return blockForSingle(o.last());
+    }
+
+    
+    public T last(final Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.last(predicate));
+    }
+
+    
+    public T lastOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).lastOrDefault(defaultValue));
+    }
+
+    
+    public T lastOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).lastOrDefault(defaultValue));
+    }
+
+    
+    public Iterable<T> mostRecent(T initialValue) {
+        return BlockingOperatorMostRecent.mostRecent(o, initialValue);
+    }
+
+    
+    public Iterable<T> next() {
+        return BlockingOperatorNext.next(o);
+    }
+
+    
+    public Iterable<T> latest() {
+        return BlockingOperatorLatest.latest(o);
+    }
+
+    
+    public T single() {
+        return blockForSingle(o.single());
+    }
+
+    
+    public T single(Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.single(predicate));
+    }
+
+    
+    public T singleOrDefault(T defaultValue) {
+        return blockForSingle(o.map(UtilityFunctions.<T>identity()).singleOrDefault(defaultValue));
+    }
+
+    
+    public T singleOrDefault(T defaultValue, Func1<? super T, Boolean> predicate) {
+        return blockForSingle(o.filter(predicate).map(UtilityFunctions.<T>identity()).singleOrDefault(defaultValue));
+    }
+
+    
+    public Future<T> toFuture() {
+        return BlockingOperatorToFuture.toFuture(o);
+    }
+
+    
+    public Iterable<T> toIterable() {
+        return new Iterable<T>() {
+            @Override
+            public Iterator<T> iterator() {
+                return getIterator();
+            }
+        };
+    }
+
+    
+    private T blockForSingle(final Observable<? extends T> observable) {
+        final AtomicReference<T> returnItem = new AtomicReference<T>();
+        final AtomicReference<Throwable> returnException = new AtomicReference<Throwable>();
+        final CountDownLatch latch = new CountDownLatch(1);
+
+        Subscription subscription = observable.subscribe(new Subscriber<T>() {
+            @Override
+            public void onCompleted() {
+                latch.countDown();
+            }
+
+            @Override
+            public void onError(final Throwable e) {
+                returnException.set(e);
+                latch.countDown();
+            }
+
+            @Override
+            public void onNext(final T item) {
+                returnItem.set(item);
+            }
+        });
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            subscription.unsubscribe();
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for subscription to complete.", e);
+        }
+
+        if (returnException.get() != null) {
+            if (returnException.get() instanceof RuntimeException) {
+                throw (RuntimeException) returnException.get();
+            } else {
+                throw new RuntimeException(returnException.get());
+            }
+        }
+
+        return returnItem.get();
+    }
+}
+
+<code block>
+
+package rx.internal.operators;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
+import rx.Notification;
+import rx.Observable;
+import rx.Subscriber;
+import rx.Subscription;
+import rx.exceptions.Exceptions;
+
+
+public final class BlockingOperatorToIterator {
+    private BlockingOperatorToIterator() {
+        throw new IllegalStateException("No instances!");
+    }
+
+    
+    public static <T> Iterator<T> toIterator(Observable<? extends T> source) {
+        final BlockingQueue<Notification<? extends T>> notifications = new LinkedBlockingQueue<Notification<? extends T>>();
+
+        
+        final Subscription subscription = source.materialize().subscribe(new Subscriber<Notification<? extends T>>() {
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                notifications.offer(Notification.<T>createOnError(e));
+            }
+
+            @Override
+            public void onNext(Notification<? extends T> args) {
+                notifications.offer(args);
+            }
+        });
+
+        return new Iterator<T>() {
+            private Notification<? extends T> buf;
+
+            @Override
+            public boolean hasNext() {
+                if (buf == null) {
+                    buf = take();
+                }
+                if (buf.isOnError()) {
+                    throw Exceptions.propagate(buf.getThrowable());
+                }
+                return !buf.isOnCompleted();
+            }
+
+            @Override
+            public T next() {
+                if (hasNext()) {
+                    T result = buf.getValue();
+                    buf = null;
+                    return result;
+                }
+                throw new NoSuchElementException();
+            }
+
+            private Notification<? extends T> take() {
+                try {
+                    return notifications.take();
+                } catch (InterruptedException e) {
+                    subscription.unsubscribe();
+                    throw Exceptions.propagate(e);
+                }
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException("Read-only iterator");
+            }
+        };
+    }
+
+}
+
+<code block>
+
+package rx.observables;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import rx.Observable;
+import rx.Observable.OnSubscribe;
+import rx.Subscriber;
+import rx.exceptions.TestException;
+import rx.functions.Action0;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.schedulers.Schedulers;
+import rx.subscriptions.Subscriptions;
+
+public class BlockingObservableTest {
+
+    @Mock
+    Subscriber<Integer> w;
+
+    @Before
+    public void before() {
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    public void testLast() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+
+        assertEquals("three", obs.last());
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testLastEmptyObservable() {
+        BlockingObservable<Object> obs = BlockingObservable.from(Observable.empty());
+        obs.last();
+    }
+
+    @Test
+    public void testLastOrDefault() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 0, -1));
+        int last = observable.lastOrDefault(-100, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args >= 0;
+            }
+        });
+        assertEquals(0, last);
+    }
+
+    @Test
+    public void testLastOrDefault1() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("three", observable.lastOrDefault("default"));
+    }
+
+    @Test
+    public void testLastOrDefault2() {
+        BlockingObservable<Object> observable = BlockingObservable.from(Observable.empty());
+        assertEquals("default", observable.lastOrDefault("default"));
+    }
+
+    @Test
+    public void testLastOrDefaultWithPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 0, -1));
+        int last = observable.lastOrDefault(0, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args < 0;
+            }
+        });
+
+        assertEquals(-1, last);
+    }
+
+    @Test
+    public void testLastOrDefaultWrongPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(-1, -2, -3));
+        int last = observable.lastOrDefault(0, new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args >= 0;
+            }
+        });
+        assertEquals(0, last);
+    }
+
+    @Test
+    public void testLastWithPredicate() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("two", obs.last(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String s) {
+                return s.length() == 3;
+            }
+        }));
+    }
+
+    @Test
+    public void testSingle() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one"));
+        assertEquals("one", observable.single());
+    }
+
+    @Test
+    public void testSingleDefault() {
+        BlockingObservable<Object> observable = BlockingObservable.from(Observable.empty());
+        assertEquals("default", observable.singleOrDefault("default"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleDefaultPredicateMatchesMoreThanOne() {
+        BlockingObservable.from(Observable.just("one", "two")).singleOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() == 3;
+            }
+        });
+    }
+
+    @Test
+    public void testSingleDefaultPredicateMatchesNothing() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two"));
+        String result = observable.singleOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() == 4;
+            }
+        });
+        assertEquals("default", result);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleDefaultWithMoreThanOne() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        observable.singleOrDefault("default");
+    }
+
+    @Test
+    public void testSingleWithPredicateDefault() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "four"));
+        assertEquals("four", observable.single(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String s) {
+                return s.length() == 4;
+            }
+        }));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testSingleWrong() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(1, 2));
+        observable.single();
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testSingleWrongPredicate() {
+        BlockingObservable<Integer> observable = BlockingObservable.from(Observable.just(-1));
+        observable.single(new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer args) {
+                return args > 0;
+            }
+        });
+    }
+
+    @Test
+    public void testToIterable() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.just("one", "two", "three"));
+
+        Iterator<String> it = obs.toIterable().iterator();
+
+        assertEquals(true, it.hasNext());
+        assertEquals("one", it.next());
+
+        assertEquals(true, it.hasNext());
+        assertEquals("two", it.next());
+
+        assertEquals(true, it.hasNext());
+        assertEquals("three", it.next());
+
+        assertEquals(false, it.hasNext());
+
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testToIterableNextOnly() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterator<Integer> it = obs.toIterable().iterator();
+
+        Assert.assertEquals((Integer) 1, it.next());
+        Assert.assertEquals((Integer) 2, it.next());
+        Assert.assertEquals((Integer) 3, it.next());
+
+        it.next();
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testToIterableNextOnlyTwice() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterator<Integer> it = obs.toIterable().iterator();
+
+        Assert.assertEquals((Integer) 1, it.next());
+        Assert.assertEquals((Integer) 2, it.next());
+        Assert.assertEquals((Integer) 3, it.next());
+
+        boolean exc = false;
+        try {
+            it.next();
+        } catch (NoSuchElementException ex) {
+            exc = true;
+        }
+        Assert.assertEquals(true, exc);
+
+        it.next();
+    }
+
+    @Test
+    public void testToIterableManyTimes() {
+        BlockingObservable<Integer> obs = BlockingObservable.from(Observable.just(1, 2, 3));
+
+        Iterable<Integer> iter = obs.toIterable();
+
+        for (int j = 0; j < 3; j++) {
+            Iterator<Integer> it = iter.iterator();
+
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 1, it.next());
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 2, it.next());
+            Assert.assertTrue(it.hasNext());
+            Assert.assertEquals((Integer) 3, it.next());
+            Assert.assertFalse(it.hasNext());
+        }
+    }
+
+    @Test(expected = TestException.class)
+    public void testToIterableWithException() {
+        BlockingObservable<String> obs = BlockingObservable.from(Observable.create(new Observable.OnSubscribe<String>() {
+
+            @Override
+            public void call(Subscriber<? super String> observer) {
+                observer.onNext("one");
+                observer.onError(new TestException());
+            }
+        }));
+
+        Iterator<String> it = obs.toIterable().iterator();
+
+        assertEquals(true, it.hasNext());
+        assertEquals("one", it.next());
+
+        assertEquals(true, it.hasNext());
+        it.next();
+
+    }
+
+    @Test
+    public void testForEachWithError() {
+        try {
+            BlockingObservable.from(Observable.create(new Observable.OnSubscribe<String>() {
+
+                @Override
+                public void call(final Subscriber<? super String> observer) {
+                    new Thread(new Runnable() {
+
+                        @Override
+                        public void run() {
+                            observer.onNext("one");
+                            observer.onNext("two");
+                            observer.onNext("three");
+                            observer.onCompleted();
+                        }
+                    }).start();
+                }
+            })).forEach(new Action1<String>() {
+
+                @Override
+                public void call(String t1) {
+                    throw new RuntimeException("fail");
+                }
+            });
+            fail("we expect an exception to be thrown");
+        } catch (Throwable e) {
+            
+        }
+    }
+
+    @Test
+    public void testFirst() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("one", observable.first());
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testFirstWithEmpty() {
+        BlockingObservable.from(Observable.<String> empty()).first();
+    }
+
+    @Test
+    public void testFirstWithPredicate() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.first(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 3;
+            }
+        });
+        assertEquals("three", first);
+    }
+
+    @Test(expected = NoSuchElementException.class)
+    public void testFirstWithPredicateAndEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        observable.first(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 5;
+            }
+        });
+    }
+
+    @Test
+    public void testFirstOrDefault() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        assertEquals("one", observable.firstOrDefault("default"));
+    }
+
+    @Test
+    public void testFirstOrDefaultWithEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.<String> empty());
+        assertEquals("default", observable.firstOrDefault("default"));
+    }
+
+    @Test
+    public void testFirstOrDefaultWithPredicate() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.firstOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 3;
+            }
+        });
+        assertEquals("three", first);
+    }
+
+    @Test
+    public void testFirstOrDefaultWithPredicateAndEmpty() {
+        BlockingObservable<String> observable = BlockingObservable.from(Observable.just("one", "two", "three"));
+        String first = observable.firstOrDefault("default", new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String args) {
+                return args.length() > 5;
+            }
+        });
+        assertEquals("default", first);
+    }
+
+    @Test
+    public void testSingleOrDefaultUnsubscribe() throws InterruptedException {
+        final CountDownLatch unsubscribe = new CountDownLatch(1);
+        Observable<Integer> o = Observable.create(new OnSubscribe<Integer>() {
+            @Override
+            public void call(Subscriber<? super Integer> subscriber) {
+                subscriber.add(Subscriptions.create(new Action0() {
+                    @Override
+                    public void call() {
+                        unsubscribe.countDown();
+                    }
+                }));
+                subscriber.onNext(1);
+                subscriber.onNext(2);
+                
+            }
+        }).subscribeOn(Schedulers.newThread());
+        try {
+            o.toBlocking().singleOrDefault(-1);
+            fail("Expected IllegalArgumentException because there are 2 elements");
+        } catch (IllegalArgumentException e) {
+            
+        }
+        assertTrue("Timeout means `unsubscribe` is not called", unsubscribe.await(30, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void testUnsubscribeFromSingleWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("single()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.single();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromForEachWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("forEach()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.forEach(new Action1<Void>() {
+                    @Override
+                    public void call(final Void aVoid) {
+                        
+                    }
+                });
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromFirstWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("first()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.first();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromLastWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("last()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.last();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromLatestWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("latest()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.latest().iterator().next();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromNextWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("next()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.next().iterator().next();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromGetIteratorWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("getIterator()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.getIterator().next();
+            }
+        });
+    }
+
+    @Test
+    public void testUnsubscribeFromToIterableWhenInterrupted() throws InterruptedException {
+        new InterruptionTests().assertUnsubscribeIsInvoked("toIterable()", new Action1<BlockingObservable<Void>>() {
+            @Override
+            public void call(final BlockingObservable<Void> o) {
+                o.toIterable().iterator().next();
+            }
+        });
+    }
+
+    
+    private static class InterruptionTests {
+
+        private boolean isUnSubscribed;
+        private RuntimeException error;
+        private CountDownLatch latch = new CountDownLatch(1);
+
+        private Observable<Void> createObservable() {
+            return Observable.<Void>never().doOnUnsubscribe(new Action0() {
+                @Override
+                public void call() {
+                    isUnSubscribed = true;
+                }
+            });
+        }
+
+        private void startBlockingAndInterrupt(final Action1<BlockingObservable<Void>> blockingAction) {
+            Thread subscriptionThread = new Thread() {
+                @Override
+                public void run() {
+                    try {
+                        blockingAction.call(createObservable().toBlocking());
+                    } catch (RuntimeException e) {
+                        if (!(e.getCause() instanceof InterruptedException)) {
+                            error = e;
+                        }
+                    }
+                    latch.countDown();
+                }
+            };
+            subscriptionThread.start();
+            subscriptionThread.interrupt();
+        }
+
+        void assertUnsubscribeIsInvoked(final String method, final Action1<BlockingObservable<Void>> blockingAction)
+            throws InterruptedException {
+            startBlockingAndInterrupt(blockingAction);
+            assertTrue("Timeout means interruption is not performed", latch.await(30, TimeUnit.SECONDS));
+            if (error != null) {
+                throw error;
+            }
+            assertTrue("'unsubscribe' is not invoked when thread is interrupted for " + method, isUnSubscribed);
+        }
+
+    }
+
+}
+
+<code block>
+
+package rx.internal.operators;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static rx.internal.operators.BlockingOperatorNext.next;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.junit.Assert;
+import org.junit.Test;
+
+import rx.Observable;
+import rx.Subscriber;
+import rx.exceptions.TestException;
+import rx.internal.operators.BlockingOperatorNext;
+import rx.observables.BlockingObservable;
+import rx.schedulers.Schedulers;
+import rx.subjects.BehaviorSubject;
+import rx.subjects.PublishSubject;
+import rx.subjects.Subject;
+
+public class BlockingOperatorNextTest {
+
+    private void fireOnNextInNewThread(final Subject<String, String> o, final String value) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    
+                }
+                o.onNext(value);
+            }
+        }.start();
+    }
+
+    private void fireOnErrorInNewThread(final Subject<String, String> o) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    
+                }
+                o.onError(new TestException());
+            }
+        }.start();
+    }
+
+    @Test
+    public void testNext() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        fireOnNextInNewThread(obs, "two");
+        assertTrue(it.hasNext());
+        assertEquals("two", it.next());
+
+        obs.onCompleted();
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+
+        
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithError() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        fireOnErrorInNewThread(obs);
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    @Test
+    public void testNextWithEmpty() {
+        Observable<String> obs = Observable.<String> empty().observeOn(Schedulers.newThread());
+        Iterator<String> it = next(obs).iterator();
+
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+
+        
+        assertFalse(it.hasNext());
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testOnError() throws Throwable {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+
+        obs.onError(new TestException());
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+            
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    @Test
+    public void testOnErrorInNewThread() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+
+        fireOnErrorInNewThread(obs);
+
+        try {
+            it.hasNext();
+            fail("Expected an TestException");
+        } catch (TestException e) {
+            
+        }
+
+        assertErrorAfterObservableFail(it);
+    }
+
+    private void assertErrorAfterObservableFail(Iterator<String> it) {
+        
+        try {
+            it.hasNext();
+            fail("hasNext should throw a TestException");
+        } catch (TestException e) {
+        }
+        try {
+            it.next();
+            fail("next should throw a TestException");
+        } catch (TestException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithOnlyUsingNextMethod() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertEquals("one", it.next());
+
+        fireOnNextInNewThread(obs, "two");
+        assertEquals("two", it.next());
+
+        obs.onCompleted();
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    @Test
+    public void testNextWithCallingHasNextMultipleTimes() {
+        Subject<String, String> obs = PublishSubject.create();
+        Iterator<String> it = next(obs).iterator();
+        fireOnNextInNewThread(obs, "one");
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertTrue(it.hasNext());
+        assertEquals("one", it.next());
+
+        obs.onCompleted();
+        try {
+            it.next();
+            fail("At the end of an iterator should throw a NoSuchElementException");
+        } catch (NoSuchElementException e) {
+        }
+    }
+
+    
+    @Test
+    public void testNoBufferingOrBlockingOfSequence() throws Throwable {
+        final CountDownLatch finished = new CountDownLatch(1);
+        final int COUNT = 30;
+        final CountDownLatch timeHasPassed = new CountDownLatch(COUNT);
+        final AtomicBoolean running = new AtomicBoolean(true);
+        final AtomicInteger count = new AtomicInteger(0);
+        final Observable<Integer> obs = Observable.create(new Observable.OnSubscribe<Integer>() {
+
+            @Override
+            public void call(final Subscriber<? super Integer> o) {
+                new Thread(new Runnable() {
+
+                    @Override
+                    public void run() {
+                        try {
+                            while (running.get()) {
+                                o.onNext(count.incrementAndGet());
+                                timeHasPassed.countDown();
+                            }
+                            o.onCompleted();
+                        } catch (Throwable e) {
+                            o.onError(e);
+                        } finally {
+                            finished.countDown();
+                        }
+                    }
+                }).start();
+            }
+
+        });
+
+        Iterator<Integer> it = next(obs).iterator();
+
+        assertTrue(it.hasNext());
+        int a = it.next();
+        assertTrue(it.hasNext());
+        int b = it.next();
+        
+        assertTrue("a and b should be different", a != b);
+
+        
+        timeHasPassed.await(8000, TimeUnit.MILLISECONDS);
+
+        assertTrue(it.hasNext());
+        int c = it.next();
+
+        assertTrue("c should not just be the next in sequence", c != (b + 1));
+        assertTrue("expected that c [" + c + "] is higher than or equal to " + COUNT, c >= COUNT);
+
+        assertTrue(it.hasNext());
+        int d = it.next();
+        assertTrue(d > c);
+
+        
+        running.set(false);
+
+        finished.await();
+
+        assertFalse(it.hasNext());
+
+        System.out.println("a: " + a + " b: " + b + " c: " + c);
+    }
+
+    @Test 
+    public void testSingleSourceManyIterators() throws InterruptedException {
+        Observable<Long> o = Observable.interval(100, TimeUnit.MILLISECONDS);
+        PublishSubject<Void> terminal = PublishSubject.create();
+        BlockingObservable<Long> source = o.takeUntil(terminal).toBlocking();
+
+        Iterable<Long> iter = source.next();
+
+        for (int j = 0; j < 3; j++) {
+            BlockingOperatorNext.NextIterator<Long> it = (BlockingOperatorNext.NextIterator<Long>)iter.iterator();
+
+            for (long i = 0; i < 10; i++) {
+                Assert.assertEquals(true, it.hasNext());
+                Assert.assertEquals(j + "th iteration next", Long.valueOf(i), it.next());
+            }
+            terminal.onNext(null);
+        }
+    }
+    
+    @Test
+    public void testSynchronousNext() {
+        assertEquals(1, BehaviorSubject.create(1).take(1).toBlocking().single().intValue());
+        assertEquals(2, BehaviorSubject.create(2).toBlocking().toIterable().iterator().next().intValue());
+        assertEquals(3, BehaviorSubject.create(3).toBlocking().next().iterator().next().intValue());
+    }
+}

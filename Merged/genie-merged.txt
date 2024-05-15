@@ -1,0 +1,1301 @@
+
+package com.netflix.genie.web.health;
+
+import netflix.karyon.health.HealthCheckHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.PostConstruct;
+import java.net.HttpURLConnection;
+
+
+public class HealthCheck implements HealthCheckHandler {
+
+    private static final Logger LOG = LoggerFactory.getLogger(HealthCheck.class);
+
+    
+    @PostConstruct
+    public void init() {
+        LOG.info("Health check initialized.");
+    }
+
+    
+    @Override
+    public int getStatus() {
+        
+        LOG.debug("Health check invoked.");
+        return HttpURLConnection.HTTP_OK;
+    }
+}
+
+<code block>
+
+package com.netflix.genie.web.startup;
+
+import com.netflix.genie.web.health.HealthCheck;
+import com.netflix.governator.annotations.Modules;
+import netflix.adminresources.resources.KaryonWebAdminModule;
+import netflix.karyon.KaryonBootstrap;
+import netflix.karyon.ShutdownModule;
+import netflix.karyon.archaius.ArchaiusBootstrap;
+import netflix.karyon.servo.KaryonServoModule;
+
+
+@ArchaiusBootstrap
+@KaryonBootstrap(name = "Genie", healthcheck = HealthCheck.class)
+@Modules(
+        include = {
+                ShutdownModule.class,
+                KaryonWebAdminModule.class,
+                
+                KaryonServoModule.class,
+                
+        }
+)
+public class GenieApplication {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+<code block>
+
+package com.netflix.genie.web.health;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.net.HttpURLConnection;
+
+
+public class TestHealthCheck {
+
+    private HealthCheck check;
+
+    
+    @Before
+    public void setup() {
+        this.check = new HealthCheck();
+    }
+
+    
+    @Test
+    public void testInit() {
+        this.check.init();
+    }
+
+    
+    @Test
+    public void testGetStatus() {
+        Assert.assertEquals(HttpURLConnection.HTTP_OK, this.check.getStatus());
+    }
+}
+
+<code block>
+
+package com.netflix.genie.web.startup;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+
+public class TestGenieApplication {
+
+    private GenieApplication app;
+
+    
+    @Before
+    public void setup() {
+        this.app = new GenieApplication();
+    }
+
+    
+    @Test
+    public void test() {
+        Assert.assertNotNull(this.app);
+    }
+}
+
+<code block>
+
+package com.netflix.genie.client;
+
+import com.google.common.collect.Multimap;
+import com.netflix.client.http.HttpRequest;
+import com.netflix.client.http.HttpRequest.Verb;
+import com.netflix.genie.common.client.BaseGenieClient;
+import com.netflix.genie.common.exceptions.GenieException;
+import com.netflix.genie.common.exceptions.GeniePreconditionException;
+import com.netflix.genie.common.model.Application;
+import com.netflix.genie.common.model.Command;
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Set;
+
+
+public final class ApplicationServiceClient extends BaseGenieClient {
+
+    private static final String BASE_CONFIG_APPLICATION_REST_URL = BASE_REST_URL + "config/applications";
+
+    private interface ApplicationService {
+
+    }
+
+    
+    private static ApplicationServiceClient instance;
+
+    
+    private ApplicationServiceClient() throws IOException {
+        super(null);
+    }
+
+    
+    public static synchronized ApplicationServiceClient getInstance() throws IOException {
+        if (instance == null) {
+            instance = new ApplicationServiceClient();
+        }
+
+        return instance;
+    }
+
+    
+    public Application createApplication(final Application application)
+            throws GenieException {
+        if (application == null) {
+            throw new GeniePreconditionException("No application passed in. Unable to validate.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                null,
+                application);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Application updateApplication(
+            final String id,
+            final Application application)
+            throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Required parameter id is missing. Unable to update.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                application);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Application getApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Required parameter id is missing. Unable to get.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                null);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public List<Application> getApplications(final Multimap<String, String> params)
+            throws GenieException {
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                params,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final List<Application> apps = (List<Application>) this.executeRequest(request, List.class, Application.class);
+        return apps;
+    }
+
+    
+    public List<Application> deleteAllApplications() throws GenieException {
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final List<Application> apps = (List<Application>) this.executeRequest(request, List.class, Application.class);
+        return apps;
+    }
+
+    
+    public Application deleteApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                null);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Set<String> addConfigsToApplication(
+            final String id,
+            final Set<String> configs) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (configs == null || configs.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: configs");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                configs);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newConfigs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newConfigs;
+    }
+
+    
+    public Set<String> getConfigsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> configs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return configs;
+    }
+
+    
+    public Set<String> updateConfigsForApplication(
+            final String id,
+            final Set<String> configs) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (configs == null) {
+            throw new GeniePreconditionException("Missing required parameter: configs");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                configs);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newConfigs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newConfigs;
+    }
+
+    
+    public Set<String> removeAllConfigsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> configs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return configs;
+    }
+
+    
+    public Set<String> addJarsToApplication(
+            final String id,
+            final Set<String> jars) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (jars == null || jars.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: jars");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                jars);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newJars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newJars;
+    }
+
+    
+    public Set<String> getJarsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> jars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return jars;
+    }
+
+    
+    public Set<String> updateJarsForApplication(
+            final String id,
+            final Set<String> jars) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (jars == null) {
+            throw new GeniePreconditionException("Missing required parameter: jars");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                jars);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newJars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newJars;
+    }
+
+    
+    public Set<String> removeAllJarsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> jars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return jars;
+    }
+
+    
+    public Set<Command> getCommandsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "commands"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<Command> commands = (Set<Command>) this.executeRequest(request, Set.class, Command.class);
+        return commands;
+    }
+
+    
+    public Set<String> addTagsToApplication(
+            final String id,
+            final Set<String> tags) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (tags == null || tags.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: tags");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                tags);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newTags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newTags;
+    }
+
+    
+    public Set<String> getTagsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+
+    
+    public Set<String> updateTagsForApplication(
+            final String id,
+            final Set<String> tags) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (tags == null) {
+            throw new GeniePreconditionException("Missing required parameter: tags");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                tags);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newTags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newTags;
+    }
+
+    
+    public Set<String> removeAllTagsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+
+    
+    public Set<String> removeTagForApplication(
+            final String id,
+            final String tag) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{
+                                BASE_CONFIG_APPLICATION_REST_URL,
+                                id,
+                                "tags",
+                                tag,
+                        },
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+}
+
+<code block>
+
+package com.netflix.genie.server.health;
+
+import com.netflix.karyon.spi.HealthCheckHandler;
+import java.net.HttpURLConnection;
+import javax.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+public class HealthCheck implements HealthCheckHandler {
+
+    private static final Logger LOG = LoggerFactory.getLogger(HealthCheck.class);
+
+    
+    @PostConstruct
+    public void init() {
+        LOG.info("Health check initialized.");
+    }
+
+    
+    @Override
+    public int getStatus() {
+        
+        LOG.debug("Health check invoked.");
+        return HttpURLConnection.HTTP_OK;
+    }
+}
+
+<code block>
+
+package com.netflix.genie.server.startup;
+
+import com.netflix.karyon.spi.Application;
+
+
+@Application
+public class GenieApplication {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+<code block>
+
+package com.netflix.genie.server.startup;
+
+import com.netflix.governator.guice.LifecycleInjectorBuilder;
+import com.netflix.karyon.server.ServerBootstrap;
+
+
+public class GenieGuiceBootstrap extends ServerBootstrap {
+
+    
+    @Override
+    protected void beforeInjectorCreation(final LifecycleInjectorBuilder builderToBeUsed) {
+
+    }
+}
+
+<code block>
+
+package com.netflix.genie.server.health;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.net.HttpURLConnection;
+
+
+public class TestHealthCheck {
+
+    private HealthCheck check;
+
+    
+    @Before
+    public void setup() {
+        this.check = new HealthCheck();
+    }
+
+    
+    @Test
+    public void testInit() {
+        this.check.init();
+    }
+
+    
+    @Test
+    public void testGetStatus() {
+        Assert.assertEquals(HttpURLConnection.HTTP_OK, this.check.getStatus());
+    }
+}
+
+<code block>
+
+package com.netflix.genie.server.startup;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+
+public class TestGenieApplication {
+
+    private GenieApplication app;
+
+    
+    @Before
+    public void setup() {
+        this.app = new GenieApplication();
+    }
+
+    
+    @Test
+    public void test() {
+        Assert.assertNotNull(this.app);
+    }
+}
+
+<code block>
+
+package com.netflix.genie.server.startup;
+
+import com.google.inject.Module;
+import com.netflix.governator.guice.LifecycleInjectorBuilder;
+import org.junit.Before;
+import org.junit.Test;
+import org.mockito.Mockito;
+
+
+public class TestGenieGuiceBootstrap {
+
+    private GenieGuiceBootstrap genieGuiceBootstrap;
+
+    
+    @Before
+    public void setup() {
+        this.genieGuiceBootstrap = new GenieGuiceBootstrap();
+    }
+
+    
+    @Test
+    public void testBeforeInjectorCreation() {
+        final LifecycleInjectorBuilder builder = Mockito.mock(LifecycleInjectorBuilder.class);
+        this.genieGuiceBootstrap.beforeInjectorCreation(builder);
+        Mockito.verify(builder, Mockito.never())
+                .withAdditionalModules(Mockito.any(Module.class));
+    }
+}
+
+<code block>
+
+package com.netflix.genie.client;
+
+import com.google.common.collect.Multimap;
+import com.netflix.client.http.HttpRequest;
+import com.netflix.client.http.HttpRequest.Verb;
+import com.netflix.genie.common.client.BaseGenieClient;
+import com.netflix.genie.common.exceptions.GenieException;
+import com.netflix.genie.common.exceptions.GeniePreconditionException;
+import com.netflix.genie.common.model.Application;
+import com.netflix.genie.common.model.Command;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.commons.lang3.StringUtils;
+
+
+public final class ApplicationServiceClient extends BaseGenieClient {
+
+    private static final String BASE_CONFIG_APPLICATION_REST_URL
+            = BASE_REST_URL + "config/applications";
+
+    
+    private static ApplicationServiceClient instance;
+
+    
+    private ApplicationServiceClient() throws IOException {
+        super(null);
+    }
+
+    
+    public static synchronized ApplicationServiceClient getInstance() throws IOException {
+        if (instance == null) {
+            instance = new ApplicationServiceClient();
+        }
+
+        return instance;
+    }
+
+    
+    public Application createApplication(final Application application)
+            throws GenieException {
+        if (application == null) {
+            throw new GeniePreconditionException("No application passed in. Unable to validate.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                null,
+                application);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Application updateApplication(
+            final String id,
+            final Application application)
+            throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Required parameter id is missing. Unable to update.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                application);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Application getApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Required parameter id is missing. Unable to get.");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                null);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public List<Application> getApplications(final Multimap<String, String> params)
+            throws GenieException {
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                params,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final List<Application> apps = (List<Application>) this.executeRequest(request, List.class, Application.class);
+        return apps;
+    }
+
+    
+    public List<Application> deleteAllApplications() throws GenieException {
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                BASE_CONFIG_APPLICATION_REST_URL,
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final List<Application> apps = (List<Application>) this.executeRequest(request, List.class, Application.class);
+        return apps;
+    }
+
+    
+    public Application deleteApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id},
+                        SLASH),
+                null,
+                null);
+        return (Application) this.executeRequest(request, null, Application.class);
+    }
+
+    
+    public Set<String> addConfigsToApplication(
+            final String id,
+            final Set<String> configs) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (configs == null || configs.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: configs");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                configs);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newConfigs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newConfigs;
+    }
+
+    
+    public Set<String> getConfigsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> configs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return configs;
+    }
+
+    
+    public Set<String> updateConfigsForApplication(
+            final String id,
+            final Set<String> configs) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (configs == null) {
+            throw new GeniePreconditionException("Missing required parameter: configs");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                configs);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newConfigs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newConfigs;
+    }
+
+    
+    public Set<String> removeAllConfigsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "configs"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> configs = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return configs;
+    }
+
+    
+    public Set<String> addJarsToApplication(
+            final String id,
+            final Set<String> jars) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (jars == null || jars.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: jars");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                jars);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newJars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newJars;
+    }
+
+    
+    public Set<String> getJarsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> jars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return jars;
+    }
+
+    
+    public Set<String> updateJarsForApplication(
+            final String id,
+            final Set<String> jars) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (jars == null) {
+            throw new GeniePreconditionException("Missing required parameter: jars");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                jars);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newJars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newJars;
+    }
+
+    
+    public Set<String> removeAllJarsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "jars"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> jars = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return jars;
+    }
+
+    
+    public Set<Command> getCommandsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "commands"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<Command> commands = (Set<Command>) this.executeRequest(request, Set.class, Command.class);
+        return commands;
+    }
+
+    
+    public Set<String> addTagsToApplication(
+            final String id,
+            final Set<String> tags) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (tags == null || tags.isEmpty()) {
+            throw new GeniePreconditionException("Missing required parameter: tags");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.POST,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                tags);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newTags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newTags;
+    }
+
+    
+    public Set<String> getTagsForApplication(final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.GET,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+
+    
+    public Set<String> updateTagsForApplication(
+            final String id,
+            final Set<String> tags) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+        if (tags == null) {
+            throw new GeniePreconditionException("Missing required parameter: tags");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.PUT,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                tags);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> newTags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return newTags;
+    }
+
+    
+    public Set<String> removeAllTagsForApplication(
+            final String id) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{BASE_CONFIG_APPLICATION_REST_URL, id, "tags"},
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+
+    
+    public Set<String> removeTagForApplication(
+            final String id,
+            final String tag) throws GenieException {
+        if (StringUtils.isBlank(id)) {
+            throw new GeniePreconditionException("Missing required parameter: id");
+        }
+
+        final HttpRequest request = BaseGenieClient.buildRequest(
+                Verb.DELETE,
+                StringUtils.join(
+                        new String[]{
+                                BASE_CONFIG_APPLICATION_REST_URL,
+                                id,
+                                "tags",
+                                tag,
+                        },
+                        SLASH),
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        final Set<String> tags = (Set<String>) this.executeRequest(request, Set.class, String.class);
+        return tags;
+    }
+}

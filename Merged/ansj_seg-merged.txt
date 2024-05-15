@@ -1,0 +1,2095 @@
+package org.ansj.app.keyword;
+
+import lombok.Getter;
+import lombok.Setter;
+
+public class Keyword implements Comparable<Keyword> {
+
+    @Setter
+    @Getter
+    private String name;
+    @Getter
+    private double score;
+    private final double idf;
+    @Getter
+    private int freq;
+
+    public Keyword(final String name, final int docFreq, final double weight) {
+        this.name = name;
+        this.idf = Math.log(10000 + 10000.0 / (docFreq + 1));
+        this.score = this.idf * weight;
+        this.freq++;
+    }
+
+    public Keyword(final String name, final double score) {
+        this.name = name;
+        this.score = score;
+        this.idf = score;
+        this.freq++;
+    }
+
+    public void updateWeight(int weight) {
+        this.score += weight * this.idf;
+        this.freq++;
+    }
+
+    @Override
+    public int compareTo(final Keyword o) {
+        return this.score < o.score ? 1 : -1;
+    }
+
+    @Override
+    public int hashCode() {
+        return this.name.hashCode();
+    }
+
+    @Override
+    public boolean equals(final Object obj) {
+        return (obj instanceof Keyword) && ((Keyword) obj).name.equals(this.name);
+    }
+
+    @Override
+    public String toString() {
+        return name + "/" + score;
+    }
+}
+
+<code block>
+package org.ansj.app.keyword;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
+
+import org.ansj.domain.Term;
+import org.ansj.splitWord.analysis.NlpAnalysis;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+public class KeyWordComputer {
+
+	private static final Map<String, Double> POS_SCORE = new HashMap<>();
+
+	static {
+		POS_SCORE.put("null", 0.0);
+		POS_SCORE.put("w", 0.0);
+		POS_SCORE.put("en", 0.0);
+		POS_SCORE.put("num", 0.0);
+		POS_SCORE.put("nr", 3.0);
+		POS_SCORE.put("nrf", 3.0);
+		POS_SCORE.put("nw", 3.0);
+		POS_SCORE.put("nt", 3.0);
+		POS_SCORE.put("l", 0.2);
+		POS_SCORE.put("a", 0.2);
+		POS_SCORE.put("nz", 3.0);
+		POS_SCORE.put("v", 0.2);
+	}
+
+	private int nKeyword = 5;
+
+	public KeyWordComputer() {
+	}
+
+	
+	public KeyWordComputer(int nKeyword) {
+		this.nKeyword = nKeyword;
+	}
+
+	
+	private List<Keyword> computeArticleTfidf(String content, int titleLength) {
+		Map<String, Keyword> tm = new HashMap<>();
+
+		List<Term> parse = NlpAnalysis.parse(content);
+		for (Term term : parse) {
+			double weight = getWeight(term, content.length(), titleLength);
+			if (weight == 0)
+				continue;
+			Keyword keyword = tm.get(term.getName());
+			if (keyword == null) {
+				keyword = new Keyword(term.getName(), term.natrue().allFrequency, weight);
+				tm.put(term.getName(), keyword);
+			} else {
+				keyword.updateWeight(1);
+			}
+		}
+
+		TreeSet<Keyword> treeSet = new TreeSet<>(tm.values());
+
+		ArrayList<Keyword> arrayList = new ArrayList<>(treeSet);
+		if (treeSet.size() <= nKeyword) {
+			return arrayList;
+		} else {
+			return arrayList.subList(0, nKeyword);
+		}
+
+	}
+
+	
+	public List<Keyword> computeArticleTfidf(String title, String content) {
+		if (StringUtil.isBlank(title)) {
+			title = "";
+		}
+		if (StringUtil.isBlank(content)) {
+			content = "";
+		}
+		return computeArticleTfidf(title + "\t" + content, title.length());
+	}
+
+	
+	public List<Keyword> computeArticleTfidf(String content) {
+		return computeArticleTfidf(content, 0);
+	}
+
+	private double getWeight(Term term, int length, int titleLength) {
+		if (term.getName().trim().length() < 2) {
+			return 0;
+		}
+
+		String pos = term.natrue().natureStr;
+
+		Double posScore = POS_SCORE.get(pos);
+
+		if (posScore == null) {
+			posScore = 1.0;
+		} else if (posScore == 0) {
+			return 0;
+		}
+
+		if (titleLength > term.getOffe()) {
+			return 5 * posScore;
+		}
+		return (length - term.getOffe()) * posScore / (double) length;
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf;
+
+import lombok.SneakyThrows;
+import org.ansj.app.crf.pojo.Element;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.tire.domain.SmartForest;
+
+import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.zip.GZIPInputStream;
+
+public class Model {
+
+
+
+
+
+
+    public final Template template;
+
+    private final double[][] status;
+
+    private final Map<String, Feature> myGrad;
+
+    private final SmartForest<double[][]> smartForest;
+
+    
+    Model(final Template template, double[][] status, final Map<String, Feature> myGrad) {
+        this.template = template;
+        this.status = status;
+        this.myGrad = myGrad;
+        this.smartForest = null;
+    }
+
+    
+    protected Model(final Template template, final SmartForest<double[][]> smartForest, final double[][] status) {
+        this.template = template;
+        this.status = status;
+        this.myGrad = null;
+        this.smartForest = smartForest;
+    }
+
+    public double[] getFeature(final int featureIndex, final char... chars) {
+        final SmartForest<double[][]> sf = this.smartForest.getBranch(chars);
+        return sf != null && sf.getParam() != null ? sf.getParam()[featureIndex] : null;
+    }
+
+    
+    public double tagRate(final int s1, final int s2) {
+        return this.status[s1][s2];
+    }
+
+    public boolean canWrite() {
+        return true;
+    }
+
+    
+    @Deprecated
+    @SneakyThrows
+    public static void writeModel(final Model model, final OutputStream outputStream) {
+        
+        
+
+        if (!model.canWrite()) {
+            
+            throw new RuntimeException("you can not to calculate ,this model only use by cut");
+        }
+
+        try (final ObjectOutputStream oos = new ObjectOutputStream(outputStream)) {
+            oos.writeObject(model.template); 
+            oos.writeObject(model.status); 
+            oos.writeInt(model.myGrad.size()); 
+            double[] ds;
+            for (final Entry<String, Feature> entry : model.myGrad.entrySet()) {
+                oos.writeUTF(entry.getKey());
+                for (int i = 0; i < model.template.ft.length; i++) {
+                    ds = entry.getValue().w[i];
+                    for (int j = 0; j < ds.length; j++) {
+                        oos.writeByte(j);
+                        oos.writeFloat((float) ds[j]);
+                    }
+                    oos.writeByte(-1);
+                }
+            }
+            oos.flush();
+        }
+    }
+
+    @SneakyThrows
+    public static Model loadModel(final InputStream inputStream) {
+        try (final ObjectInputStream ois = new ObjectInputStream(new BufferedInputStream(new GZIPInputStream(inputStream)))) {
+
+            final Template template = (Template) ois.readObject();
+            final int tagNum = template.tagNum;
+            final int featureNum = template.ft.length;
+
+            final SmartForest<double[][]> smartForest = new SmartForest<>(0.8);
+            final double[][] status = (double[][]) ois.readObject();
+
+            
+            final int featureCount = ois.readInt();
+            for (int fIdx = 0; fIdx < featureCount; fIdx++) {
+                final String key = ois.readUTF();
+                final double[][] w = new double[featureNum][0];
+                for (int j = 0; j < featureNum; j++) {
+                    int b;
+                    while ((b = ois.readByte()) != -1) {
+                        if (w[j].length == 0) {
+                            w[j] = new double[tagNum];
+                        }
+                        w[j][b] = ois.readFloat();
+                    }
+                }
+                smartForest.addBranch(key, w);
+            }
+
+            final Model model = new Model(template, smartForest, status) {
+
+                @Override
+                public boolean canWrite() {
+                    return false;
+                }
+            };
+            model.makeSide(template.left, template.right);
+            return model;
+        }
+    }
+
+    
+    private void makeSide(final int left, final int right) throws IOException {
+        final List<Element> leftList = new ArrayList<>(Math.abs(left));
+        for (int i = left; i < 0; i++) {
+            leftList.add(new Element((char) ('B' + i)));
+        }
+
+        final List<Element> rightList = new ArrayList<>(right);
+        for (int i = 1; i < right + 1; i++) {
+            rightList.add(new Element((char) ('B' + i)));
+        }
+    }
+}
+<code block>
+package org.ansj.app.crf;
+
+import lombok.SneakyThrows;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.util.IOUtil;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static java.lang.Double.parseDouble;
+import static java.lang.Integer.parseInt;
+import static org.ansj.util.AnsjUtils.parseFile;
+import static org.ansj.util.AnsjUtils.toStream;
+import static org.apache.commons.lang3.StringUtils.isBlank;
+
+public class CrfppModelParser {
+
+    public static class TempFeature {
+
+        public int id;
+        public int featureId;
+        public String name;
+
+        public TempFeature(final String input, final int tagNum) {
+            final String[] fragments = input.split(" ");
+
+            this.id = parseInt(fragments[0]) / tagNum;
+            int splitIndex = fragments[1].indexOf(":");
+            this.featureId = parseInt(fragments[1].substring(1, splitIndex));
+            this.name = fragments[1].substring(splitIndex + 1).replace("/", "");
+        }
+    }
+
+    
+    @SneakyThrows
+    public static Model parseCrfpp(final String path) {
+        final BufferedReader reader = IOUtil.getReader(path, IOUtil.UTF8);
+        reader.readLine();
+        reader.readLine();
+        final int maxId = parseInt(reader.readLine().split(":")[1].trim());
+        reader.readLine();
+        reader.readLine();
+
+        final Map<String, Integer> statusMap = new HashMap<>();
+        
+        int tagNum = 0;
+        String temp;
+        while ((temp = reader.readLine()) != null) {
+            if (isBlank(temp)) {
+                break;
+            }
+            statusMap.put(temp, tagNum);
+            tagNum++;
+        }
+
+        
+        final StringBuilder templateStringBuilder = new StringBuilder();
+        while ((temp = reader.readLine()) != null) {
+            if (isBlank(temp)) {
+                break;
+            }
+            templateStringBuilder.append(temp).append("\n");
+        }
+
+        final Template template = parseTemplate(templateStringBuilder.toString())
+                .withTagNum(tagNum)
+                .withStatusMap(statusMap);
+        final double[][] status = new double[tagNum][tagNum];
+
+        final int featureNum = template.ft.length;
+        
+        final int bIndex = Integer.parseInt(reader.readLine().split(" ")[0]) / tagNum;
+
+        final TempFeature[] tmpFeatures = new TempFeature[maxId / tagNum];
+        while ((temp = reader.readLine()) != null) {
+            if (isBlank(temp)) {
+                break;
+            }
+            final TempFeature tmpFeature = new TempFeature(temp, tagNum);
+            tmpFeatures[tmpFeature.id] = tmpFeature;
+        }
+
+        final HashMap<String, Feature> myGrad = new HashMap<>();
+        for (int i = 0; i < tmpFeatures.length; i++) { 
+            if (i == bIndex) { 
+                for (int j = 0; j < tagNum; j++) {
+                    for (int j2 = 0; j2 < tagNum; j2++) {
+                        status[j][j2] = Double.parseDouble(reader.readLine());
+                    }
+                }
+                i += tagNum - 1;
+                continue;
+            }
+            final TempFeature tmpFeature = tmpFeatures[i];
+            final Feature feature = myGrad.get(tmpFeature.name) != null ?
+                    myGrad.get(tmpFeature.name) :
+                    new Feature(featureNum, tagNum);
+            myGrad.put(tmpFeature.name, feature);
+            for (int j = 0; j < tagNum; j++) {
+                feature.update(tmpFeature.featureId, j, parseDouble(reader.readLine()));
+            }
+        }
+
+        return new Model(template, status, myGrad);
+    }
+
+    
+    public static Template parseTemplate(final String string) {
+        return parseTemplate(toStream(string));
+    }
+
+    public static Template parseTemplate(final InputStream inputStream) {
+        final List<String> lines = parseFile(inputStream, line -> line);
+
+        final int[][] ft = new int[lines.size() - 1][0]; 
+        for (int l = 0; l < lines.size() - 1; l++) {
+            final String line = lines.get(l);
+
+            final String[] fragments = line.split(":");
+            final String[] intFragments = fragments[1].split(" ");
+            final int index = parseInt(fragments[0].substring(1));
+
+            final int[] ints = new int[intFragments.length];
+
+            for (int i = 0; i < intFragments.length; i++) {
+                ints[i] = parseInt(intFragments[i].substring(intFragments[i].indexOf("[") + 1, intFragments[i].indexOf(",")));
+            }
+            ft[index] = ints;
+        }
+
+        
+        int left = 0;
+        int right = 0;
+        for (final int[] ints : ft) {
+            for (int val : ints) {
+                left = left > val ? val : left;
+                right = right < val ? val : right;
+            }
+        }
+
+        return new Template(ft, left, right);
+    }
+}
+
+<code block>
+package org.ansj.app.crf;
+
+import lombok.SneakyThrows;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.util.IOUtil;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+import java.io.BufferedReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static java.lang.Double.parseDouble;
+import static java.lang.Integer.parseInt;
+import static org.ansj.app.crf.CrfppModelParser.parseTemplate;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
+
+public abstract class WapitiCRFModelParser {
+
+    
+    @SneakyThrows
+    public static Model parseWapitiCRFModel(final String modelFile, final String templateFile, final int maxSize) {
+        
+        final String templateString = IOUtil.getContent(IOUtil.getReader(templateFile, IOUtil.UTF8));
+
+        
+        final List<String> statusLines = new ArrayList<>();
+        try (final BufferedReader modelReader = IOUtil.getReader(modelFile, IOUtil.UTF8)) {
+            String temp;
+            while ((temp = modelReader.readLine()) != null) {
+                if (StringUtil.isNotBlank(temp) && temp.charAt(0) == 'b') {
+                    statusLines.add(temp);
+                }
+            }
+        }
+
+        int tagNum = 0;
+        final Map<String, Integer> statusMap = new HashMap<>();
+        for (final String str : statusLines) {
+            String[] split = str.split("\t");
+            tagNum = addStatus(statusMap, split[1], tagNum);
+            tagNum = addStatus(statusMap, split[2], tagNum);
+        }
+
+        final double[][] status = new double[tagNum][tagNum];
+        for (final String str : statusLines) {
+            String[] split = str.split("\t");
+            status[statusMap.get(split[1])][statusMap.get(split[2])] = parseDouble(split[3]);
+        }
+
+        
+        status[statusMap.get("S")][statusMap.get("E")] = Double.MIN_VALUE;
+        status[statusMap.get("S")][statusMap.get("M")] = Double.MIN_VALUE;
+
+        status[statusMap.get("B")][statusMap.get("B")] = Double.MIN_VALUE;
+        status[statusMap.get("B")][statusMap.get("S")] = Double.MIN_VALUE;
+
+        status[statusMap.get("M")][statusMap.get("S")] = Double.MIN_VALUE;
+        status[statusMap.get("M")][statusMap.get("B")] = Double.MIN_VALUE;
+
+        status[statusMap.get("E")][statusMap.get("M")] = Double.MIN_VALUE;
+        status[statusMap.get("E")][statusMap.get("E")] = Double.MIN_VALUE;
+
+        final Template template = parseTemplate(templateString).withTagNum(tagNum).withStatusMap(statusMap);
+
+        
+        final Map<String, Feature> myGrad = new HashMap<>();
+        try (final BufferedReader modelReader = IOUtil.getReader(modelFile, IOUtil.UTF8)) {
+            String temp;
+            while ((temp = modelReader.readLine()) != null) {
+                if (isNotBlank(temp) && temp.charAt(0) == 'u') {
+                    parseGrad(statusMap, myGrad, temp, template.ft.length, tagNum);
+                }
+                
+                if (maxSize > 0 && myGrad.size() > maxSize) {
+                    break;
+                }
+            }
+        }
+
+        return new Model(template, status, myGrad);
+    }
+
+    
+    public static int addStatus(
+            final Map<String, Integer> statusMap,
+            final String stat,
+            final int tagNum
+    ) {
+        if (statusMap.containsKey(stat)) {
+            return tagNum;
+        } else {
+            statusMap.put(stat, tagNum);
+            return tagNum + 1;
+        }
+    }
+
+    private static void parseGrad(
+            final Map<String, Integer> statusMap,
+            final Map<String, Feature> myGrad,
+            final String temp,
+            final int featureNum,
+            final int tagNum
+    ) {
+        final String[] fragments = temp.split("\t");
+
+        final int mIndex = fragments[0].indexOf(":");
+
+        final String name = fixName(fragments[0].substring(mIndex + 1));
+
+        int fIndex = Integer.parseInt(fragments[0].substring(1, mIndex));
+        int sta = statusMap.get(fragments[2]);
+        double step = Double.parseDouble(fragments[3]);
+
+        Feature feature = myGrad.get(name);
+        if (feature == null) {
+            feature = new Feature(featureNum, tagNum);
+            myGrad.put(name, feature);
+        }
+        feature.update(fIndex, sta, step);
+    }
+
+    private static String fixName(final String substring) {
+        final StringBuilder result = new StringBuilder();
+        final String[] fragments = substring.split(" ");
+        for (final String fragment : fragments) {
+            result.append(fragment.startsWith("_x") ?
+                            String.valueOf((char) ('B' + parseInt(fragment.substring(2)))) :
+                            fragment
+            );
+        }
+        return result.toString();
+    }
+}
+
+<code block>
+package org.ansj.app.crf;
+
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map.Entry;
+
+import org.ansj.app.crf.pojo.Element;
+import org.ansj.app.crf.pojo.Template;
+import org.ansj.util.MatrixUtil;
+import org.ansj.util.WordAlert;
+import static org.apache.commons.lang3.StringUtils.*;
+
+
+public class SplitWord {
+
+	private final Model model;
+
+	private final int[] tagConver;
+
+	private final int[] revTagConver;
+
+    private final int modelEnd1;
+
+    private final int modelEnd2;
+
+	
+	public SplitWord(final Model model) {
+		this.tagConver = new int[model.template.tagNum];
+		this.revTagConver = new int[model.template.tagNum];
+
+		
+        model.template.statusMap.forEach((statKey, statVal) -> {
+            switch (statKey) {
+                case "S":
+                    this.tagConver[statVal] = 0;
+                    this.revTagConver[0] = statVal;
+                    break;
+                case "B":
+                    this.tagConver[statVal] = 1;
+                    this.revTagConver[1] = statVal;
+                    break;
+                case "M":
+                    this.tagConver[statVal] = 2;
+                    this.revTagConver[2] = statVal;
+                    break;
+                case "E":
+                    this.tagConver[statVal] = 3;
+                    this.revTagConver[3] = statVal;
+                    break;
+                default:
+                    break;
+            }
+        });
+
+        this.model = model;
+		this.modelEnd1 = model.template.statusMap.get("S");
+		this.modelEnd2 = model.template.statusMap.get("E");
+	}
+
+	public List<String> cut(final char[] chars) {
+        return cut(new String(chars));
+	}
+
+	public List<String> cut(final String line) {
+		if (isBlank(line)) {
+			return Collections.emptyList();
+		}
+
+		final List<Element> elements = vterbi(line);
+		final List<String> result = new LinkedList<>();
+		int begin = 0;
+		int end = 0;
+		for (int i = 0; i < elements.size(); i++) {
+            Element element = elements.get(i);
+			switch (fixTag(element.getTag())) {
+			case 0:
+				end += element.len;
+				result.add(line.substring(begin, end));
+				begin = end;
+				break;
+			case 1:
+				end += element.len;
+				while (fixTag((element = elements.get(++i)).getTag()) != 3) {
+					end += element.len;
+				}
+				end += element.len;
+				result.add(line.substring(begin, end));
+				begin = end;
+			default:
+				break;
+			}
+		}
+		return result;
+	}
+
+	private List<Element> vterbi(String line) {
+		List<Element> elements = WordAlert.str2Elements(line);
+
+		int length = elements.size();
+		if (length == 0) { 
+			return elements;
+		}
+		if (length == 1) {
+			elements.get(0).updateTag(revTagConver[0]);
+			return elements;
+		}
+
+		
+		for (int i = 0; i < length; i++) {
+			computeTagScore(elements, i);
+		}
+
+		
+		elements.get(0).tagScore[revTagConver[2]] = -1000;
+		elements.get(0).tagScore[revTagConver[3]] = -1000;
+		for (int i = 1; i < length; i++) {
+			elements.get(i).maxFrom(this.model, elements.get(i - 1));
+		}
+
+		
+		Element next = elements.get(elements.size() - 1);
+		Element self = null;
+		int maxStatus = next.tagScore[this.modelEnd1] > next.tagScore[this.modelEnd2] ?
+				this.modelEnd1 :
+				this.modelEnd2;
+		next.updateTag(maxStatus);
+		maxStatus = next.from[maxStatus];
+		
+		for (int i = elements.size() - 2; i > 0; i--) {
+			self = elements.get(i);
+			self.updateTag(maxStatus);
+			maxStatus = self.from[self.getTag()];
+			next = self;
+		}
+		elements.get(0).updateTag(maxStatus);
+		return elements;
+
+	}
+
+	private void computeTagScore(final List<Element> elements, final int index) {
+        final Template tmpl = this.model.template;
+
+		final double[] tagScore = new double[tmpl.tagNum];
+		for (int i = 0; i < tmpl.ft.length; i++) {
+			final char[] chars = new char[tmpl.ft[i].length];
+			for (int j = 0; j < chars.length; j++) {
+				chars[j] = getElement(elements, index + tmpl.ft[i][j]).name;
+			}
+			MatrixUtil.dot(tagScore, this.model.getFeature(i, chars));
+		}
+		elements.get(index).tagScore = tagScore;
+	}
+
+	private Element getElement(final List<Element> elements, final int i) {
+		if (i < 0) {
+			return new Element((char) ('B' + i));
+		} else if (i >= elements.size()) {
+			return new Element((char) ('B' + i - elements.size() + 1));
+		} else {
+			return elements.get(i);
+		}
+	}
+
+	public int fixTag(final int tag) {
+        return this.tagConver[tag];
+	}
+
+	
+	public double cohesion(final String word) {
+		if (word.length() == 0) {
+			return Integer.MIN_VALUE;
+		}
+
+		final List<Element> elements = WordAlert.str2Elements(word);
+		for (int i = 0; i < elements.size(); i++) {
+			computeTagScore(elements, i);
+		}
+
+        final int len = elements.size() - 1;
+
+		double value = elements.get(0).tagScore[revTagConver[1]];
+		for (int i = 1; i < len; i++) {
+			value += elements.get(i).tagScore[revTagConver[2]];
+		}
+		value += elements.get(len).tagScore[revTagConver[3]];
+
+        return value < 0 ? 1 : value + 1;
+	}
+}
+
+<code block>
+package org.ansj.app.crf.pojo;
+
+import lombok.Getter;
+import org.ansj.app.crf.Model;
+
+public class Element {
+
+    private static final double MIN = Integer.MIN_VALUE;
+
+    public final char name;
+    @Getter
+    private int tag = -1;
+
+    public int len = 1;
+
+    public Element(final char name) {
+        this.name = name;
+    }
+
+    public Element updateTag(final int tag) {
+        this.tag = tag;
+        return this;
+    }
+
+    public void len() {
+        this.len++;
+    }
+
+    public double[] tagScore;
+
+    public int[] from;
+
+    public void maxFrom(final Model model, final Element element) {
+        if (this.from == null) {
+            this.from = new int[this.tagScore.length];
+        }
+        final double[] pTagScore = element.tagScore;
+        for (int i = 0; i < this.tagScore.length; i++) {
+            double maxValue = MIN;
+            for (int j = 0; j < pTagScore.length; j++) {
+                double rate = model.tagRate(j, i);
+                if (rate != Double.MIN_VALUE) {
+                    final double value = (pTagScore[j] + this.tagScore[i]) + rate;
+                    if (value > maxValue) {
+                        maxValue = value;
+                        this.from[i] = j;
+                    }
+                }
+            }
+            this.tagScore[i] = maxValue;
+        }
+    }
+
+    @Override
+    public String toString() {
+        return this.name + "/" + this.tag;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+<code block>
+package org.ansj.app.crf.pojo;
+
+import java.util.Arrays;
+
+public class Feature {
+
+	public double[][] w;
+
+	public int tagNum;
+
+    public double value = 0;
+
+	public Feature(final int featureNum, final int tagNum) {
+		this.w = new double[featureNum][0];
+		this.tagNum = tagNum;
+	}
+
+	public Feature(final double[][] w) {
+		this.w = w;
+	}
+
+	public void update(final int fIndex, final int sta, final double step) {
+		this.value += step;
+		if (this.w[fIndex].length == 0) {
+			this.w[fIndex] = new double[this.tagNum];
+		}
+		this.w[fIndex][sta] += step;
+	}
+
+	@Override
+	public String toString() {
+		final StringBuilder sb = new StringBuilder();
+		for (final double[] ints : this.w) {
+			sb.append(Arrays.toString(ints)).append("\n");
+		}
+		return sb.toString();
+	}
+}
+<code block>
+package org.ansj.app.crf.pojo;
+
+import com.google.common.collect.ImmutableMap;
+
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+
+
+public class Template implements Serializable {
+
+    private static final long serialVersionUID = 8265350854930361325L;
+
+    public final int[][] ft;
+
+    public final int left;
+
+    public final int right;
+
+    public Template() {
+        this(
+                new int[][]{{-2}, {-1}, {0}, {1}, {2}, {-2, -1}, {-1, 0}, {0, 1}, {1, 2}, {-1, 1}},
+                2,
+                2,
+                0,
+                new HashMap<>()
+        );
+    }
+
+    public Template(final int[][] ft, final int left, final int right) {
+        this(
+                ft,
+                left,
+                right,
+                0,
+                new HashMap<>()
+        );
+    }
+
+    private Template(
+            final int[][] ft,
+            final int left,
+            final int right,
+            final int tagNum,
+            final Map<String, Integer> statusMap
+    ) {
+        this.ft = ft;
+        this.left = left;
+        this.right = right;
+        this.tagNum = tagNum;
+        this.statusMap = statusMap != null ? ImmutableMap.copyOf(statusMap) : null;
+    }
+
+    public final int tagNum;
+
+    public final Map<String, Integer> statusMap;
+
+    public Template withTagNum(final int tagNum) {
+        return new Template(
+                this.ft,
+                this.left,
+                this.right,
+                tagNum,
+                this.statusMap
+        );
+    }
+
+    public Template withStatusMap(final Map<String, Integer> statusMap) {
+        return new Template(
+                this.ft,
+                this.left,
+                this.right,
+                this.tagNum,
+                statusMap
+        );
+    }
+
+    @Override
+    public String toString() {
+        final StringBuilder sb = new StringBuilder()
+                .append("left:").append(this.left).append("\t")
+                .append("rightr:").append(this.right).append("\n");
+        for (final int[] ints : this.ft) {
+            sb.append(Arrays.toString(ints)).append("\n");
+        }
+        return sb.toString();
+    }
+}
+
+<code block>
+package org.ansj.util;
+
+import lombok.SneakyThrows;
+import org.apache.commons.io.IOUtils;
+
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.util.List;
+import java.util.function.Function;
+
+import static java.util.stream.Collectors.toList;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
+
+public class AnsjUtils {
+
+    public static InputStream toStream(final String string) {
+        return new ByteArrayInputStream(string.getBytes());
+    }
+
+    @SneakyThrows
+    public static <T> List<T> parseFile(final InputStream inputStream, Function<String, T> mapper) {
+        return IOUtils.readLines(inputStream).stream()
+                .filter(line -> isNotBlank(line) && !line.trim().startsWith("#"))
+                .map(mapper)
+                .collect(toList());
+    }
+}
+
+<code block>
+package org.ansj.app.keyword;
+
+public class Keyword implements Comparable<Keyword> {
+	private String name;
+	private double score;
+	private double idf;
+	private int freq;
+
+	public Keyword(String name, int docFreq, double weight) {
+		this.name = name;
+		this.idf = Math.log(10000 + 10000.0 / (docFreq + 1));
+		this.score = idf * weight;
+		freq++;
+	}
+
+	public Keyword(String name, double score) {
+		this.name = name;
+		this.score = score;
+		this.idf = score;
+		freq++;
+	}
+
+	public void updateWeight(int weight) {
+		this.score += weight * idf;
+		freq++;
+	}
+
+	public int getFreq() {
+		return freq;
+	}
+
+	@Override
+	public int compareTo(Keyword o) {
+		if (this.score < o.score) {
+			return 1;
+		} else {
+			return -1;
+		}
+
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		
+		if (obj instanceof Keyword) {
+			Keyword k = (Keyword) obj;
+			return k.name.equals(name);
+		} else {
+			return false;
+		}
+	}
+
+	@Override
+	public String toString() {
+		
+		return name + "/" + score;
+	}
+
+	public String getName() {
+		return name;
+	}
+
+	public void setName(String name) {
+		this.name = name;
+	}
+
+	public double getScore() {
+		return score;
+	}
+
+	public void setScore(double score) {
+		this.score = score;
+	}
+
+}
+
+<code block>
+package org.ansj.app.keyword;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
+
+import org.ansj.domain.Term;
+import org.ansj.splitWord.analysis.NlpAnalysis;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+public class KeyWordComputer {
+
+	private static final Map<String, Double> POS_SCORE = new HashMap<String, Double>();
+
+	static {
+		POS_SCORE.put("null", 0.0);
+		POS_SCORE.put("w", 0.0);
+		POS_SCORE.put("en", 0.0);
+		POS_SCORE.put("num", 0.0);
+		POS_SCORE.put("nr", 3.0);
+		POS_SCORE.put("nrf", 3.0);
+		POS_SCORE.put("nw", 3.0);
+		POS_SCORE.put("nt", 3.0);
+		POS_SCORE.put("l", 0.2);
+		POS_SCORE.put("a", 0.2);
+		POS_SCORE.put("nz", 3.0);
+		POS_SCORE.put("v", 0.2);
+
+	}
+
+	private int nKeyword = 5;
+
+	public KeyWordComputer() {
+	}
+
+	
+	public KeyWordComputer(int nKeyword) {
+		this.nKeyword = nKeyword;
+
+	}
+
+	
+	private List<Keyword> computeArticleTfidf(String content, int titleLength) {
+		Map<String, Keyword> tm = new HashMap<String, Keyword>();
+
+		List<Term> parse = NlpAnalysis.parse(content);
+		for (Term term : parse) {
+			double weight = getWeight(term, content.length(), titleLength);
+			if (weight == 0)
+				continue;
+			Keyword keyword = tm.get(term.getName());
+			if (keyword == null) {
+				keyword = new Keyword(term.getName(), term.natrue().allFrequency, weight);
+				tm.put(term.getName(), keyword);
+			} else {
+				keyword.updateWeight(1);
+			}
+		}
+
+		TreeSet<Keyword> treeSet = new TreeSet<Keyword>(tm.values());
+
+		ArrayList<Keyword> arrayList = new ArrayList<Keyword>(treeSet);
+		if (treeSet.size() <= nKeyword) {
+			return arrayList;
+		} else {
+			return arrayList.subList(0, nKeyword);
+		}
+
+	}
+
+	
+	public List<Keyword> computeArticleTfidf(String title, String content) {
+		if (StringUtil.isBlank(title)) {
+			title = "";
+		}
+		if (StringUtil.isBlank(content)) {
+			content = "";
+		}
+		return computeArticleTfidf(title + "\t" + content, title.length());
+	}
+
+	
+	public List<Keyword> computeArticleTfidf(String content) {
+		return computeArticleTfidf(content, 0);
+	}
+
+	private double getWeight(Term term, int length, int titleLength) {
+		if (term.getName().trim().length() < 2) {
+			return 0;
+		}
+
+		String pos = term.natrue().natureStr;
+
+		Double posScore = POS_SCORE.get(pos);
+
+		if (posScore == null) {
+			posScore = 1.0;
+		} else if (posScore == 0) {
+			return 0;
+		}
+
+		if (titleLength > term.getOffe()) {
+			return 5 * posScore;
+		}
+		return (length - term.getOffe()) * posScore / (double) length;
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
+
+import org.ansj.app.crf.pojo.Element;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.tire.domain.SmartForest;
+
+public abstract class Model {
+
+
+
+
+
+	protected Template template = null;
+
+	protected double[][] status = null;
+
+	protected Map<String, Feature> myGrad;
+
+	protected SmartForest<double[][]> smartForest = null;
+
+	public int allFeatureCount = 0;
+
+	private List<Element> leftList = null;
+
+	private List<Element> rightList = null;
+
+	public int end1;
+
+	public int end2;
+
+	
+	private void makeSide(int left, int right) throws IOException {
+		
+
+		leftList = new ArrayList<>(Math.abs(left));
+		for (int i = left; i < 0; i++) {
+			leftList.add(new Element((char) ('B' + i)));
+		}
+
+		rightList = new ArrayList<>(right);
+		for (int i = 1; i < right + 1; i++) {
+			rightList.add(new Element((char) ('B' + i)));
+		}
+	}
+
+	
+	public void writeModel(String path) throws IOException {
+		
+
+		System.out.println("compute ok now to save model!");
+		
+		ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(new GZIPOutputStream(new FileOutputStream(path))));
+
+		
+		oos.writeObject(template);
+		
+		oos.writeObject(status);
+		
+		oos.writeInt(myGrad.size());
+		double[] ds;
+		for (Entry<String, Feature> entry : myGrad.entrySet()) {
+			oos.writeUTF(entry.getKey());
+			for (int i = 0; i < template.ft.length; i++) {
+				ds = entry.getValue().w[i];
+				for (int j = 0; j < ds.length; j++) {
+					oos.writeByte(j);
+					oos.writeFloat((float) ds[j]);
+				}
+				oos.writeByte(-1);
+			}
+		}
+
+		oos.flush();
+		oos.close();
+	}
+
+	
+	public static Model loadModel(String modelPath) throws Exception {
+		return loadModel(new FileInputStream(modelPath));
+
+	}
+
+	public static Model loadModel(InputStream modelStream) throws Exception {
+		ObjectInputStream ois = null;
+		try {
+			ois = new ObjectInputStream(new BufferedInputStream(new GZIPInputStream(modelStream)));
+
+			Model model = new Model() {
+
+				@Override
+				public void writeModel(String path) throws IOException {
+					throw new RuntimeException("you can not to calculate ,this model only use by cut ");
+				}
+
+			};
+
+			model.template = (Template) ois.readObject();
+
+			model.makeSide(model.template.left, model.template.right);
+
+			int tagNum = model.template.tagNum;
+
+			int featureNum = model.template.ft.length;
+
+			model.smartForest = new SmartForest<>(0.8);
+
+			model.status = (double[][]) ois.readObject();
+
+			
+			double[][] w;
+			String key;
+			int b = 0;
+			int featureCount = ois.readInt();
+			for (int i = 0; i < featureCount; i++) {
+				key = ois.readUTF();
+				w = new double[featureNum][0];
+				for (int j = 0; j < featureNum; j++) {
+					while ((b = ois.readByte()) != -1) {
+						if (w[j].length == 0) {
+							w[j] = new double[tagNum];
+						}
+						w[j][b] = ois.readFloat();
+					}
+				}
+				model.smartForest.addBranch(key, w);
+			}
+
+			return model;
+		} finally {
+			if (ois != null) {
+				ois.close();
+			}
+		}
+	}
+
+	public double[] getFeature(int featureIndex, char... chars) {
+		
+		SmartForest<double[][]> sf = smartForest;
+		sf = sf.getBranch(chars);
+		if (sf == null || sf.getParam() == null) {
+			return null;
+		}
+		return sf.getParam()[featureIndex];
+	}
+
+	
+	public double tagRate(int s1, int s2) {
+		return status[s1][s2];
+	}
+}
+<code block>
+package org.ansj.app.crf;
+
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map.Entry;
+import java.util.Set;
+
+import org.ansj.app.crf.pojo.Element;
+import org.ansj.app.crf.pojo.Template;
+import org.ansj.util.MatrixUtil;
+import org.ansj.util.WordAlert;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+
+public class SplitWord {
+
+	private Model model = null;
+
+	private int[] tagConver = null;
+
+	private int[] revTagConver = null;
+
+	
+	public SplitWord(Model model) {
+		this.model = model;
+		tagConver = new int[model.template.tagNum];
+		revTagConver = new int[model.template.tagNum];
+		Set<Entry<String, Integer>> entrySet = model.template.statusMap.entrySet();
+
+		
+		for (Entry<String, Integer> entry : entrySet) {
+			if ("S".equals(entry.getKey())) {
+				tagConver[entry.getValue()] = 0;
+				revTagConver[0] = entry.getValue();
+			} else if ("B".equals(entry.getKey())) {
+				tagConver[entry.getValue()] = 1;
+				revTagConver[1] = entry.getValue();
+			} else if ("M".equals(entry.getKey())) {
+				tagConver[entry.getValue()] = 2;
+				revTagConver[2] = entry.getValue();
+			} else if ("E".equals(entry.getKey())) {
+				tagConver[entry.getValue()] = 3;
+				revTagConver[3] = entry.getValue();
+			}
+		}
+
+		model.end1 = model.template.statusMap.get("S");
+		model.end2 = model.template.statusMap.get("E");
+
+	};
+
+	public List<String> cut(char[] chars) {
+		return cut(new String(chars));
+	}
+
+	public List<String> cut(String line) {
+
+		if (StringUtil.isBlank(line)) {
+			return Collections.emptyList();
+		}
+
+		List<Element> elements = vterbi(line);
+
+		LinkedList<String> result = new LinkedList<String>();
+
+		Element e = null;
+		int begin = 0;
+		int end = 0;
+
+		for (int i = 0; i < elements.size(); i++) {
+			e = elements.get(i);
+			switch (fixTag(e.getTag())) {
+			case 0:
+				end += e.len;
+				result.add(line.substring(begin, end));
+				begin = end;
+				break;
+			case 1:
+				end += e.len;
+				while (fixTag((e = elements.get(++i)).getTag()) != 3) {
+					end += e.len;
+				}
+				end += e.len;
+				result.add(line.substring(begin, end));
+				begin = end;
+			default:
+				break;
+			}
+		}
+		return result;
+	}
+
+	private List<Element> vterbi(String line) {
+		List<Element> elements = WordAlert.str2Elements(line);
+
+		int length = elements.size();
+		if (length == 0) { 
+			return elements;
+		}
+		if (length == 1) {
+			elements.get(0).updateTag(revTagConver[0]);
+			return elements;
+		}
+
+		
+		for (int i = 0; i < length; i++) {
+			computeTagScore(elements, i);
+		}
+
+		
+		elements.get(0).tagScore[revTagConver[2]] = -1000;
+		elements.get(0).tagScore[revTagConver[3]] = -1000;
+		for (int i = 1; i < length; i++) {
+			elements.get(i).maxFrom(model, elements.get(i - 1));
+		}
+
+		
+		Element next = elements.get(elements.size() - 1);
+		Element self = null;
+		int maxStatus = next.tagScore[model.end1] > next.tagScore[model.end2] ? model.end1 : model.end2;
+		next.updateTag(maxStatus);
+		maxStatus = next.from[maxStatus];
+		
+		for (int i = elements.size() - 2; i > 0; i--) {
+			self = elements.get(i);
+			self.updateTag(maxStatus);
+			maxStatus = self.from[self.getTag()];
+			next = self;
+		}
+		elements.get(0).updateTag(maxStatus);
+		return elements;
+
+	}
+
+	private void computeTagScore(List<Element> elements, int index) {
+		double[] tagScore = new double[model.template.tagNum];
+
+		Template t = model.template;
+		char[] chars = null;
+		for (int i = 0; i < t.ft.length; i++) {
+			chars = new char[t.ft[i].length];
+			for (int j = 0; j < chars.length; j++) {
+				chars[j] = getElement(elements, index + t.ft[i][j]).name;
+			}
+			MatrixUtil.dot(tagScore, model.getFeature(i, chars));
+		}
+		elements.get(index).tagScore = tagScore;
+	}
+
+	private Element getElement(List<Element> elements, int i) {
+		
+		if (i < 0) {
+			return new Element((char) ('B' + i));
+		} else if (i >= elements.size()) {
+			return new Element((char) ('B' + i - elements.size() + 1));
+		} else {
+			return elements.get(i);
+		}
+	}
+
+	public int fixTag(int tag) {
+		return tagConver[tag];
+	}
+
+	
+	public double cohesion(String word) {
+
+		if (word.length() == 0) {
+			return Integer.MIN_VALUE;
+		}
+
+		List<Element> elements = WordAlert.str2Elements(word);
+
+		for (int i = 0; i < elements.size(); i++) {
+			computeTagScore(elements, i);
+		}
+
+		double value = elements.get(0).tagScore[revTagConver[1]];
+
+		int len = elements.size() - 1;
+
+		for (int i = 1; i < len; i++) {
+			value += elements.get(i).tagScore[revTagConver[2]];
+		}
+
+		value += elements.get(len).tagScore[revTagConver[3]];
+		
+		if(value<0){
+			return 1; 
+		}else{
+			value += 1 ;
+		}
+
+		return value;
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf.pojo;
+
+import org.ansj.app.crf.Model;
+
+public class Element {
+	private static final double MIN = Integer.MIN_VALUE;
+
+	public char name;
+	private int tag = -1;
+	public int len = 1;
+	public String nature;
+
+	public double[] tagScore;
+
+	public int[] from;
+
+	public Element(char name) {
+		this.name = name;
+	}
+
+	public Element(Character name, int tag) {
+		this.name = name;
+		this.tag = tag;
+	}
+
+	public int getTag() {
+		return tag;
+	}
+
+	public Element updateTag(int tag) {
+		this.tag = tag;
+		return this;
+	}
+
+	public Element updateNature(String nature) {
+		this.nature = nature;
+		return this;
+	}
+
+	public void len() {
+		len++;
+	}
+
+	@Override
+	public String toString() {
+		return name + "/" + tag;
+	}
+
+	public void maxFrom(Model model, Element element) {
+		if (from == null) {
+			from = new int[this.tagScore.length];
+		}
+		double[] pTagScore = element.tagScore;
+		double rate = 0;
+		for (int i = 0; i < this.tagScore.length; i++) {
+			double maxValue = MIN;
+			for (int j = 0; j < pTagScore.length; j++) {
+				if ((rate = model.tagRate(j, i)) == Double.MIN_VALUE) {
+					continue;
+				}
+				double value = (pTagScore[j] + tagScore[i]) + rate;
+				if (value > maxValue) {
+					maxValue = value;
+					from[i] = j;
+				}
+			}
+			tagScore[i] = maxValue;
+		}
+	}
+
+	public static char getTagName(int tag) {
+		
+		switch (tag) {
+		case 0:
+			return 'S';
+		case 1:
+			return 'B';
+		case 2:
+			return 'M';
+		case 3:
+			return 'E';
+		default:
+			return '?';
+		}
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf.pojo;
+
+import java.util.Arrays;
+
+public class Feature {
+
+	public double value = 0;
+
+	public double[][] w;
+
+	public int tagNum;
+
+	public Feature(int featureNum, int tagNum) {
+		w = new double[featureNum][0];
+		this.tagNum = tagNum;
+	}
+
+	public Feature(double[][] w) {
+		this.w = w;
+	}
+
+	public void update(int fIndex, int sta, double step) {
+		value += step;
+		if (w[fIndex].length == 0) {
+			w[fIndex] = new double[tagNum];
+		}
+		w[fIndex][sta] += step;
+	};
+
+	@Override
+	public String toString() {
+		
+		StringBuilder sb = new StringBuilder();
+		for (double[] ints : w) {
+			sb.append(Arrays.toString(ints));
+			sb.append("\n");
+		}
+		return sb.toString();
+	}
+
+}
+<code block>
+package org.ansj.app.crf.pojo;
+
+public class TempFeature {
+	public int id;
+	public int featureId;
+	public String name;
+
+	public TempFeature(String str, int tagNum) {
+		String[] split = str.split(" ");
+		this.id = Integer.parseInt(split[0]) / tagNum;
+		int splitIndex = split[1].indexOf(":");
+		this.featureId = Integer.parseInt(split[1].substring(1, splitIndex));
+		this.name = split[1].substring(splitIndex + 1).replace("/", "");
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf.pojo;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
+import org.nlpcn.commons.lang.util.StringUtil;
+
+
+public class Template implements Serializable {
+
+	private static final long serialVersionUID = 8265350854930361325L;
+
+	public int left = 2;
+
+	public int right = 2;
+
+	public int[][] ft = { { -2 }, { -1 }, { 0 }, { 1 }, { 2 }, { -2, -1 }, { -1, 0 }, { 0, 1 }, { 1, 2 }, { -1, 1 } };
+
+	public int tagNum;
+
+	public Map<String, Integer> statusMap;
+
+	
+	public static Template parse(String templateStr) throws IOException {
+		
+		return parse(new BufferedReader(new StringReader(templateStr)));
+	}
+
+	public static Template parse(BufferedReader br) throws IOException {
+		Template t = new Template();
+
+		String temp = null;
+
+		List<String> lists = new ArrayList<String>();
+		while ((temp = br.readLine()) != null) {
+			if (StringUtil.isBlank(temp) || temp.startsWith("#")) {
+				continue;
+			}
+			lists.add(temp);
+		}
+		br.close();
+
+		t.ft = new int[lists.size() - 1][0];
+		for (int i = 0; i < lists.size() - 1; i++) {
+			temp = lists.get(i);
+			String[] split = temp.split(":");
+
+			int index = Integer.parseInt(split[0].substring(1));
+
+			split = split[1].split(" ");
+			int[] ints = new int[split.length];
+
+			for (int j = 0; j < ints.length; j++) {
+				ints[j] = Integer.parseInt(split[j].substring(split[j].indexOf("[") + 1, split[j].indexOf(",")));
+			}
+			t.ft[index] = ints;
+		}
+		t.left = 0;
+		t.right = 0;
+		
+		for (int[] ints : t.ft) {
+			for (int j : ints) {
+				t.left = t.left > j ? j : t.left;
+				t.right = t.right < j ? j : t.right;
+			}
+		}
+		t.left = t.left;
+
+		return t;
+	}
+
+	@Override
+	public String toString() {
+		StringBuilder sb = new StringBuilder();
+		sb.append("left:" + left);
+		sb.append("\t");
+		sb.append("rightr:" + right);
+		sb.append("\n");
+		for (int[] ints : ft) {
+			sb.append(Arrays.toString(ints));
+			sb.append("\n");
+		}
+		return sb.toString();
+	}
+
+}
+
+<code block>
+package org.ansj.app.crf.model;
+
+import java.io.BufferedReader;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.ansj.app.crf.Model;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.TempFeature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.util.IOUtil;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+public class CRFModel extends Model {
+
+	
+	private void parseFile(String path) throws Exception {
+		
+		BufferedReader reader = IOUtil.getReader(path, IOUtil.UTF8);
+
+		String temp = null;
+
+		reader.readLine();
+		reader.readLine();
+
+		int maxId = Integer.parseInt(reader.readLine().split(":")[1].trim());
+		
+
+		reader.readLine();
+		reader.readLine(); 
+
+		Map<String, Integer> statusMap = new HashMap<String, Integer>();
+
+		
+		int tagNum = 0;
+		while ((temp = reader.readLine()) != null) {
+			if (StringUtil.isBlank(temp)) {
+				break;
+			}
+			statusMap.put(temp, tagNum);
+			tagNum++;
+		}
+
+		status = new double[tagNum][tagNum];
+
+		
+		StringBuilder sb = new StringBuilder();
+		while ((temp = reader.readLine()) != null) {
+			if (StringUtil.isBlank(temp)) {
+				break;
+			}
+			sb.append(temp + "\n");
+		}
+
+		this.template = Template.parse(sb.toString());
+
+		this.template.tagNum = tagNum;
+
+		this.template.statusMap = statusMap;
+
+		int featureNum = template.ft.length;
+
+		TempFeature[] tempFeatureArr = new TempFeature[maxId / tagNum];
+
+		String[] split = reader.readLine().split(" ");
+
+		int bIndex = Integer.parseInt(split[0]) / tagNum;
+
+		TempFeature tf = null;
+
+		while ((temp = reader.readLine()) != null) {
+			if (StringUtil.isBlank(temp)) {
+				break;
+			}
+			tf = new TempFeature(temp, tagNum);
+			tempFeatureArr[tf.id] = tf;
+		}
+
+		myGrad = new HashMap<String, Feature>();
+
+		Feature feature = null;
+		
+		for (int i = 0; i < tempFeatureArr.length; i++) {
+
+			
+			if (i == bIndex) {
+				for (int j = 0; j < tagNum; j++) {
+					for (int j2 = 0; j2 < tagNum; j2++) {
+						status[j][j2] = Double.parseDouble(reader.readLine());
+					}
+				}
+				i += tagNum - 1;
+				continue;
+			}
+			tf = tempFeatureArr[i];
+			feature = myGrad.get(tf.name);
+			if (feature == null) {
+				feature = new Feature(featureNum, tagNum);
+				myGrad.put(tf.name, feature);
+			}
+			for (int j = 0; j < tagNum; j++) {
+				double f = Double.parseDouble(reader.readLine());
+				feature.update(tf.featureId, j, f);
+			}
+		}
+	}
+
+	
+	public static Model parseFileToModel(String modelPath) throws Exception {
+		CRFModel model = new CRFModel();
+		model.parseFile(modelPath);
+		return model;
+	}
+}
+
+<code block>
+package org.ansj.app.crf.model;
+
+import java.io.BufferedReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.ansj.app.crf.Model;
+import org.ansj.app.crf.pojo.Feature;
+import org.ansj.app.crf.pojo.Template;
+import org.nlpcn.commons.lang.util.IOUtil;
+import org.nlpcn.commons.lang.util.StringUtil;
+
+public class WapitiCRFModel extends Model {
+
+	Map<String, Integer> statusMap = null;
+
+	private int tagNum = 0;
+
+	private int maxSize = 0;
+
+	private void parseFile(String path, String templatePath) throws Exception {
+		
+		BufferedReader reader = IOUtil.getReader(path, IOUtil.UTF8);
+
+		statusMap = new HashMap<String, Integer>();
+
+		
+		String content = IOUtil.getContent(IOUtil.getReader(templatePath, IOUtil.UTF8));
+
+		this.template = Template.parse(content);
+
+		myGrad = new HashMap<String, Feature>();
+
+		String temp = null;
+
+		List<String> statusLines = new ArrayList<String>();
+
+		
+		while ((temp = reader.readLine()) != null) {
+			if (StringUtil.isNotBlank(temp) && temp.charAt(0) == 'b') {
+				statusLines.add(temp);
+			}
+		}
+
+		for (String str : statusLines) {
+			String[] split = str.split("\t");
+			addStatus(split[1]);
+			addStatus(split[2]);
+		}
+		this.template.tagNum = tagNum;
+		status = new double[tagNum][tagNum];
+		for (String str : statusLines) {
+			String[] split = str.split("\t");
+			status[statusMap.get(split[1])][statusMap.get(split[2])] = Double.parseDouble(split[3]);
+		}
+		
+		
+		status[statusMap.get("S")][statusMap.get("E")] = Double.MIN_VALUE ;
+		status[statusMap.get("S")][statusMap.get("M")] = Double.MIN_VALUE ;
+		
+		status[statusMap.get("B")][statusMap.get("B")] = Double.MIN_VALUE ;
+		status[statusMap.get("B")][statusMap.get("S")] = Double.MIN_VALUE ;
+		
+		status[statusMap.get("M")][statusMap.get("S")] = Double.MIN_VALUE ;
+		status[statusMap.get("M")][statusMap.get("B")] = Double.MIN_VALUE ;
+		
+		status[statusMap.get("E")][statusMap.get("M")] = Double.MIN_VALUE ;
+		status[statusMap.get("E")][statusMap.get("E")] = Double.MIN_VALUE ;
+		
+		
+		
+		IOUtil.close(reader);
+
+		
+		reader = IOUtil.getReader(path, IOUtil.UTF8);
+		while ((temp = reader.readLine()) != null) {
+			if (StringUtil.isNotBlank(temp) && temp.charAt(0) == 'u') {
+				parseGrad(temp, template.ft.length);
+			}
+			
+			if (maxSize > 0 && myGrad.size() > maxSize) {
+				break;
+			}
+		}
+		IOUtil.close(reader);
+
+		this.template.statusMap = statusMap;
+	}
+
+	private void parseGrad(String temp, int featureNum) {
+
+		String[] split = temp.split("\t");
+
+		int mIndex = split[0].indexOf(":");
+
+		String name = fixName(split[0].substring(mIndex + 1));
+
+		int fIndex = Integer.parseInt(split[0].substring(1, mIndex));
+		int sta = statusMap.get(split[2]);
+		double step = Double.parseDouble(split[3]);
+
+		Feature feature = myGrad.get(name);
+		if (feature == null) {
+			feature = new Feature(featureNum, tagNum);
+			myGrad.put(name, feature);
+		}
+		feature.update(fIndex, sta, step);
+	}
+
+	private String fixName(String substring) {
+		
+		String[] split = substring.split(" ");
+		StringBuffer sb = new StringBuffer();
+		for (String string : split) {
+			if (string.startsWith("_x")) {
+				string = String.valueOf((char) ('B' + Integer.parseInt(string.substring(2))));
+			}
+			sb.append(string);
+		}
+
+		return sb.toString();
+	}
+
+	public void addStatus(String sta) {
+		if (statusMap.containsKey(sta)) {
+			return;
+		}
+		statusMap.put(sta, tagNum);
+		tagNum++;
+	}
+
+	
+	public static Model parseFileToModel(String modelPath, String templatePath, int maxSzie) throws Exception {
+		WapitiCRFModel model = new WapitiCRFModel();
+		model.maxSize = maxSzie;
+		model.parseFile(modelPath, templatePath);
+		return model;
+	}
+
+}

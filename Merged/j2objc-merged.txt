@@ -1,0 +1,5215 @@
+
+package com.google.j2objc.java8;
+
+import junit.framework.TestCase;
+
+interface FunInt<T> {
+  T apply(int x);
+}
+
+interface FunInt4<T> {
+  T apply(int x, I j, String s, Object o);
+}
+
+interface Call<T> {
+  T call();
+}
+
+class I {
+  String s = "...";
+  I() { }
+  I(int x) {
+    s = "" + x;
+  }
+  I(int x, I j, String s, Object o) {
+    this.s = s;
+  }
+  static String hello() {
+    return "Hello";
+  }
+  String world() {
+    return "World";
+  }
+  String getS() {
+    return s;
+  }
+}
+
+final class J {
+  int x = 41;
+  J() { }
+  J(int x) {
+    this.x = x;
+  }
+  J(int x, I j, String s, Object o) {
+    this.x = x;
+  }
+  static String hello() {
+    return "Hello";
+  }
+  String world() {
+    return "World";
+  }
+  int getX() {
+    return x;
+  }
+}
+
+
+public class CreationReferenceTest extends TestCase {
+  public CreationReferenceTest() {}
+
+  public void testBasicReferences() throws Exception {
+    Call<I> iInit = I::new;
+    FunInt<I> iInit2 = I::new;
+    FunInt4<I> iInit3 = I::new;
+    I myI = iInit.call();
+    I myI2 = iInit2.apply(42);
+    I myI3 = iInit3.apply(0, myI, "43", "");
+    assertEquals("World", myI.world());
+    assertEquals("...", myI.getS());
+    assertEquals("42", myI2.getS());
+    assertEquals("43", myI3.getS());
+    Call<J> jInit = J::new;
+    FunInt<J> jInit2 = J::new;
+    FunInt4<J> jInit3 = J::new;
+    J myJ = jInit.call();
+    J myJ2 = jInit2.apply(42);
+    J myJ3 = jInit3.apply(43, myI, "", "");
+    assertEquals("World", myJ.world());
+    assertEquals(41, myJ.getX());
+    assertEquals(42, myJ2.getX());
+    assertEquals(43, myJ3.getX());
+  }
+}
+
+<code block>
+
+package com.google.j2objc.java8;
+
+import junit.framework.Test;
+import junit.framework.TestSuite;
+
+
+public class SmallTests {
+  private static final Class<?>[] smallTestClasses = new Class[] {
+    CreationReferenceTest.class,
+    LambdaTest.class
+  };
+
+  public static Test suite() {
+    return new TestSuite(smallTestClasses);
+  }
+}
+
+<code block>
+
+package com.google.devtools.j2objc.ast;
+
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+
+import java.util.List;
+
+
+public abstract class MethodReference extends Expression {
+
+  protected ITypeBinding typeBinding;
+  protected IMethodBinding methodBinding;
+  protected ChildList<Type> typeArguments = ChildList.create(Type.class, this);
+
+  public MethodReference(org.eclipse.jdt.core.dom.MethodReference jdtNode) {
+    super(jdtNode);
+    typeBinding = jdtNode.resolveTypeBinding();
+    methodBinding = jdtNode.resolveMethodBinding();
+    for (Object x : jdtNode.typeArguments()) {
+      typeArguments.add((Type) TreeConverter.convert(x));
+    }
+  }
+
+  public MethodReference(MethodReference other) {
+    super(other);
+    typeBinding = other.getTypeBinding();
+    methodBinding = other.getMethodBinding();
+    typeArguments.copyFrom(other.typeArguments());
+  }
+
+  @Override
+  public ITypeBinding getTypeBinding() {
+    return typeBinding;
+  }
+
+  public IMethodBinding getMethodBinding() {
+    return methodBinding;
+  }
+
+  public List<Type> typeArguments() {
+    return typeArguments;
+  }
+
+  @Override
+  public abstract MethodReference copy();
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.gen;
+
+import com.google.common.base.CharMatcher;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.ast.Annotation;
+import com.google.devtools.j2objc.ast.AnonymousClassDeclaration;
+import com.google.devtools.j2objc.ast.ArrayAccess;
+import com.google.devtools.j2objc.ast.ArrayCreation;
+import com.google.devtools.j2objc.ast.ArrayInitializer;
+import com.google.devtools.j2objc.ast.ArrayType;
+import com.google.devtools.j2objc.ast.AssertStatement;
+import com.google.devtools.j2objc.ast.Assignment;
+import com.google.devtools.j2objc.ast.Block;
+import com.google.devtools.j2objc.ast.BooleanLiteral;
+import com.google.devtools.j2objc.ast.BreakStatement;
+import com.google.devtools.j2objc.ast.CStringLiteral;
+import com.google.devtools.j2objc.ast.CastExpression;
+import com.google.devtools.j2objc.ast.CatchClause;
+import com.google.devtools.j2objc.ast.CharacterLiteral;
+import com.google.devtools.j2objc.ast.ClassInstanceCreation;
+import com.google.devtools.j2objc.ast.CommaExpression;
+import com.google.devtools.j2objc.ast.ConditionalExpression;
+import com.google.devtools.j2objc.ast.ConstructorInvocation;
+import com.google.devtools.j2objc.ast.ContinueStatement;
+import com.google.devtools.j2objc.ast.CreationReference;
+import com.google.devtools.j2objc.ast.Dimension;
+import com.google.devtools.j2objc.ast.DoStatement;
+import com.google.devtools.j2objc.ast.EmptyStatement;
+import com.google.devtools.j2objc.ast.EnhancedForStatement;
+import com.google.devtools.j2objc.ast.Expression;
+import com.google.devtools.j2objc.ast.ExpressionMethodReference;
+import com.google.devtools.j2objc.ast.ExpressionStatement;
+import com.google.devtools.j2objc.ast.FieldAccess;
+import com.google.devtools.j2objc.ast.ForStatement;
+import com.google.devtools.j2objc.ast.FunctionInvocation;
+import com.google.devtools.j2objc.ast.IfStatement;
+import com.google.devtools.j2objc.ast.InfixExpression;
+import com.google.devtools.j2objc.ast.Initializer;
+import com.google.devtools.j2objc.ast.InstanceofExpression;
+import com.google.devtools.j2objc.ast.IntersectionType;
+import com.google.devtools.j2objc.ast.LabeledStatement;
+import com.google.devtools.j2objc.ast.LambdaExpression;
+import com.google.devtools.j2objc.ast.MarkerAnnotation;
+import com.google.devtools.j2objc.ast.MemberValuePair;
+import com.google.devtools.j2objc.ast.MethodInvocation;
+import com.google.devtools.j2objc.ast.Name;
+import com.google.devtools.j2objc.ast.NameQualifiedType;
+import com.google.devtools.j2objc.ast.NativeExpression;
+import com.google.devtools.j2objc.ast.NativeStatement;
+import com.google.devtools.j2objc.ast.NormalAnnotation;
+import com.google.devtools.j2objc.ast.NullLiteral;
+import com.google.devtools.j2objc.ast.NumberLiteral;
+import com.google.devtools.j2objc.ast.ParenthesizedExpression;
+import com.google.devtools.j2objc.ast.PostfixExpression;
+import com.google.devtools.j2objc.ast.PrefixExpression;
+import com.google.devtools.j2objc.ast.PrimitiveType;
+import com.google.devtools.j2objc.ast.QualifiedName;
+import com.google.devtools.j2objc.ast.QualifiedType;
+import com.google.devtools.j2objc.ast.ReturnStatement;
+import com.google.devtools.j2objc.ast.SimpleName;
+import com.google.devtools.j2objc.ast.SimpleType;
+import com.google.devtools.j2objc.ast.SingleMemberAnnotation;
+import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
+import com.google.devtools.j2objc.ast.Statement;
+import com.google.devtools.j2objc.ast.StringLiteral;
+import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
+import com.google.devtools.j2objc.ast.SuperFieldAccess;
+import com.google.devtools.j2objc.ast.SuperMethodInvocation;
+import com.google.devtools.j2objc.ast.SuperMethodReference;
+import com.google.devtools.j2objc.ast.SwitchCase;
+import com.google.devtools.j2objc.ast.SwitchStatement;
+import com.google.devtools.j2objc.ast.SynchronizedStatement;
+import com.google.devtools.j2objc.ast.ThisExpression;
+import com.google.devtools.j2objc.ast.ThrowStatement;
+import com.google.devtools.j2objc.ast.TreeNode;
+import com.google.devtools.j2objc.ast.TreeUtil;
+import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.ast.TryStatement;
+import com.google.devtools.j2objc.ast.Type;
+import com.google.devtools.j2objc.ast.TypeLiteral;
+import com.google.devtools.j2objc.ast.TypeMethodReference;
+import com.google.devtools.j2objc.ast.UnionType;
+import com.google.devtools.j2objc.ast.VariableDeclaration;
+import com.google.devtools.j2objc.ast.VariableDeclarationExpression;
+import com.google.devtools.j2objc.ast.VariableDeclarationFragment;
+import com.google.devtools.j2objc.ast.VariableDeclarationStatement;
+import com.google.devtools.j2objc.ast.WhileStatement;
+import com.google.devtools.j2objc.types.IOSTypeBinding;
+import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.NameTable;
+import com.google.devtools.j2objc.util.UnicodeUtils;
+
+import org.eclipse.jdt.core.dom.IAnnotationBinding;
+import org.eclipse.jdt.core.dom.IBinding;
+import org.eclipse.jdt.core.dom.IMemberValuePairBinding;
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.IVariableBinding;
+
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+
+public class StatementGenerator extends TreeVisitor {
+
+  private final SourceBuilder buffer;
+  private final boolean asFunction;
+  private final boolean useReferenceCounting;
+
+  public static String generate(TreeNode node, boolean asFunction, int currentLine) {
+    StatementGenerator generator = new StatementGenerator(node, asFunction, currentLine);
+    if (node == null) {
+      throw new NullPointerException("cannot generate a null statement");
+    }
+    generator.run(node);
+    return generator.getResult();
+  }
+
+  private StatementGenerator(TreeNode node, boolean asFunction, int currentLine) {
+    buffer = new SourceBuilder(Options.emitLineDirectives(), currentLine);
+    this.asFunction = asFunction;
+    useReferenceCounting = !Options.useARC();
+  }
+
+  private String getResult() {
+    return buffer.toString();
+  }
+
+  private void printMethodInvocationNameAndArgs(String selector, List<Expression> args) {
+    String[] selParts = selector.split(":");
+    if (args.isEmpty()) {
+      assert selParts.length == 1 && !selector.endsWith(":");
+      buffer.append(' ');
+      buffer.append(selector);
+    } else {
+      assert selParts.length == args.size();
+      for (int i = 0; i < args.size(); i++) {
+        buffer.append(' ');
+        buffer.append(selParts[i]);
+        buffer.append(':');
+        args.get(i).accept(this);
+      }
+    }
+  }
+
+  private boolean assertIncompleteJava8Support(TreeNode node) {
+    
+    
+    if (!Options.isJava8Translator()) {
+      assert false : "not implemented yet";
+    }
+    buffer.append(node.toString());
+    return false;
+  }
+
+  @Override
+  public boolean preVisit(TreeNode node) {
+    super.preVisit(node);
+    if (!(node instanceof Block)) {
+      buffer.syncLineNumbers(node);
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(AnonymousClassDeclaration node) {
+    
+    
+    assert node.getBodyDeclarations().size() == 1;
+
+    
+    assert false : "not implemented yet";
+
+    return true;
+  }
+
+  @Override
+  public boolean visit(ArrayAccess node) {
+    throw new AssertionError("ArrayAccess nodes are rewritten by ArrayRewriter.");
+  }
+
+  @Override
+  public boolean visit(ArrayCreation node) {
+    throw new AssertionError("ArrayCreation nodes are rewritten by ArrayRewriter.");
+  }
+
+  @Override
+  public boolean visit(ArrayInitializer node) {
+    ITypeBinding type = node.getTypeBinding();
+    assert type.isArray();
+    ITypeBinding componentType = type.getComponentType();
+    buffer.append(String.format("(%s[]){ ", NameTable.getPrimitiveObjCType(componentType)));
+    for (Iterator<Expression> it = node.getExpressions().iterator(); it.hasNext(); ) {
+      it.next().accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(" }");
+    return false;
+  }
+
+  @Override
+  public boolean visit(ArrayType node) {
+    ITypeBinding binding = typeEnv.mapType(node.getTypeBinding());
+    if (binding instanceof IOSTypeBinding) {
+      buffer.append(binding.getName());
+    } else {
+      node.getComponentType().accept(this);
+      buffer.append("[]");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(AssertStatement node) {
+    buffer.append(asFunction ? "NSCAssert(" : "NSAssert(");
+    node.getExpression().accept(this);
+    buffer.append(", ");
+    if (node.getMessage() != null) {
+      Expression expr = node.getMessage();
+      boolean isString = expr instanceof StringLiteral;
+      if (!isString) {
+        buffer.append('[');
+      }
+      int start = buffer.length();
+      expr.accept(this);
+      int end = buffer.length();
+      
+      
+      String substring = buffer.substring(start, end);
+      substring = substring.replaceAll(",", " J2OBJC_COMMA()");
+      buffer.replace(start, end, substring);
+      if (!isString) {
+        buffer.append(" description]");
+      }
+    } else {
+      int startPos = node.getStartPosition();
+      String assertStatementString =
+          unit.getSource().substring(startPos, startPos + node.getLength());
+      assertStatementString = CharMatcher.WHITESPACE.trimFrom(assertStatementString);
+      assertStatementString = makeQuotedString(assertStatementString);
+      
+      assertStatementString = assertStatementString.replace("%", "%%");
+      
+      
+      buffer.append("@\"" + TreeUtil.getSourceFileName(unit) + ":" + node.getLineNumber()
+          + " condition failed: " + assertStatementString + "\"");
+    }
+    buffer.append(");\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(Assignment node) {
+    node.getLeftHandSide().accept(this);
+    buffer.append(' ');
+    buffer.append(node.getOperator().toString());
+    buffer.append(' ');
+    node.getRightHandSide().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(Block node) {
+    if (node.hasAutoreleasePool()) {
+      buffer.append("{\n@autoreleasepool ");
+    }
+    buffer.append("{\n");
+    printStatements(node.getStatements());
+    buffer.append("}\n");
+    if (node.hasAutoreleasePool()) {
+      buffer.append("}\n");
+    }
+    return false;
+  }
+
+  private void printStatements(List<?> statements) {
+    for (Iterator<?> it = statements.iterator(); it.hasNext(); ) {
+      Statement s = (Statement) it.next();
+      s.accept(this);
+    }
+  }
+
+  @Override
+  public boolean visit(BooleanLiteral node) {
+    buffer.append(node.booleanValue() ? "YES" : "NO");
+    return false;
+  }
+
+  @Override
+  public boolean visit(BreakStatement node) {
+    if (node.getLabel() != null) {
+      
+      buffer.append("goto ");
+      node.getLabel().accept(this);
+    } else {
+      buffer.append("break");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CStringLiteral node) {
+    buffer.append("\"");
+    buffer.append(node.getLiteralValue());
+    buffer.append("\"");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CastExpression node) {
+    ITypeBinding type = node.getType().getTypeBinding();
+    buffer.append("(");
+    buffer.append(nameTable.getSpecificObjCType(type));
+    buffer.append(") ");
+    node.getExpression().accept(this);
+    return false;
+  }
+
+  private void printMultiCatch(CatchClause node, boolean hasResources) {
+    SingleVariableDeclaration exception = node.getException();
+    for (Type exceptionType : ((UnionType) exception.getType()).getTypes()) {
+      buffer.append("@catch (");
+      exceptionType.accept(this);
+      buffer.append(" *");
+      exception.getName().accept(this);
+      buffer.append(") {\n");
+      printMainExceptionStore(hasResources, node);
+      printStatements(node.getBody().getStatements());
+      buffer.append("}\n");
+    }
+  }
+
+  @Override
+  public boolean visit(CharacterLiteral node) {
+    buffer.append(UnicodeUtils.escapeCharLiteral(node.charValue()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(ClassInstanceCreation node) {
+    throw new AssertionError("ClassInstanceCreation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(CommaExpression node) {
+    buffer.append('(');
+    for (Iterator<Expression> it = node.getExpressions().iterator(); it.hasNext(); ) {
+      Expression e = it.next();
+      e.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(')');
+    return false;
+  }
+
+  @Override
+  public boolean visit(ConditionalExpression node) {
+    boolean castNeeded = false;
+    ITypeBinding thenType = node.getThenExpression().getTypeBinding();
+    ITypeBinding elseType = node.getElseExpression().getTypeBinding();
+
+    if (!thenType.equals(elseType)
+        && !(node.getThenExpression() instanceof NullLiteral)
+        && !(node.getElseExpression() instanceof NullLiteral)) {
+      
+      
+      
+      
+      castNeeded = true;
+    }
+
+    node.getExpression().accept(this);
+
+    buffer.append(" ? ");
+    if (castNeeded && thenType.isInterface()) {
+      buffer.append("((id) ");
+    }
+    node.getThenExpression().accept(this);
+    if (castNeeded && thenType.isInterface()) {
+      buffer.append(')');
+    }
+
+    buffer.append(" : ");
+    if (castNeeded && elseType.isInterface()) {
+      buffer.append("((id) ");
+    }
+    node.getElseExpression().accept(this);
+    if (castNeeded && elseType.isInterface()) {
+      buffer.append(')');
+    }
+
+    return false;
+  }
+
+  @Override
+  public boolean visit(ConstructorInvocation node) {
+    throw new AssertionError("ConstructorInvocation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(ContinueStatement node) {
+    if (node.getLabel() != null) {
+      
+      buffer.append("goto ");
+      node.getLabel().accept(this);
+    } else {
+      buffer.append("continue");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CreationReference node) {
+    
+    assert Options
+        .isJava8Translator() : "CreationReference in translator with -source less than 8.";
+    ITypeBinding functionalTypeBinding = node.getTypeBinding();
+    ITypeBinding returnType = node.getType().getTypeBinding();
+    printCreationReferenceCall(returnType, functionalTypeBinding, node.getMethodBinding());
+    return false;
+  }
+
+  
+  public void printCreationReferenceCall(ITypeBinding returnType,
+      ITypeBinding functionalTypeBinding, IMethodBinding methodBinding) {
+    String functionalClassName = nameTable.getFullName(functionalTypeBinding);
+    String newClassName = nameTable.getFullFunctionName(methodBinding);
+    printLambdaCallWithoutBlocks(functionalTypeBinding.getFunctionalInterfaceMethod(),
+        functionalClassName, newClassName, methodBinding, false);
+    buffer.append('^');
+    buffer.append(nameTable.getSpecificObjCType(returnType));
+    
+    buffer.append("(id _self");
+    char var = 'a';
+    for (ITypeBinding t : methodBinding.getParameterTypes()) {
+      buffer.append(", ");
+      buffer.append(nameTable.getSpecificObjCType(t));
+      buffer.append(' ');
+      buffer.append(var++);
+    }
+    buffer.append(") {\n return ");
+    buffer.append(nameTable.getAllocatingConstructorName(methodBinding));
+    buffer.append("(");
+    var = 'a';
+    boolean delimiterFlag = false;
+    for (int i = 0; i < methodBinding.getParameterTypes().length; i++) {
+      if (delimiterFlag) {
+        buffer.append(", ");
+      } else {
+        delimiterFlag = true;
+      }
+      buffer.append(var++);
+    }
+    buffer.append(");\n}");
+    buffer.append(")");
+  }
+
+  @Override
+  public boolean visit(Dimension node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(DoStatement node) {
+    buffer.append("do ");
+    node.getBody().accept(this);
+    buffer.append(" while (");
+    node.getExpression().accept(this);
+    buffer.append(");\n");
+    return false;
+  }
+
+
+  @Override
+  public boolean visit(EmptyStatement node) {
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(EnhancedForStatement node) {
+    buffer.append("for (");
+    node.getParameter().accept(this);
+    buffer.append(" in ");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ExpressionMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(ExpressionStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding type = expression.getTypeBinding();
+    if (!type.isPrimitive() && Options.useARC()
+        && (expression instanceof MethodInvocation
+            || expression instanceof SuperMethodInvocation
+            || expression instanceof FunctionInvocation)) {
+      
+      buffer.append("(void) ");
+    }
+    expression.accept(this);
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(FieldAccess node) {
+    node.getExpression().accept(this);
+    buffer.append("->");
+    node.getName().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ForStatement node) {
+    buffer.append("for (");
+    for (Iterator<Expression> it = node.getInitializers().iterator(); it.hasNext(); ) {
+      Expression next = it.next();
+      next.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append("; ");
+    if (node.getExpression() != null) {
+      node.getExpression().accept(this);
+    }
+    buffer.append("; ");
+    for (Iterator<Expression> it = node.getUpdaters().iterator(); it.hasNext(); ) {
+      it.next().accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(FunctionInvocation node) {
+    buffer.append(node.getName());
+    buffer.append('(');
+    for (Iterator<Expression> iter = node.getArguments().iterator(); iter.hasNext(); ) {
+      iter.next().accept(this);
+      if (iter.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(')');
+    return false;
+  }
+
+  @Override
+  public boolean visit(IfStatement node) {
+    buffer.append("if (");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getThenStatement().accept(this);
+    if (node.getElseStatement() != null) {
+      buffer.append(" else ");
+      node.getElseStatement().accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(InfixExpression node) {
+    InfixExpression.Operator op = node.getOperator();
+    List<Expression> operands = node.getOperands();
+    assert operands.size() >= 2;
+    if ((op.equals(InfixExpression.Operator.EQUALS)
+        || op.equals(InfixExpression.Operator.NOT_EQUALS))) {
+      Expression lhs = operands.get(0);
+      Expression rhs = operands.get(1);
+      if (lhs instanceof StringLiteral || rhs instanceof StringLiteral) {
+        if (!(lhs instanceof StringLiteral)) {
+          
+          lhs = operands.get(1);
+          rhs = operands.get(0);
+        }
+        buffer.append(op.equals(InfixExpression.Operator.NOT_EQUALS) ? "![" : "[");
+        lhs.accept(this);
+        buffer.append(" isEqual:");
+        rhs.accept(this);
+        buffer.append("]");
+        return false;
+      }
+    }
+    String opStr = ' ' + op.toString() + ' ';
+    boolean isFirst = true;
+    for (Expression operand : operands) {
+      if (!isFirst) {
+        buffer.append(opStr);
+      }
+      isFirst = false;
+      operand.accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(InstanceofExpression node) {
+    ITypeBinding rightBinding = node.getRightOperand().getTypeBinding();
+    if (rightBinding.isInterface()) {
+      
+      buffer.append(String.format("[%s_class_() isInstance:", nameTable.getFullName(rightBinding)));
+      node.getLeftOperand().accept(this);
+      buffer.append(']');
+    } else {
+      buffer.append('[');
+      node.getLeftOperand().accept(this);
+      buffer.append(" isKindOfClass:[");
+      node.getRightOperand().accept(this);
+      buffer.append(" class]]");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(IntersectionType node) {
+    throw new AssertionError(
+        "Intersection types should only occur in a cast expression,"
+        + " and are handled by CastResolver");
+  }
+
+  @Override
+  public boolean visit(LabeledStatement node) {
+    node.getLabel().accept(this);
+    buffer.append(": ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(LambdaExpression node) {
+    
+    assert Options.isJava8Translator() :
+      "Lambda expression in translator with -source less than 8.";
+    IMethodBinding functionalInterface = node.getFunctionalInterfaceMethod();
+    printLambdaCall(functionalInterface, node.functionalTypeBinding(), node.getMethodBinding(),
+        node.getParameters(), node.isCapturing());
+    node.getBody().accept(this);
+    buffer.append(")");
+    return false;
+  }
+
+  
+  public void printBlockCallWrapper(IMethodBinding binding) {
+    buffer.append('^');
+    buffer.append(nameTable.getSpecificObjCType(binding.getReturnType()));
+    
+    buffer.append("(id _self");
+    char var = 'a';
+    for (ITypeBinding t : binding.getParameterTypes()) {
+      buffer.append(", ");
+      buffer.append(nameTable.getSpecificObjCType(t));
+      buffer.append(' ');
+      buffer.append(var++);
+    }
+    buffer.append(") {\n id (^block)() = objc_getAssociatedObject(_self, (void *) 0);\n");
+    if (!BindingUtil.isVoid(binding.getReturnType())) {
+      buffer.append("return ");
+    }
+    buffer.append("block(_self");
+    var = 'a';
+    for (int i = 0; i < binding.getParameterTypes().length; i++) {
+      buffer.append(", ");
+      buffer.append(var++);
+    }
+    buffer.append(");\n},\n");
+  }
+
+  
+  public void printLambdaCall(IMethodBinding functionalInterface,
+      ITypeBinding functionalTypeBinding, IMethodBinding methodBinding,
+      List<VariableDeclaration> parameters, boolean isCapturing) {
+    String functionalClassName = nameTable.getFullName(functionalTypeBinding);
+    String createdClassName = nameTable.getFullLambdaName(methodBinding);
+    printLambdaCallWithoutBlocks(functionalInterface, functionalClassName, createdClassName,
+        methodBinding, isCapturing);
+    printLambdaCallBlocks(functionalInterface, parameters, isCapturing);
+  }
+
+  
+  public void printLambdaCallWithoutBlocks(IMethodBinding functionalInterface,
+      String functionalClassName, String newClassName, IMethodBinding methodBinding,
+      boolean isCapturing) {
+    if (isCapturing) {
+      buffer.append("GetCapturingLambda(");
+    } else {
+      buffer.append("GetNonCapturingLambda(");
+    }
+    buffer.append('[');
+    buffer.append(functionalClassName);
+    buffer.append(" class], @protocol(");
+    buffer.append(functionalClassName);
+    buffer.append("), @\"");
+    buffer.append(newClassName);
+    buffer.append("\", @selector(");
+    buffer.append(nameTable.getMethodSelector(functionalInterface));
+    buffer.append("),\n");
+  }
+
+  
+  public void printLambdaCallBlocks(IMethodBinding functionalInterface,
+      List<VariableDeclaration> parameters, boolean isCapturing) {
+    if (isCapturing) {
+      printBlockCallWrapper(functionalInterface);
+    }
+    buffer.append('^');
+    buffer.append(nameTable.getSpecificObjCType(functionalInterface.getReturnType()));
+    
+    buffer.append("(id _self");
+    for (VariableDeclaration x : parameters) {
+      IVariableBinding variableBinding = x.getVariableBinding();
+      buffer.append(", ");
+      buffer.append(nameTable.getSpecificObjCType(x.getVariableBinding().getType()));
+      buffer.append(' ');
+      buffer.append(nameTable.getVariableQualifiedName(variableBinding.getVariableDeclaration()));
+    }
+    buffer.append(")");
+  }
+
+  @Override
+  public boolean visit(MarkerAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  @Override
+  public boolean visit(MethodInvocation node) {
+    IMethodBinding binding = node.getMethodBinding();
+    assert binding != null;
+
+    
+    Expression receiver = node.getExpression();
+    buffer.append('[');
+    if (BindingUtil.isStatic(binding)) {
+      buffer.append(nameTable.getFullName(binding.getDeclaringClass()));
+    } else if (receiver != null) {
+      receiver.accept(this);
+    } else {
+      buffer.append("self");
+    }
+    printMethodInvocationNameAndArgs(nameTable.getMethodSelector(binding), node.getArguments());
+    buffer.append(']');
+    return false;
+  }
+
+  @Override
+  public boolean visit(NameQualifiedType node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(NativeExpression node) {
+    buffer.append(node.getCode());
+    return false;
+  }
+
+  @Override
+  public boolean visit(NativeStatement node) {
+    buffer.append(node.getCode());
+    buffer.append('\n');
+    return false;
+  }
+
+  @Override
+  public boolean visit(NormalAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  private void printAnnotationCreation(Annotation node) {
+    IAnnotationBinding annotation = node.getAnnotationBinding();
+    buffer.append(useReferenceCounting ? "[[[" : "[[");
+    buffer.append(nameTable.getFullName(annotation.getAnnotationType()));
+    buffer.append(" alloc] init");
+
+    if (node instanceof NormalAnnotation) {
+      Map<String, Expression> args = Maps.newHashMap();
+      for (MemberValuePair pair : ((NormalAnnotation) node).getValues()) {
+        args.put(pair.getName().getIdentifier(), pair.getValue());
+      }
+      IMemberValuePairBinding[] members = BindingUtil.getSortedMemberValuePairs(annotation);
+      for (int i = 0; i < members.length; i++) {
+        if (i == 0) {
+          buffer.append("With");
+        } else {
+          buffer.append(" with");
+        }
+        IMemberValuePairBinding member = members[i];
+        String name = NameTable.getAnnotationPropertyName(member.getMethodBinding());
+        buffer.append(NameTable.capitalize(name));
+        buffer.append(':');
+        Expression value = args.get(name);
+        if (value != null) {
+          value.accept(this);
+        }
+      }
+    } else if (node instanceof SingleMemberAnnotation) {
+      SingleMemberAnnotation sma = (SingleMemberAnnotation) node;
+      buffer.append("With");
+      IMethodBinding accessorBinding = annotation.getAllMemberValuePairs()[0].getMethodBinding();
+      String name = NameTable.getAnnotationPropertyName(accessorBinding);
+      buffer.append(NameTable.capitalize(name));
+      buffer.append(':');
+      sma.getValue();
+    }
+
+    buffer.append(']');
+    if (useReferenceCounting) {
+      buffer.append(" autorelease]");
+    }
+  }
+
+  @Override
+  public boolean visit(NullLiteral node) {
+    buffer.append("nil");
+    return false;
+  }
+
+  @Override
+  public boolean visit(NumberLiteral node) {
+    String token = node.getToken();
+    if (token != null) {
+      buffer.append(LiteralGenerator.fixNumberToken(token, node.getTypeBinding()));
+    } else {
+      buffer.append(LiteralGenerator.generate(node.getValue()));
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(ParenthesizedExpression node) {
+    buffer.append("(");
+    node.getExpression().accept(this);
+    buffer.append(")");
+    return false;
+  }
+
+  @Override
+  public boolean visit(PostfixExpression node) {
+    node.getOperand().accept(this);
+    buffer.append(node.getOperator().toString());
+    return false;
+  }
+
+  @Override
+  public boolean visit(PrefixExpression node) {
+    buffer.append(node.getOperator().toString());
+    node.getOperand().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(PrimitiveType node) {
+    buffer.append(NameTable.getPrimitiveObjCType(node.getTypeBinding()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(QualifiedName node) {
+    IBinding binding = node.getBinding();
+    if (binding instanceof IVariableBinding) {
+      IVariableBinding var = (IVariableBinding) binding;
+      if (BindingUtil.isGlobalVar(var)) {
+        buffer.append(nameTable.getVariableQualifiedName(var));
+        return false;
+      }
+    }
+    if (binding instanceof ITypeBinding) {
+      buffer.append(nameTable.getFullName((ITypeBinding) binding));
+      return false;
+    }
+    Name qualifier = node.getQualifier();
+    qualifier.accept(this);
+    buffer.append("->");
+    node.getName().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(QualifiedType node) {
+    ITypeBinding binding = node.getTypeBinding();
+    if (binding != null) {
+      buffer.append(nameTable.getFullName(binding));
+      return false;
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(ReturnStatement node) {
+    buffer.append("return");
+    Expression expr = node.getExpression();
+    IMethodBinding methodBinding = TreeUtil.getOwningMethodBinding(node);
+    if (expr != null) {
+      buffer.append(' ');
+      expr.accept(this);
+    } else if (methodBinding != null && methodBinding.isConstructor()) {
+      
+      buffer.append(" self");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(SimpleName node) {
+    IBinding binding = node.getBinding();
+    if (binding instanceof IVariableBinding) {
+      buffer.append(nameTable.getVariableQualifiedName((IVariableBinding) binding));
+      return false;
+    }
+    if (binding instanceof ITypeBinding) {
+      if (binding instanceof IOSTypeBinding) {
+        buffer.append(binding.getName());
+      } else {
+        buffer.append(nameTable.getFullName((ITypeBinding) binding));
+      }
+    } else {
+      buffer.append(node.getIdentifier());
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(SimpleType node) {
+    ITypeBinding binding = node.getTypeBinding();
+    if (binding != null) {
+      String name = nameTable.getFullName(binding);
+      buffer.append(name);
+      return false;
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(SingleMemberAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  @Override
+  public boolean visit(SingleVariableDeclaration node) {
+    buffer.append(nameTable.getSpecificObjCType(node.getVariableBinding()));
+    if (node.isVarargs()) {
+      buffer.append("...");
+    }
+    if (buffer.charAt(buffer.length() - 1) != '*') {
+      buffer.append(" ");
+    }
+    node.getName().accept(this);
+    for (int i = 0; i < node.getExtraDimensions(); i++) {
+      buffer.append("[]");
+    }
+    if (node.getInitializer() != null) {
+      buffer.append(" = ");
+      node.getInitializer().accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(StringLiteral node) {
+    buffer.append(LiteralGenerator.generateStringLiteral(node.getLiteralValue()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperConstructorInvocation node) {
+    throw new AssertionError("SuperConstructorInvocation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(SuperFieldAccess node) {
+    buffer.append(nameTable.getVariableQualifiedName(node.getVariableBinding()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperMethodInvocation node) {
+    IMethodBinding binding = node.getMethodBinding();
+    assert node.getQualifier() == null
+        : "Qualifiers expected to be handled by SuperMethodInvocationRewriter.";
+    assert !BindingUtil.isStatic(binding) : "Static invocations are rewritten by Functionizer.";
+    buffer.append("[super");
+    printMethodInvocationNameAndArgs(nameTable.getMethodSelector(binding), node.getArguments());
+    buffer.append(']');
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(SwitchCase node) {
+    if (node.isDefault()) {
+      buffer.append("  default:\n");
+    } else {
+      buffer.append("  case ");
+      Expression expr = node.getExpression();
+      boolean isEnumConstant = expr.getTypeBinding().isEnum();
+      if (isEnumConstant) {
+        String typeName = nameTable.getFullName(expr.getTypeBinding());
+        String bareTypeName = typeName.endsWith("Enum")
+            ? typeName.substring(0, typeName.length() - 4) : typeName;
+        buffer.append(bareTypeName).append("_");
+      }
+      if (isEnumConstant && expr instanceof SimpleName) {
+        buffer.append(((SimpleName) expr).getIdentifier());
+      } else if (isEnumConstant && expr instanceof QualifiedName) {
+        buffer.append(((QualifiedName) expr).getName().getIdentifier());
+      } else {
+        expr.accept(this);
+      }
+      buffer.append(":\n");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(SwitchStatement node) {
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (typeEnv.isJavaStringType(exprType)) {
+      printStringSwitchStatement(node);
+      return false;
+    }
+    buffer.append("switch (");
+    if (exprType.isEnum()) {
+      buffer.append('[');
+    }
+    expr.accept(this);
+    if (exprType.isEnum()) {
+      buffer.append(" ordinal]");
+    }
+    buffer.append(") ");
+    buffer.append("{\n");
+    List<Statement> stmts = node.getStatements();
+    for (Statement stmt : stmts) {
+      stmt.accept(this);
+    }
+    if (!stmts.isEmpty() && stmts.get(stmts.size() - 1) instanceof SwitchCase) {
+      
+      
+      buffer.append(";\n");
+    }
+    buffer.append("}\n");
+    return false;
+  }
+
+  private void printStringSwitchStatement(SwitchStatement node) {
+    buffer.append("{\n");
+
+    
+    List<String> caseValues = Lists.newArrayList();
+    List<Statement> stmts = node.getStatements();
+    for (Statement stmt : stmts) {
+      if (stmt instanceof SwitchCase) {
+        SwitchCase caseStmt = (SwitchCase) stmt;
+        if (!caseStmt.isDefault()) {
+          caseValues.add(getStringConstant(caseStmt.getExpression()));
+        }
+      }
+    }
+    buffer.append("NSArray *__caseValues = [NSArray arrayWithObjects:");
+    for (String value : caseValues) {
+      buffer.append("@\"" + UnicodeUtils.escapeStringLiteral(value) + "\", ");
+    }
+    buffer.append("nil];\n");
+    buffer.append("NSUInteger __index = [__caseValues indexOfObject:");
+    node.getExpression().accept(this);
+    buffer.append("];\n");
+    buffer.append("switch (__index) {\n");
+    for (Statement stmt : stmts) {
+      if (stmt instanceof SwitchCase) {
+        SwitchCase caseStmt = (SwitchCase) stmt;
+        if (caseStmt.isDefault()) {
+          stmt.accept(this);
+        } else {
+          int i = caseValues.indexOf(getStringConstant(caseStmt.getExpression()));
+          assert i >= 0;
+          buffer.append("case ");
+          buffer.append(i);
+          buffer.append(":\n");
+        }
+      } else {
+        stmt.accept(this);
+      }
+    }
+    buffer.append("}\n}\n");
+  }
+
+  private static String getStringConstant(Expression expr) {
+    Object constantValue = expr.getConstantValue();
+    if (constantValue == null) {
+      constantValue = TreeUtil.getVariableBinding(expr).getConstantValue();
+    }
+    assert constantValue != null && constantValue instanceof String;
+    return (String) constantValue;
+  }
+
+  @Override
+  public boolean visit(SynchronizedStatement node) {
+    buffer.append("@synchronized(");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ThisExpression node) {
+    buffer.append("self");
+    return false;
+  }
+
+  @Override
+  public boolean visit(ThrowStatement node) {
+    buffer.append("@throw ");
+    node.getExpression().accept(this);
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(TryStatement node) {
+    List<VariableDeclarationExpression> resources = node.getResources();
+    boolean hasResources = !resources.isEmpty();
+    if (hasResources) {
+      buffer.append("{\n");
+      buffer.append("JavaLangThrowable *__mainException = nil;\n");
+    }
+    for (VariableDeclarationExpression var : resources) {
+      var.accept(this);
+      buffer.append(";\n");
+    }
+    buffer.append("@try ");
+    node.getBody().accept(this);
+    buffer.append(' ');
+    for (CatchClause cc : node.getCatchClauses()) {
+      if (cc.getException().getType() instanceof UnionType) {
+        printMultiCatch(cc, hasResources);
+      }
+      buffer.append("@catch (");
+      cc.getException().accept(this);
+      buffer.append(") {\n");
+      printMainExceptionStore(hasResources, cc);
+      printStatements(cc.getBody().getStatements());
+      buffer.append("}\n");
+    }
+    if (node.getFinally() != null || resources.size() > 0) {
+      buffer.append(" @finally {\n");
+      if (node.getFinally() != null) {
+        printStatements(node.getFinally().getStatements());
+      }
+      for (VariableDeclarationExpression var : resources) {
+        for (VariableDeclarationFragment frag : var.getFragments()) {
+          buffer.append("@try {\n[");
+          buffer.append(frag.getName().getFullyQualifiedName());
+          buffer.append(" close];\n}\n");
+          buffer.append("@catch (JavaLangThrowable *e) {\n");
+          buffer.append("if (__mainException) {\n");
+          buffer.append("[__mainException addSuppressedWithJavaLangThrowable:e];\n} else {\n");
+          buffer.append("__mainException = e;\n}\n");
+          buffer.append("}\n");
+        }
+      }
+      if (hasResources) {
+        buffer.append("if (__mainException) {\n@throw __mainException;\n}\n");
+      }
+      buffer.append("}\n");
+    }
+    if (hasResources) {
+      buffer.append("}\n");
+    }
+    return false;
+  }
+
+  private void printMainExceptionStore(boolean hasResources, CatchClause cc) {
+    if (hasResources) {
+      buffer.append("__mainException = ");
+      buffer.append(cc.getException().getName().getFullyQualifiedName());
+      buffer.append(";\n");
+    }
+  }
+
+  @Override
+  public boolean visit(TypeLiteral node) {
+    ITypeBinding type = node.getType().getTypeBinding();
+    if (type.isPrimitive()) {
+      buffer.append(String.format("[IOSClass %sClass]", type.getName()));
+    } else {
+      buffer.append(nameTable.getFullName(type));
+      buffer.append("_class_()");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(TypeMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationExpression node) {
+    String typeString = nameTable.getSpecificObjCType(node.getTypeBinding());
+    boolean needsAsterisk = typeString.endsWith("*");
+    buffer.append(typeString);
+    if (!needsAsterisk) {
+      buffer.append(' ');
+    }
+    for (Iterator<VariableDeclarationFragment> it = node.getFragments().iterator();
+         it.hasNext(); ) {
+      VariableDeclarationFragment f = it.next();
+      f.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+        if (needsAsterisk) {
+          buffer.append('*');
+        }
+      }
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationFragment node) {
+    node.getName().accept(this);
+    Expression initializer = node.getInitializer();
+    if (initializer != null) {
+      buffer.append(" = ");
+      initializer.accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationStatement node) {
+    List<VariableDeclarationFragment> vars = node.getFragments();
+    assert !vars.isEmpty();
+    IVariableBinding binding = vars.get(0).getVariableBinding();
+    String objcType = nameTable.getSpecificObjCType(binding);
+    String objcTypePointers = " ";
+    int idx = objcType.indexOf(" *");
+    if (idx != -1) {
+      
+      
+      objcTypePointers = objcType.substring(idx);
+      objcType = objcType.substring(0, idx);
+    }
+    buffer.append(objcType);
+    for (Iterator<VariableDeclarationFragment> it = vars.iterator(); it.hasNext();) {
+      VariableDeclarationFragment f = it.next();
+      buffer.append(objcTypePointers);
+      f.accept(this);
+      if (it.hasNext()) {
+        buffer.append(",");
+      }
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(WhileStatement node) {
+    buffer.append("while (");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(Initializer node) {
+    
+    
+    throw new AssertionError("initializer node not converted");
+  }
+
+  
+  
+  private static String makeQuotedString(String originalString) {
+    int location = 0;
+    StringBuffer buffer = new StringBuffer(originalString);
+    while ((location = buffer.indexOf("\\", location)) != -1) {
+      buffer.replace(location++, location++, "\\\\");
+    }
+    location = 0;
+    while ((location = buffer.indexOf("\"", location)) != -1) {
+      buffer.replace(location++, location++, "\\\"");
+    }
+    location = 0;
+    while ((location = buffer.indexOf("\n")) != -1) {
+      buffer.replace(location++, location++, "\\n");
+    }
+    return buffer.toString();
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc;
+
+import com.google.devtools.j2objc.ast.LambdaExpressionTest;
+import com.google.devtools.j2objc.ast.MethodReferenceTest;
+import com.google.devtools.j2objc.ast.TreeConvertTest;
+import com.google.devtools.j2objc.ast.TreeUtilTest;
+import com.google.devtools.j2objc.gen.ArrayAccessTest;
+import com.google.devtools.j2objc.gen.ArrayCreationTest;
+import com.google.devtools.j2objc.gen.LineDirectivesTest;
+import com.google.devtools.j2objc.gen.LiteralGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCHeaderGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCImplementationGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCSegmentedHeaderGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCSourceFileGeneratorTest;
+import com.google.devtools.j2objc.gen.PrimitiveArrayTest;
+import com.google.devtools.j2objc.gen.SignatureGeneratorTest;
+import com.google.devtools.j2objc.gen.StatementGeneratorTest;
+import com.google.devtools.j2objc.gen.TypeDeclarationGeneratorTest;
+import com.google.devtools.j2objc.gen.TypeImplementationGeneratorTest;
+import com.google.devtools.j2objc.pipeline.J2ObjCIncompatibleStripperTest;
+import com.google.devtools.j2objc.pipeline.TranslationProcessorTest;
+import com.google.devtools.j2objc.translate.AbstractMethodRewriterTest;
+import com.google.devtools.j2objc.translate.AnonymousClassConverterTest;
+import com.google.devtools.j2objc.translate.ArrayRewriterTest;
+import com.google.devtools.j2objc.translate.AutoboxerTest;
+import com.google.devtools.j2objc.translate.CastResolverTest;
+import com.google.devtools.j2objc.translate.ComplexExpressionExtractorTest;
+import com.google.devtools.j2objc.translate.ConstantBranchPrunerTest;
+import com.google.devtools.j2objc.translate.DeadCodeEliminatorTest;
+import com.google.devtools.j2objc.translate.DestructorGeneratorTest;
+import com.google.devtools.j2objc.translate.EnhancedForRewriterTest;
+import com.google.devtools.j2objc.translate.EnumRewriterTest;
+import com.google.devtools.j2objc.translate.FunctionizerTest;
+import com.google.devtools.j2objc.translate.GwtConverterTest;
+import com.google.devtools.j2objc.translate.InitializationNormalizerTest;
+import com.google.devtools.j2objc.translate.InnerClassExtractorTest;
+import com.google.devtools.j2objc.translate.JavaCloneWriterTest;
+import com.google.devtools.j2objc.translate.JavaToIOSMethodTranslatorTest;
+import com.google.devtools.j2objc.translate.NilCheckResolverTest;
+import com.google.devtools.j2objc.translate.OcniExtractorTest;
+import com.google.devtools.j2objc.translate.OperatorRewriterTest;
+import com.google.devtools.j2objc.translate.OuterReferenceFixerTest;
+import com.google.devtools.j2objc.translate.OuterReferenceResolverTest;
+import com.google.devtools.j2objc.translate.PrivateDeclarationResolverTest;
+import com.google.devtools.j2objc.translate.RewriterTest;
+import com.google.devtools.j2objc.translate.StaticVarRewriterTest;
+import com.google.devtools.j2objc.translate.SuperMethodInvocationRewriterTest;
+import com.google.devtools.j2objc.translate.UnsequencedExpressionRewriterTest;
+import com.google.devtools.j2objc.translate.VarargsRewriterTest;
+import com.google.devtools.j2objc.translate.VariableRenamerTest;
+import com.google.devtools.j2objc.types.BindingMapBuilderTest;
+import com.google.devtools.j2objc.types.HeaderImportCollectorTest;
+import com.google.devtools.j2objc.types.ImplementationImportCollectorTest;
+import com.google.devtools.j2objc.util.BindingUtilTest;
+import com.google.devtools.j2objc.util.DeadCodeMapTest;
+import com.google.devtools.j2objc.util.ErrorUtilTest;
+import com.google.devtools.j2objc.util.FileUtilTest;
+import com.google.devtools.j2objc.util.NameTableTest;
+import com.google.devtools.j2objc.util.ProGuardUsageParserTest;
+import com.google.devtools.j2objc.util.UnicodeUtilsTest;
+
+import junit.framework.Test;
+import junit.framework.TestSuite;
+
+
+public class SmallTests {
+
+  private static final Class<?>[] smallTestClasses = new Class[] {
+    AbstractMethodRewriterTest.class,
+    AnonymousClassConverterTest.class,
+    ArrayAccessTest.class,
+    ArrayCreationTest.class,
+    ArrayRewriterTest.class,
+    AutoboxerTest.class,
+    BindingMapBuilderTest.class,
+    BindingUtilTest.class,
+    CastResolverTest.class,
+    ComplexExpressionExtractorTest.class,
+    ConstantBranchPrunerTest.class,
+    DeadCodeEliminatorTest.class,
+    DeadCodeMapTest.class,
+    DestructorGeneratorTest.class,
+    EnhancedForRewriterTest.class,
+    EnumRewriterTest.class,
+    ErrorUtilTest.class,
+    FileUtilTest.class,
+    FunctionizerTest.class,
+    GwtConverterTest.class,
+    HeaderImportCollectorTest.class,
+    ImplementationImportCollectorTest.class,
+    InitializationNormalizerTest.class,
+    InnerClassExtractorTest.class,
+    J2ObjCIncompatibleStripperTest.class,
+    J2ObjCTest.class,
+    JavaCloneWriterTest.class,
+    JavaToIOSMethodTranslatorTest.class,
+    LineDirectivesTest.class,
+    LiteralGeneratorTest.class,
+    NameTableTest.class,
+    NilCheckResolverTest.class,
+    ObjectiveCHeaderGeneratorTest.class,
+    ObjectiveCImplementationGeneratorTest.class,
+    ObjectiveCSegmentedHeaderGeneratorTest.class,
+    ObjectiveCSourceFileGeneratorTest.class,
+    OcniExtractorTest.class,
+    OperatorRewriterTest.class,
+    OptionsTest.class,
+    OuterReferenceFixerTest.class,
+    OuterReferenceResolverTest.class,
+    PrimitiveArrayTest.class,
+    PrivateDeclarationResolverTest.class,
+    ProGuardUsageParserTest.class,
+    RewriterTest.class,
+    SignatureGeneratorTest.class,
+    StatementGeneratorTest.class,
+    StaticVarRewriterTest.class,
+    SuperMethodInvocationRewriterTest.class,
+    TreeConvertTest.class,
+    TypeDeclarationGeneratorTest.class,
+    TypeImplementationGeneratorTest.class,
+    TranslationProcessorTest.class,
+    TreeUtilTest.class,
+    UnicodeUtilsTest.class,
+    UnsequencedExpressionRewriterTest.class,
+    VarargsRewriterTest.class,
+    VariableRenamerTest.class
+  };
+
+  public static Test suite() {
+    TestSuite testSuite = new TestSuite(smallTestClasses);
+    try {
+      Class.forName("java.lang.invoke.LambdaMetafactory");
+
+      
+      testSuite.addTestSuite(MethodReferenceTest.class);
+      testSuite.addTestSuite(LambdaExpressionTest.class);
+    } catch (ClassNotFoundException e) {
+      
+    }
+    return testSuite;
+  }
+}
+
+<code block>
+
+package com.google.devtools.j2objc.ast;
+
+import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.util.FileUtil;
+
+import java.io.IOException;
+
+
+public class MethodReferenceTest extends GenerationTest {
+  @Override
+  protected void setUp() throws IOException {
+    tempDir = FileUtil.createTempDir("testout");
+    Options.load(new String[] { "-d", tempDir.getAbsolutePath(), "-sourcepath",
+        tempDir.getAbsolutePath(), "-q", 
+        "-encoding", "UTF-8", 
+        "-source", "8", 
+        "-Xforce-incomplete-java8" 
+    });
+    parser = GenerationTest.initializeParser(tempDir);
+  }
+
+  private String classIHeader =
+      "class I { I() { } I(int x) { } I(int x, I j, String s, Object o) { } }\n"
+      + "interface FunInt<T> { T apply(int x); }"
+      + "interface FunInt4<T> { T apply(int x, I j, String s, Object o); }"
+      + "interface Call<T> { T call(); }";
+
+  
+  public void testCreationReferenceBlockWrapper() throws IOException {
+    String noArgumentTranslation = translateSourceFile(
+        classIHeader + "class Test { Call<I> iInit = I::new; }",
+        "Test", "Test.m");
+    assertTranslatedSegments(noArgumentTranslation,
+        "GetNonCapturingLambda([Call class], @protocol(Call)",
+        "@\"I_init\"", "^I *(id _self) {", "return new_I_init();");
+    String oneArgumentTranslation = translateSourceFile(
+        classIHeader + "class Test { FunInt<I> iInit2 = I::new; }", "Test", "Test.m");
+    assertTranslatedSegments(oneArgumentTranslation,
+        "GetNonCapturingLambda([FunInt class], @protocol(FunInt)", "@\"I_initWithInt_\"",
+        "^I *(id _self, jint a) {", "return new_I_initWithInt_(a);");
+    String mixedArgumentTranslation = translateSourceFile(
+        classIHeader + "class Test { FunInt4<I> iInit3 = I::new; }", "Test", "Test.m");
+    assertTranslatedSegments(mixedArgumentTranslation,
+        "GetNonCapturingLambda([FunInt4 class], @protocol(FunInt4)",
+        "@\"I_initWithInt_withI_withNSString_withId_\"",
+        "^I *(id _self, jint a, I * b, NSString * c, id d) {",
+        "return new_I_initWithInt_withI_withNSString_withId_(a, b, c, d);");
+  }
+}
+
+<code block>
+
+package com.google.devtools.j2objc.ast;
+
+import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.util.FileUtil;
+
+import java.io.IOException;
+
+
+public class LambdaExpressionTest extends GenerationTest {
+  @Override
+  protected void setUp() throws IOException {
+    tempDir = FileUtil.createTempDir("testout");
+    Options.load(new String[] { "-d", tempDir.getAbsolutePath(), "-sourcepath",
+        tempDir.getAbsolutePath(), "-q", 
+        "-encoding", "UTF-8", 
+        "-source", "8", 
+        "-Xforce-incomplete-java8" 
+    });
+    parser = GenerationTest.initializeParser(tempDir);
+  }
+
+  private String functionHeader = "interface Function<T, R> { R apply(T t); }";
+  private String callableHeader = "interface Callable<R> { R call(); }";
+  private String fourToOneHeader = "interface FourToOne<F, G, H, I, R> {"
+      + "  R apply(F f, G g, H h, I i); }";
+
+  
+  public void testBlockBodyCreation() throws IOException {
+    String translation = translateSourceFile(functionHeader + "class Test { Function f = x -> x;}",
+        "Test", "Test.m");
+    assertTranslatedLines(translation, "id x){", "return x;");
+  }
+
+  public void testCaptureDetection() throws IOException {
+    String nonCaptureTranslation = translateSourceFile(
+        functionHeader + "class Test { Function f = x -> x;}", "Test", "Test.m");
+    String nonCaptureTranslationOuter = translateSourceFile(
+        functionHeader + "class Test { int y; Function f = x -> y;}", "Test", "Test.m");
+    String captureTranslation = translateSourceFile(
+        functionHeader + "class Test { Function<Function, Function> f = y -> x -> y;}", "Test",
+        "Test.m");
+    assertTranslation(nonCaptureTranslation, "GetNonCapturingLambda");
+    assertTranslation(nonCaptureTranslationOuter, "GetNonCapturingLambda");
+    assertTranslatedSegments(captureTranslation, "GetNonCapturingLambda", "GetCapturingLambda");
+  }
+
+  public void testObjectSelfAddition() throws IOException {
+    String translation = translateSourceFile(callableHeader + "class Test { Callable f = () -> 1;}",
+        "Test", "Test.m");
+    assertTranslation(translation, "^id(id _self)");
+  }
+
+  public void testTypeInference() throws IOException {
+    String quadObjectTranslation = translateSourceFile(
+        fourToOneHeader + "class Test { FourToOne f = (a, b, c, d) -> 1;}", "Test", "Test.m");
+    assertTranslatedSegments(quadObjectTranslation, "@selector(applyWithId:withId:withId:withId:)",
+        "^id(id _self, id a, id b, id c, id d)");
+    String mixedObjectTranslation = translateSourceFile(fourToOneHeader
+        + "class Test { FourToOne<String, Double, Integer, Boolean, String> f = "
+        + "(a, b, c, d) -> \"1\";}", "Test", "Test.m");
+    assertTranslation(mixedObjectTranslation,
+        "^NSString *(id _self, NSString * a, JavaLangDouble * b, JavaLangInteger * c, JavaLangBoolean * d)");
+  }
+
+  public void testOuterFunctions() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function outerF = (x) -> x;}", "Test", "Test.m");
+    assertTranslation(translation, "JreStrongAssign(&self->outerF_, GetNonCapturingLambda");
+  }
+
+  public void testStaticFunctions() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { static Function staticF = (x) -> x;}", "Test", "Test.m");
+    assertTranslatedSegments(translation, "id<Function> Test_staticF_;",
+        "if (self == [Test class]) {", "JreStrongAssign(&Test_staticF_, GetNonCapturingLambda");
+  }
+
+  public void testNestedLambdas() throws IOException {
+    String outerCapture = translateSourceFile(functionHeader
+        + "class Test { Function<String, Function<String, String>> f = x -> y -> x;}", "Test",
+        "Test.m");
+    assertTranslatedSegments(outerCapture, "GetNonCapturingLambda", "[Function class]",
+        "@selector(applyWithId:)", "^id<Function>(id _self, NSString * x)",
+        "return GetCapturingLambda", "[Function class]", "@selector(applyWithId:)",
+        "^NSString *(id _self, NSString * y)", "return x;");
+    String noCapture = translateSourceFile(functionHeader
+        + "class Test { Function<String, Function<String, String>> f = x -> y -> y;}", "Test",
+        "Test.m");
+    assertTranslatedSegments(noCapture, "GetNonCapturingLambda",
+        "@selector(applyWithId:)", "^id<Function>(id _self, NSString * x)",
+        "return GetNonCapturingLambda", "@selector(applyWithId:)",
+        "^NSString *(id _self, NSString * y)", "return y;");
+  }
+
+  
+  public void testProtocolCast() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function f = (Function) (x) -> x;}", "Test", "Test.m");
+    assertTranslatedSegments(translation,
+        "(id<Function>) check_protocol_cast(GetNonCapturingLambda([Function class], @protocol(Function), ",
+        "@protocol(Function)");
+  }
+
+  
+  public void testImportExclusion() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function f = (Function) (x) -> x;}", "Test", "Test.m");
+    assertNotInTranslation(translation, "lambda$0.h");
+  }
+
+  
+  public void testLambdaUniquify() throws IOException {
+    String translation = translateSourceFile(
+functionHeader
+        + "class Test { class Foo{ class Bar { Function f = x -> x; }}\n"
+        + "Function f = x -> x;}",
+        "Test", "Test.m");
+    assertTranslatedSegments(translation, "@\"Test_lambda$", "@\"Test_Foo_Bar_lambda");
+  }
+}
+
+<code block>
+
+package com.google.j2objc.java8;
+
+import junit.framework.Test;
+import junit.framework.TestSuite;
+
+
+public class SmallTests {
+  private static final Class<?>[] smallTestClasses = new Class[] {
+    LambdaTest.class
+  };
+
+  public static Test suite() {
+    return new TestSuite(smallTestClasses);
+  }
+}
+
+<code block>
+
+package com.google.devtools.j2objc.ast;
+
+import org.eclipse.jdt.core.dom.ITypeBinding;
+
+import java.util.List;
+
+
+public abstract class MethodReference extends Expression {
+
+  protected ITypeBinding typeBinding;
+  protected ChildList<Type> typeArguments = ChildList.create(Type.class, this);
+
+  public MethodReference(org.eclipse.jdt.core.dom.MethodReference jdtNode) {
+    super(jdtNode);
+    typeBinding = jdtNode.resolveTypeBinding();
+    for (Object x : jdtNode.typeArguments()) {
+      typeArguments.add((Type) TreeConverter.convert(x));
+    }
+  }
+
+  public MethodReference(MethodReference other) {
+    super(other);
+    typeBinding = other.getTypeBinding();
+    typeArguments.copyFrom(other.typeArguments());
+  }
+
+  @Override
+  public ITypeBinding getTypeBinding() {
+    return typeBinding;
+  }
+
+  public List<Type> typeArguments() {
+    return typeArguments;
+  }
+
+  @Override
+  public abstract MethodReference copy();
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.gen;
+
+import com.google.common.base.CharMatcher;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.ast.Annotation;
+import com.google.devtools.j2objc.ast.AnonymousClassDeclaration;
+import com.google.devtools.j2objc.ast.ArrayAccess;
+import com.google.devtools.j2objc.ast.ArrayCreation;
+import com.google.devtools.j2objc.ast.ArrayInitializer;
+import com.google.devtools.j2objc.ast.ArrayType;
+import com.google.devtools.j2objc.ast.AssertStatement;
+import com.google.devtools.j2objc.ast.Assignment;
+import com.google.devtools.j2objc.ast.Block;
+import com.google.devtools.j2objc.ast.BooleanLiteral;
+import com.google.devtools.j2objc.ast.BreakStatement;
+import com.google.devtools.j2objc.ast.CStringLiteral;
+import com.google.devtools.j2objc.ast.CastExpression;
+import com.google.devtools.j2objc.ast.CatchClause;
+import com.google.devtools.j2objc.ast.CharacterLiteral;
+import com.google.devtools.j2objc.ast.ClassInstanceCreation;
+import com.google.devtools.j2objc.ast.CommaExpression;
+import com.google.devtools.j2objc.ast.ConditionalExpression;
+import com.google.devtools.j2objc.ast.ConstructorInvocation;
+import com.google.devtools.j2objc.ast.ContinueStatement;
+import com.google.devtools.j2objc.ast.CreationReference;
+import com.google.devtools.j2objc.ast.Dimension;
+import com.google.devtools.j2objc.ast.DoStatement;
+import com.google.devtools.j2objc.ast.EmptyStatement;
+import com.google.devtools.j2objc.ast.EnhancedForStatement;
+import com.google.devtools.j2objc.ast.Expression;
+import com.google.devtools.j2objc.ast.ExpressionMethodReference;
+import com.google.devtools.j2objc.ast.ExpressionStatement;
+import com.google.devtools.j2objc.ast.FieldAccess;
+import com.google.devtools.j2objc.ast.ForStatement;
+import com.google.devtools.j2objc.ast.FunctionInvocation;
+import com.google.devtools.j2objc.ast.IfStatement;
+import com.google.devtools.j2objc.ast.InfixExpression;
+import com.google.devtools.j2objc.ast.Initializer;
+import com.google.devtools.j2objc.ast.InstanceofExpression;
+import com.google.devtools.j2objc.ast.IntersectionType;
+import com.google.devtools.j2objc.ast.LabeledStatement;
+import com.google.devtools.j2objc.ast.LambdaExpression;
+import com.google.devtools.j2objc.ast.MarkerAnnotation;
+import com.google.devtools.j2objc.ast.MemberValuePair;
+import com.google.devtools.j2objc.ast.MethodInvocation;
+import com.google.devtools.j2objc.ast.Name;
+import com.google.devtools.j2objc.ast.NameQualifiedType;
+import com.google.devtools.j2objc.ast.NativeExpression;
+import com.google.devtools.j2objc.ast.NativeStatement;
+import com.google.devtools.j2objc.ast.NormalAnnotation;
+import com.google.devtools.j2objc.ast.NullLiteral;
+import com.google.devtools.j2objc.ast.NumberLiteral;
+import com.google.devtools.j2objc.ast.ParenthesizedExpression;
+import com.google.devtools.j2objc.ast.PostfixExpression;
+import com.google.devtools.j2objc.ast.PrefixExpression;
+import com.google.devtools.j2objc.ast.PrimitiveType;
+import com.google.devtools.j2objc.ast.QualifiedName;
+import com.google.devtools.j2objc.ast.QualifiedType;
+import com.google.devtools.j2objc.ast.ReturnStatement;
+import com.google.devtools.j2objc.ast.SimpleName;
+import com.google.devtools.j2objc.ast.SimpleType;
+import com.google.devtools.j2objc.ast.SingleMemberAnnotation;
+import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
+import com.google.devtools.j2objc.ast.Statement;
+import com.google.devtools.j2objc.ast.StringLiteral;
+import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
+import com.google.devtools.j2objc.ast.SuperFieldAccess;
+import com.google.devtools.j2objc.ast.SuperMethodInvocation;
+import com.google.devtools.j2objc.ast.SuperMethodReference;
+import com.google.devtools.j2objc.ast.SwitchCase;
+import com.google.devtools.j2objc.ast.SwitchStatement;
+import com.google.devtools.j2objc.ast.SynchronizedStatement;
+import com.google.devtools.j2objc.ast.ThisExpression;
+import com.google.devtools.j2objc.ast.ThrowStatement;
+import com.google.devtools.j2objc.ast.TreeNode;
+import com.google.devtools.j2objc.ast.TreeUtil;
+import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.ast.TryStatement;
+import com.google.devtools.j2objc.ast.Type;
+import com.google.devtools.j2objc.ast.TypeLiteral;
+import com.google.devtools.j2objc.ast.TypeMethodReference;
+import com.google.devtools.j2objc.ast.UnionType;
+import com.google.devtools.j2objc.ast.VariableDeclaration;
+import com.google.devtools.j2objc.ast.VariableDeclarationExpression;
+import com.google.devtools.j2objc.ast.VariableDeclarationFragment;
+import com.google.devtools.j2objc.ast.VariableDeclarationStatement;
+import com.google.devtools.j2objc.ast.WhileStatement;
+import com.google.devtools.j2objc.types.IOSTypeBinding;
+import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.NameTable;
+import com.google.devtools.j2objc.util.UnicodeUtils;
+
+import org.eclipse.jdt.core.dom.IAnnotationBinding;
+import org.eclipse.jdt.core.dom.IBinding;
+import org.eclipse.jdt.core.dom.IMemberValuePairBinding;
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.IVariableBinding;
+
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+
+public class StatementGenerator extends TreeVisitor {
+
+  private final SourceBuilder buffer;
+  private final boolean asFunction;
+  private final boolean useReferenceCounting;
+
+  public static String generate(TreeNode node, boolean asFunction, int currentLine) {
+    StatementGenerator generator = new StatementGenerator(node, asFunction, currentLine);
+    if (node == null) {
+      throw new NullPointerException("cannot generate a null statement");
+    }
+    generator.run(node);
+    return generator.getResult();
+  }
+
+  private StatementGenerator(TreeNode node, boolean asFunction, int currentLine) {
+    buffer = new SourceBuilder(Options.emitLineDirectives(), currentLine);
+    this.asFunction = asFunction;
+    useReferenceCounting = !Options.useARC();
+  }
+
+  private String getResult() {
+    return buffer.toString();
+  }
+
+  private void printMethodInvocationNameAndArgs(String selector, List<Expression> args) {
+    String[] selParts = selector.split(":");
+    if (args.isEmpty()) {
+      assert selParts.length == 1 && !selector.endsWith(":");
+      buffer.append(' ');
+      buffer.append(selector);
+    } else {
+      assert selParts.length == args.size();
+      for (int i = 0; i < args.size(); i++) {
+        buffer.append(' ');
+        buffer.append(selParts[i]);
+        buffer.append(':');
+        args.get(i).accept(this);
+      }
+    }
+  }
+
+  private boolean assertIncompleteJava8Support(TreeNode node) {
+    
+    
+    if (!Options.isJava8Translator()) {
+      assert false : "not implemented yet";
+    }
+    buffer.append(node.toString());
+    return false;
+  }
+
+  @Override
+  public boolean preVisit(TreeNode node) {
+    super.preVisit(node);
+    if (!(node instanceof Block)) {
+      buffer.syncLineNumbers(node);
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(AnonymousClassDeclaration node) {
+    
+    
+    assert node.getBodyDeclarations().size() == 1;
+
+    
+    assert false : "not implemented yet";
+
+    return true;
+  }
+
+  @Override
+  public boolean visit(ArrayAccess node) {
+    throw new AssertionError("ArrayAccess nodes are rewritten by ArrayRewriter.");
+  }
+
+  @Override
+  public boolean visit(ArrayCreation node) {
+    throw new AssertionError("ArrayCreation nodes are rewritten by ArrayRewriter.");
+  }
+
+  @Override
+  public boolean visit(ArrayInitializer node) {
+    ITypeBinding type = node.getTypeBinding();
+    assert type.isArray();
+    ITypeBinding componentType = type.getComponentType();
+    buffer.append(String.format("(%s[]){ ", NameTable.getPrimitiveObjCType(componentType)));
+    for (Iterator<Expression> it = node.getExpressions().iterator(); it.hasNext(); ) {
+      it.next().accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(" }");
+    return false;
+  }
+
+  @Override
+  public boolean visit(ArrayType node) {
+    ITypeBinding binding = typeEnv.mapType(node.getTypeBinding());
+    if (binding instanceof IOSTypeBinding) {
+      buffer.append(binding.getName());
+    } else {
+      node.getComponentType().accept(this);
+      buffer.append("[]");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(AssertStatement node) {
+    buffer.append(asFunction ? "NSCAssert(" : "NSAssert(");
+    node.getExpression().accept(this);
+    buffer.append(", ");
+    if (node.getMessage() != null) {
+      Expression expr = node.getMessage();
+      boolean isString = expr instanceof StringLiteral;
+      if (!isString) {
+        buffer.append('[');
+      }
+      int start = buffer.length();
+      expr.accept(this);
+      int end = buffer.length();
+      
+      
+      String substring = buffer.substring(start, end);
+      substring = substring.replaceAll(",", " J2OBJC_COMMA()");
+      buffer.replace(start, end, substring);
+      if (!isString) {
+        buffer.append(" description]");
+      }
+    } else {
+      int startPos = node.getStartPosition();
+      String assertStatementString =
+          unit.getSource().substring(startPos, startPos + node.getLength());
+      assertStatementString = CharMatcher.WHITESPACE.trimFrom(assertStatementString);
+      assertStatementString = makeQuotedString(assertStatementString);
+      
+      assertStatementString = assertStatementString.replace("%", "%%");
+      
+      
+      buffer.append("@\"" + TreeUtil.getSourceFileName(unit) + ":" + node.getLineNumber()
+          + " condition failed: " + assertStatementString + "\"");
+    }
+    buffer.append(");\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(Assignment node) {
+    node.getLeftHandSide().accept(this);
+    buffer.append(' ');
+    buffer.append(node.getOperator().toString());
+    buffer.append(' ');
+    node.getRightHandSide().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(Block node) {
+    if (node.hasAutoreleasePool()) {
+      buffer.append("{\n@autoreleasepool ");
+    }
+    buffer.append("{\n");
+    printStatements(node.getStatements());
+    buffer.append("}\n");
+    if (node.hasAutoreleasePool()) {
+      buffer.append("}\n");
+    }
+    return false;
+  }
+
+  private void printStatements(List<?> statements) {
+    for (Iterator<?> it = statements.iterator(); it.hasNext(); ) {
+      Statement s = (Statement) it.next();
+      s.accept(this);
+    }
+  }
+
+  @Override
+  public boolean visit(BooleanLiteral node) {
+    buffer.append(node.booleanValue() ? "YES" : "NO");
+    return false;
+  }
+
+  @Override
+  public boolean visit(BreakStatement node) {
+    if (node.getLabel() != null) {
+      
+      buffer.append("goto ");
+      node.getLabel().accept(this);
+    } else {
+      buffer.append("break");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CStringLiteral node) {
+    buffer.append("\"");
+    buffer.append(node.getLiteralValue());
+    buffer.append("\"");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CastExpression node) {
+    ITypeBinding type = node.getType().getTypeBinding();
+    buffer.append("(");
+    buffer.append(nameTable.getSpecificObjCType(type));
+    buffer.append(") ");
+    node.getExpression().accept(this);
+    return false;
+  }
+
+  private void printMultiCatch(CatchClause node, boolean hasResources) {
+    SingleVariableDeclaration exception = node.getException();
+    for (Type exceptionType : ((UnionType) exception.getType()).getTypes()) {
+      buffer.append("@catch (");
+      exceptionType.accept(this);
+      buffer.append(" *");
+      exception.getName().accept(this);
+      buffer.append(") {\n");
+      printMainExceptionStore(hasResources, node);
+      printStatements(node.getBody().getStatements());
+      buffer.append("}\n");
+    }
+  }
+
+  @Override
+  public boolean visit(CharacterLiteral node) {
+    buffer.append(UnicodeUtils.escapeCharLiteral(node.charValue()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(ClassInstanceCreation node) {
+    throw new AssertionError("ClassInstanceCreation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(CommaExpression node) {
+    buffer.append('(');
+    for (Iterator<Expression> it = node.getExpressions().iterator(); it.hasNext(); ) {
+      Expression e = it.next();
+      e.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(')');
+    return false;
+  }
+
+  @Override
+  public boolean visit(ConditionalExpression node) {
+    boolean castNeeded = false;
+    ITypeBinding thenType = node.getThenExpression().getTypeBinding();
+    ITypeBinding elseType = node.getElseExpression().getTypeBinding();
+
+    if (!thenType.equals(elseType)
+        && !(node.getThenExpression() instanceof NullLiteral)
+        && !(node.getElseExpression() instanceof NullLiteral)) {
+      
+      
+      
+      
+      castNeeded = true;
+    }
+
+    node.getExpression().accept(this);
+
+    buffer.append(" ? ");
+    if (castNeeded && thenType.isInterface()) {
+      buffer.append("((id) ");
+    }
+    node.getThenExpression().accept(this);
+    if (castNeeded && thenType.isInterface()) {
+      buffer.append(')');
+    }
+
+    buffer.append(" : ");
+    if (castNeeded && elseType.isInterface()) {
+      buffer.append("((id) ");
+    }
+    node.getElseExpression().accept(this);
+    if (castNeeded && elseType.isInterface()) {
+      buffer.append(')');
+    }
+
+    return false;
+  }
+
+  @Override
+  public boolean visit(ConstructorInvocation node) {
+    throw new AssertionError("ConstructorInvocation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(ContinueStatement node) {
+    if (node.getLabel() != null) {
+      
+      buffer.append("goto ");
+      node.getLabel().accept(this);
+    } else {
+      buffer.append("continue");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(CreationReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(Dimension node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(DoStatement node) {
+    buffer.append("do ");
+    node.getBody().accept(this);
+    buffer.append(" while (");
+    node.getExpression().accept(this);
+    buffer.append(");\n");
+    return false;
+  }
+
+
+  @Override
+  public boolean visit(EmptyStatement node) {
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(EnhancedForStatement node) {
+    buffer.append("for (");
+    node.getParameter().accept(this);
+    buffer.append(" in ");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ExpressionMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(ExpressionStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding type = expression.getTypeBinding();
+    if (!type.isPrimitive() && Options.useARC()
+        && (expression instanceof MethodInvocation
+            || expression instanceof SuperMethodInvocation
+            || expression instanceof FunctionInvocation)) {
+      
+      buffer.append("(void) ");
+    }
+    expression.accept(this);
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(FieldAccess node) {
+    node.getExpression().accept(this);
+    buffer.append("->");
+    node.getName().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ForStatement node) {
+    buffer.append("for (");
+    for (Iterator<Expression> it = node.getInitializers().iterator(); it.hasNext(); ) {
+      Expression next = it.next();
+      next.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append("; ");
+    if (node.getExpression() != null) {
+      node.getExpression().accept(this);
+    }
+    buffer.append("; ");
+    for (Iterator<Expression> it = node.getUpdaters().iterator(); it.hasNext(); ) {
+      it.next().accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(FunctionInvocation node) {
+    buffer.append(node.getName());
+    buffer.append('(');
+    for (Iterator<Expression> iter = node.getArguments().iterator(); iter.hasNext(); ) {
+      iter.next().accept(this);
+      if (iter.hasNext()) {
+        buffer.append(", ");
+      }
+    }
+    buffer.append(')');
+    return false;
+  }
+
+  @Override
+  public boolean visit(IfStatement node) {
+    buffer.append("if (");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getThenStatement().accept(this);
+    if (node.getElseStatement() != null) {
+      buffer.append(" else ");
+      node.getElseStatement().accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(InfixExpression node) {
+    InfixExpression.Operator op = node.getOperator();
+    List<Expression> operands = node.getOperands();
+    assert operands.size() >= 2;
+    if ((op.equals(InfixExpression.Operator.EQUALS)
+        || op.equals(InfixExpression.Operator.NOT_EQUALS))) {
+      Expression lhs = operands.get(0);
+      Expression rhs = operands.get(1);
+      if (lhs instanceof StringLiteral || rhs instanceof StringLiteral) {
+        if (!(lhs instanceof StringLiteral)) {
+          
+          lhs = operands.get(1);
+          rhs = operands.get(0);
+        }
+        buffer.append(op.equals(InfixExpression.Operator.NOT_EQUALS) ? "![" : "[");
+        lhs.accept(this);
+        buffer.append(" isEqual:");
+        rhs.accept(this);
+        buffer.append("]");
+        return false;
+      }
+    }
+    String opStr = ' ' + op.toString() + ' ';
+    boolean isFirst = true;
+    for (Expression operand : operands) {
+      if (!isFirst) {
+        buffer.append(opStr);
+      }
+      isFirst = false;
+      operand.accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(InstanceofExpression node) {
+    ITypeBinding rightBinding = node.getRightOperand().getTypeBinding();
+    if (rightBinding.isInterface()) {
+      
+      buffer.append(String.format("[%s_class_() isInstance:", nameTable.getFullName(rightBinding)));
+      node.getLeftOperand().accept(this);
+      buffer.append(']');
+    } else {
+      buffer.append('[');
+      node.getLeftOperand().accept(this);
+      buffer.append(" isKindOfClass:[");
+      node.getRightOperand().accept(this);
+      buffer.append(" class]]");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(IntersectionType node) {
+    throw new AssertionError(
+        "Intersection types should only occur in a cast expression,"
+        + " and are handled by CastResolver");
+  }
+
+  @Override
+  public boolean visit(LabeledStatement node) {
+    node.getLabel().accept(this);
+    buffer.append(": ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(LambdaExpression node) {
+    
+    assert Options.isJava8Translator() :
+      "Lambda expression in translator with -source less than 8.";
+    IMethodBinding functionalInterface = node.getFunctionalInterfaceMethod();
+    String functionalClassName = nameTable.getFullName(node.functionalTypeBinding());
+    if (node.isCapturing()) {
+      buffer.append("GetCapturingLambda(");
+      buffer.append(node.getParameters().size());
+      buffer.append(", ");
+    } else {
+      buffer.append("GetNonCapturingLambda(");
+    }
+    buffer.append('[');
+    buffer.append(functionalClassName);
+    buffer.append(" class], @protocol(");
+    buffer.append(functionalClassName);
+    buffer.append("), @\"");
+    buffer.append(nameTable.getFullLambdaName(node.getMethodBinding()));
+    buffer.append("\", @selector(");
+    buffer.append(nameTable.getMethodSelector(functionalInterface));
+    buffer.append("), ^");
+    buffer.append(nameTable.getSpecificObjCType(functionalInterface.getReturnType()));
+    
+    buffer.append("(id _self");
+    for (VariableDeclaration x : node.getParameters()) {
+      IVariableBinding variableBinding = x.getVariableBinding();
+      buffer.append(", ");
+      buffer.append(nameTable.getSpecificObjCType(x.getVariableBinding().getType()));
+      buffer.append(' ');
+      buffer.append(nameTable.getVariableQualifiedName(variableBinding.getVariableDeclaration()));
+    }
+    buffer.append(")");
+    node.getBody().accept(this);
+    buffer.append(")");
+    return false;
+  }
+
+  @Override
+  public boolean visit(MarkerAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  @Override
+  public boolean visit(MethodInvocation node) {
+    IMethodBinding binding = node.getMethodBinding();
+    assert binding != null;
+
+    
+    Expression receiver = node.getExpression();
+    buffer.append('[');
+    if (BindingUtil.isStatic(binding)) {
+      buffer.append(nameTable.getFullName(binding.getDeclaringClass()));
+    } else if (receiver != null) {
+      receiver.accept(this);
+    } else {
+      buffer.append("self");
+    }
+    printMethodInvocationNameAndArgs(nameTable.getMethodSelector(binding), node.getArguments());
+    buffer.append(']');
+    return false;
+  }
+
+  @Override
+  public boolean visit(NameQualifiedType node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(NativeExpression node) {
+    buffer.append(node.getCode());
+    return false;
+  }
+
+  @Override
+  public boolean visit(NativeStatement node) {
+    buffer.append(node.getCode());
+    buffer.append('\n');
+    return false;
+  }
+
+  @Override
+  public boolean visit(NormalAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  private void printAnnotationCreation(Annotation node) {
+    IAnnotationBinding annotation = node.getAnnotationBinding();
+    buffer.append(useReferenceCounting ? "[[[" : "[[");
+    buffer.append(nameTable.getFullName(annotation.getAnnotationType()));
+    buffer.append(" alloc] init");
+
+    if (node instanceof NormalAnnotation) {
+      Map<String, Expression> args = Maps.newHashMap();
+      for (MemberValuePair pair : ((NormalAnnotation) node).getValues()) {
+        args.put(pair.getName().getIdentifier(), pair.getValue());
+      }
+      IMemberValuePairBinding[] members = BindingUtil.getSortedMemberValuePairs(annotation);
+      for (int i = 0; i < members.length; i++) {
+        if (i == 0) {
+          buffer.append("With");
+        } else {
+          buffer.append(" with");
+        }
+        IMemberValuePairBinding member = members[i];
+        String name = NameTable.getAnnotationPropertyName(member.getMethodBinding());
+        buffer.append(NameTable.capitalize(name));
+        buffer.append(':');
+        Expression value = args.get(name);
+        if (value != null) {
+          value.accept(this);
+        }
+      }
+    } else if (node instanceof SingleMemberAnnotation) {
+      SingleMemberAnnotation sma = (SingleMemberAnnotation) node;
+      buffer.append("With");
+      IMethodBinding accessorBinding = annotation.getAllMemberValuePairs()[0].getMethodBinding();
+      String name = NameTable.getAnnotationPropertyName(accessorBinding);
+      buffer.append(NameTable.capitalize(name));
+      buffer.append(':');
+      sma.getValue();
+    }
+
+    buffer.append(']');
+    if (useReferenceCounting) {
+      buffer.append(" autorelease]");
+    }
+  }
+
+  @Override
+  public boolean visit(NullLiteral node) {
+    buffer.append("nil");
+    return false;
+  }
+
+  @Override
+  public boolean visit(NumberLiteral node) {
+    String token = node.getToken();
+    if (token != null) {
+      buffer.append(LiteralGenerator.fixNumberToken(token, node.getTypeBinding()));
+    } else {
+      buffer.append(LiteralGenerator.generate(node.getValue()));
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(ParenthesizedExpression node) {
+    buffer.append("(");
+    node.getExpression().accept(this);
+    buffer.append(")");
+    return false;
+  }
+
+  @Override
+  public boolean visit(PostfixExpression node) {
+    node.getOperand().accept(this);
+    buffer.append(node.getOperator().toString());
+    return false;
+  }
+
+  @Override
+  public boolean visit(PrefixExpression node) {
+    buffer.append(node.getOperator().toString());
+    node.getOperand().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(PrimitiveType node) {
+    buffer.append(NameTable.getPrimitiveObjCType(node.getTypeBinding()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(QualifiedName node) {
+    IBinding binding = node.getBinding();
+    if (binding instanceof IVariableBinding) {
+      IVariableBinding var = (IVariableBinding) binding;
+      if (BindingUtil.isGlobalVar(var)) {
+        buffer.append(nameTable.getVariableQualifiedName(var));
+        return false;
+      }
+    }
+    if (binding instanceof ITypeBinding) {
+      buffer.append(nameTable.getFullName((ITypeBinding) binding));
+      return false;
+    }
+    Name qualifier = node.getQualifier();
+    qualifier.accept(this);
+    buffer.append("->");
+    node.getName().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(QualifiedType node) {
+    ITypeBinding binding = node.getTypeBinding();
+    if (binding != null) {
+      buffer.append(nameTable.getFullName(binding));
+      return false;
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(ReturnStatement node) {
+    buffer.append("return");
+    Expression expr = node.getExpression();
+    IMethodBinding methodBinding = TreeUtil.getOwningMethodBinding(node);
+    if (expr != null) {
+      buffer.append(' ');
+      expr.accept(this);
+    } else if (methodBinding != null && methodBinding.isConstructor()) {
+      
+      buffer.append(" self");
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(SimpleName node) {
+    IBinding binding = node.getBinding();
+    if (binding instanceof IVariableBinding) {
+      buffer.append(nameTable.getVariableQualifiedName((IVariableBinding) binding));
+      return false;
+    }
+    if (binding instanceof ITypeBinding) {
+      if (binding instanceof IOSTypeBinding) {
+        buffer.append(binding.getName());
+      } else {
+        buffer.append(nameTable.getFullName((ITypeBinding) binding));
+      }
+    } else {
+      buffer.append(node.getIdentifier());
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(SimpleType node) {
+    ITypeBinding binding = node.getTypeBinding();
+    if (binding != null) {
+      String name = nameTable.getFullName(binding);
+      buffer.append(name);
+      return false;
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(SingleMemberAnnotation node) {
+    printAnnotationCreation(node);
+    return false;
+  }
+
+  @Override
+  public boolean visit(SingleVariableDeclaration node) {
+    buffer.append(nameTable.getSpecificObjCType(node.getVariableBinding()));
+    if (node.isVarargs()) {
+      buffer.append("...");
+    }
+    if (buffer.charAt(buffer.length() - 1) != '*') {
+      buffer.append(" ");
+    }
+    node.getName().accept(this);
+    for (int i = 0; i < node.getExtraDimensions(); i++) {
+      buffer.append("[]");
+    }
+    if (node.getInitializer() != null) {
+      buffer.append(" = ");
+      node.getInitializer().accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(StringLiteral node) {
+    buffer.append(LiteralGenerator.generateStringLiteral(node.getLiteralValue()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperConstructorInvocation node) {
+    throw new AssertionError("SuperConstructorInvocation nodes are rewritten by Functionizer.");
+  }
+
+  @Override
+  public boolean visit(SuperFieldAccess node) {
+    buffer.append(nameTable.getVariableQualifiedName(node.getVariableBinding()));
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperMethodInvocation node) {
+    IMethodBinding binding = node.getMethodBinding();
+    assert node.getQualifier() == null
+        : "Qualifiers expected to be handled by SuperMethodInvocationRewriter.";
+    assert !BindingUtil.isStatic(binding) : "Static invocations are rewritten by Functionizer.";
+    buffer.append("[super");
+    printMethodInvocationNameAndArgs(nameTable.getMethodSelector(binding), node.getArguments());
+    buffer.append(']');
+    return false;
+  }
+
+  @Override
+  public boolean visit(SuperMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(SwitchCase node) {
+    if (node.isDefault()) {
+      buffer.append("  default:\n");
+    } else {
+      buffer.append("  case ");
+      Expression expr = node.getExpression();
+      boolean isEnumConstant = expr.getTypeBinding().isEnum();
+      if (isEnumConstant) {
+        String typeName = nameTable.getFullName(expr.getTypeBinding());
+        String bareTypeName = typeName.endsWith("Enum")
+            ? typeName.substring(0, typeName.length() - 4) : typeName;
+        buffer.append(bareTypeName).append("_");
+      }
+      if (isEnumConstant && expr instanceof SimpleName) {
+        buffer.append(((SimpleName) expr).getIdentifier());
+      } else if (isEnumConstant && expr instanceof QualifiedName) {
+        buffer.append(((QualifiedName) expr).getName().getIdentifier());
+      } else {
+        expr.accept(this);
+      }
+      buffer.append(":\n");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(SwitchStatement node) {
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (typeEnv.isJavaStringType(exprType)) {
+      printStringSwitchStatement(node);
+      return false;
+    }
+    buffer.append("switch (");
+    if (exprType.isEnum()) {
+      buffer.append('[');
+    }
+    expr.accept(this);
+    if (exprType.isEnum()) {
+      buffer.append(" ordinal]");
+    }
+    buffer.append(") ");
+    buffer.append("{\n");
+    List<Statement> stmts = node.getStatements();
+    for (Statement stmt : stmts) {
+      stmt.accept(this);
+    }
+    if (!stmts.isEmpty() && stmts.get(stmts.size() - 1) instanceof SwitchCase) {
+      
+      
+      buffer.append(";\n");
+    }
+    buffer.append("}\n");
+    return false;
+  }
+
+  private void printStringSwitchStatement(SwitchStatement node) {
+    buffer.append("{\n");
+
+    
+    List<String> caseValues = Lists.newArrayList();
+    List<Statement> stmts = node.getStatements();
+    for (Statement stmt : stmts) {
+      if (stmt instanceof SwitchCase) {
+        SwitchCase caseStmt = (SwitchCase) stmt;
+        if (!caseStmt.isDefault()) {
+          caseValues.add(getStringConstant(caseStmt.getExpression()));
+        }
+      }
+    }
+    buffer.append("NSArray *__caseValues = [NSArray arrayWithObjects:");
+    for (String value : caseValues) {
+      buffer.append("@\"" + UnicodeUtils.escapeStringLiteral(value) + "\", ");
+    }
+    buffer.append("nil];\n");
+    buffer.append("NSUInteger __index = [__caseValues indexOfObject:");
+    node.getExpression().accept(this);
+    buffer.append("];\n");
+    buffer.append("switch (__index) {\n");
+    for (Statement stmt : stmts) {
+      if (stmt instanceof SwitchCase) {
+        SwitchCase caseStmt = (SwitchCase) stmt;
+        if (caseStmt.isDefault()) {
+          stmt.accept(this);
+        } else {
+          int i = caseValues.indexOf(getStringConstant(caseStmt.getExpression()));
+          assert i >= 0;
+          buffer.append("case ");
+          buffer.append(i);
+          buffer.append(":\n");
+        }
+      } else {
+        stmt.accept(this);
+      }
+    }
+    buffer.append("}\n}\n");
+  }
+
+  private static String getStringConstant(Expression expr) {
+    Object constantValue = expr.getConstantValue();
+    if (constantValue == null) {
+      constantValue = TreeUtil.getVariableBinding(expr).getConstantValue();
+    }
+    assert constantValue != null && constantValue instanceof String;
+    return (String) constantValue;
+  }
+
+  @Override
+  public boolean visit(SynchronizedStatement node) {
+    buffer.append("@synchronized(");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(ThisExpression node) {
+    buffer.append("self");
+    return false;
+  }
+
+  @Override
+  public boolean visit(ThrowStatement node) {
+    buffer.append("@throw ");
+    node.getExpression().accept(this);
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(TryStatement node) {
+    List<VariableDeclarationExpression> resources = node.getResources();
+    boolean hasResources = !resources.isEmpty();
+    if (hasResources) {
+      buffer.append("{\n");
+      buffer.append("JavaLangThrowable *__mainException = nil;\n");
+    }
+    for (VariableDeclarationExpression var : resources) {
+      var.accept(this);
+      buffer.append(";\n");
+    }
+    buffer.append("@try ");
+    node.getBody().accept(this);
+    buffer.append(' ');
+    for (CatchClause cc : node.getCatchClauses()) {
+      if (cc.getException().getType() instanceof UnionType) {
+        printMultiCatch(cc, hasResources);
+      }
+      buffer.append("@catch (");
+      cc.getException().accept(this);
+      buffer.append(") {\n");
+      printMainExceptionStore(hasResources, cc);
+      printStatements(cc.getBody().getStatements());
+      buffer.append("}\n");
+    }
+    if (node.getFinally() != null || resources.size() > 0) {
+      buffer.append(" @finally {\n");
+      if (node.getFinally() != null) {
+        printStatements(node.getFinally().getStatements());
+      }
+      for (VariableDeclarationExpression var : resources) {
+        for (VariableDeclarationFragment frag : var.getFragments()) {
+          buffer.append("@try {\n[");
+          buffer.append(frag.getName().getFullyQualifiedName());
+          buffer.append(" close];\n}\n");
+          buffer.append("@catch (JavaLangThrowable *e) {\n");
+          buffer.append("if (__mainException) {\n");
+          buffer.append("[__mainException addSuppressedWithJavaLangThrowable:e];\n} else {\n");
+          buffer.append("__mainException = e;\n}\n");
+          buffer.append("}\n");
+        }
+      }
+      if (hasResources) {
+        buffer.append("if (__mainException) {\n@throw __mainException;\n}\n");
+      }
+      buffer.append("}\n");
+    }
+    if (hasResources) {
+      buffer.append("}\n");
+    }
+    return false;
+  }
+
+  private void printMainExceptionStore(boolean hasResources, CatchClause cc) {
+    if (hasResources) {
+      buffer.append("__mainException = ");
+      buffer.append(cc.getException().getName().getFullyQualifiedName());
+      buffer.append(";\n");
+    }
+  }
+
+  @Override
+  public boolean visit(TypeLiteral node) {
+    ITypeBinding type = node.getType().getTypeBinding();
+    if (type.isPrimitive()) {
+      buffer.append(String.format("[IOSClass %sClass]", type.getName()));
+    } else {
+      buffer.append(nameTable.getFullName(type));
+      buffer.append("_class_()");
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(TypeMethodReference node) {
+    
+    return assertIncompleteJava8Support(node);
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationExpression node) {
+    String typeString = nameTable.getSpecificObjCType(node.getTypeBinding());
+    boolean needsAsterisk = typeString.endsWith("*");
+    buffer.append(typeString);
+    if (!needsAsterisk) {
+      buffer.append(' ');
+    }
+    for (Iterator<VariableDeclarationFragment> it = node.getFragments().iterator();
+         it.hasNext(); ) {
+      VariableDeclarationFragment f = it.next();
+      f.accept(this);
+      if (it.hasNext()) {
+        buffer.append(", ");
+        if (needsAsterisk) {
+          buffer.append('*');
+        }
+      }
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationFragment node) {
+    node.getName().accept(this);
+    Expression initializer = node.getInitializer();
+    if (initializer != null) {
+      buffer.append(" = ");
+      initializer.accept(this);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(VariableDeclarationStatement node) {
+    List<VariableDeclarationFragment> vars = node.getFragments();
+    assert !vars.isEmpty();
+    IVariableBinding binding = vars.get(0).getVariableBinding();
+    String objcType = nameTable.getSpecificObjCType(binding);
+    String objcTypePointers = " ";
+    int idx = objcType.indexOf(" *");
+    if (idx != -1) {
+      
+      
+      objcTypePointers = objcType.substring(idx);
+      objcType = objcType.substring(0, idx);
+    }
+    buffer.append(objcType);
+    for (Iterator<VariableDeclarationFragment> it = vars.iterator(); it.hasNext();) {
+      VariableDeclarationFragment f = it.next();
+      buffer.append(objcTypePointers);
+      f.accept(this);
+      if (it.hasNext()) {
+        buffer.append(",");
+      }
+    }
+    buffer.append(";\n");
+    return false;
+  }
+
+  @Override
+  public boolean visit(WhileStatement node) {
+    buffer.append("while (");
+    node.getExpression().accept(this);
+    buffer.append(") ");
+    node.getBody().accept(this);
+    return false;
+  }
+
+  @Override
+  public boolean visit(Initializer node) {
+    
+    
+    throw new AssertionError("initializer node not converted");
+  }
+
+  
+  
+  private static String makeQuotedString(String originalString) {
+    int location = 0;
+    StringBuffer buffer = new StringBuffer(originalString);
+    while ((location = buffer.indexOf("\\", location)) != -1) {
+      buffer.replace(location++, location++, "\\\\");
+    }
+    location = 0;
+    while ((location = buffer.indexOf("\"", location)) != -1) {
+      buffer.replace(location++, location++, "\\\"");
+    }
+    location = 0;
+    while ((location = buffer.indexOf("\n")) != -1) {
+      buffer.replace(location++, location++, "\\n");
+    }
+    return buffer.toString();
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc;
+
+import com.google.devtools.j2objc.ast.TreeConvertTest;
+import com.google.devtools.j2objc.ast.TreeUtilTest;
+import com.google.devtools.j2objc.gen.ArrayAccessTest;
+import com.google.devtools.j2objc.gen.ArrayCreationTest;
+import com.google.devtools.j2objc.gen.LineDirectivesTest;
+import com.google.devtools.j2objc.gen.LiteralGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCHeaderGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCImplementationGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCSegmentedHeaderGeneratorTest;
+import com.google.devtools.j2objc.gen.ObjectiveCSourceFileGeneratorTest;
+import com.google.devtools.j2objc.gen.PrimitiveArrayTest;
+import com.google.devtools.j2objc.gen.SignatureGeneratorTest;
+import com.google.devtools.j2objc.gen.StatementGeneratorTest;
+import com.google.devtools.j2objc.gen.TypeDeclarationGeneratorTest;
+import com.google.devtools.j2objc.gen.TypeImplementationGeneratorTest;
+import com.google.devtools.j2objc.pipeline.J2ObjCIncompatibleStripperTest;
+import com.google.devtools.j2objc.pipeline.TranslationProcessorTest;
+import com.google.devtools.j2objc.translate.AbstractMethodRewriterTest;
+import com.google.devtools.j2objc.translate.AnonymousClassConverterTest;
+import com.google.devtools.j2objc.translate.ArrayRewriterTest;
+import com.google.devtools.j2objc.translate.AutoboxerTest;
+import com.google.devtools.j2objc.translate.CastResolverTest;
+import com.google.devtools.j2objc.translate.ComplexExpressionExtractorTest;
+import com.google.devtools.j2objc.translate.ConstantBranchPrunerTest;
+import com.google.devtools.j2objc.translate.DeadCodeEliminatorTest;
+import com.google.devtools.j2objc.translate.DestructorGeneratorTest;
+import com.google.devtools.j2objc.translate.EnhancedForRewriterTest;
+import com.google.devtools.j2objc.translate.EnumRewriterTest;
+import com.google.devtools.j2objc.translate.FunctionizerTest;
+import com.google.devtools.j2objc.translate.GwtConverterTest;
+import com.google.devtools.j2objc.translate.InitializationNormalizerTest;
+import com.google.devtools.j2objc.translate.InnerClassExtractorTest;
+import com.google.devtools.j2objc.translate.JavaCloneWriterTest;
+import com.google.devtools.j2objc.translate.JavaToIOSMethodTranslatorTest;
+import com.google.devtools.j2objc.translate.LambdaExpressionTest;
+import com.google.devtools.j2objc.translate.NilCheckResolverTest;
+import com.google.devtools.j2objc.translate.OcniExtractorTest;
+import com.google.devtools.j2objc.translate.OperatorRewriterTest;
+import com.google.devtools.j2objc.translate.OuterReferenceFixerTest;
+import com.google.devtools.j2objc.translate.OuterReferenceResolverTest;
+import com.google.devtools.j2objc.translate.PrivateDeclarationResolverTest;
+import com.google.devtools.j2objc.translate.RewriterTest;
+import com.google.devtools.j2objc.translate.StaticVarRewriterTest;
+import com.google.devtools.j2objc.translate.SuperMethodInvocationRewriterTest;
+import com.google.devtools.j2objc.translate.UnsequencedExpressionRewriterTest;
+import com.google.devtools.j2objc.translate.VarargsRewriterTest;
+import com.google.devtools.j2objc.translate.VariableRenamerTest;
+import com.google.devtools.j2objc.types.BindingMapBuilderTest;
+import com.google.devtools.j2objc.types.HeaderImportCollectorTest;
+import com.google.devtools.j2objc.types.ImplementationImportCollectorTest;
+import com.google.devtools.j2objc.util.BindingUtilTest;
+import com.google.devtools.j2objc.util.DeadCodeMapTest;
+import com.google.devtools.j2objc.util.ErrorUtilTest;
+import com.google.devtools.j2objc.util.FileUtilTest;
+import com.google.devtools.j2objc.util.NameTableTest;
+import com.google.devtools.j2objc.util.ProGuardUsageParserTest;
+import com.google.devtools.j2objc.util.UnicodeUtilsTest;
+
+import junit.framework.Test;
+import junit.framework.TestSuite;
+
+
+public class SmallTests {
+
+  private static final Class<?>[] smallTestClasses = new Class[] {
+    AbstractMethodRewriterTest.class,
+    AnonymousClassConverterTest.class,
+    ArrayAccessTest.class,
+    ArrayCreationTest.class,
+    ArrayRewriterTest.class,
+    AutoboxerTest.class,
+    BindingMapBuilderTest.class,
+    BindingUtilTest.class,
+    CastResolverTest.class,
+    ComplexExpressionExtractorTest.class,
+    ConstantBranchPrunerTest.class,
+    DeadCodeEliminatorTest.class,
+    DeadCodeMapTest.class,
+    DestructorGeneratorTest.class,
+    EnhancedForRewriterTest.class,
+    EnumRewriterTest.class,
+    ErrorUtilTest.class,
+    FileUtilTest.class,
+    FunctionizerTest.class,
+    GwtConverterTest.class,
+    HeaderImportCollectorTest.class,
+    ImplementationImportCollectorTest.class,
+    InitializationNormalizerTest.class,
+    InnerClassExtractorTest.class,
+    J2ObjCIncompatibleStripperTest.class,
+    J2ObjCTest.class,
+    JavaCloneWriterTest.class,
+    JavaToIOSMethodTranslatorTest.class,
+    LineDirectivesTest.class,
+    LiteralGeneratorTest.class,
+    NameTableTest.class,
+    NilCheckResolverTest.class,
+    ObjectiveCHeaderGeneratorTest.class,
+    ObjectiveCImplementationGeneratorTest.class,
+    ObjectiveCSegmentedHeaderGeneratorTest.class,
+    ObjectiveCSourceFileGeneratorTest.class,
+    OcniExtractorTest.class,
+    OperatorRewriterTest.class,
+    OptionsTest.class,
+    OuterReferenceFixerTest.class,
+    OuterReferenceResolverTest.class,
+    PrimitiveArrayTest.class,
+    PrivateDeclarationResolverTest.class,
+    ProGuardUsageParserTest.class,
+    RewriterTest.class,
+    SignatureGeneratorTest.class,
+    StatementGeneratorTest.class,
+    StaticVarRewriterTest.class,
+    SuperMethodInvocationRewriterTest.class,
+    TreeConvertTest.class,
+    TypeDeclarationGeneratorTest.class,
+    TypeImplementationGeneratorTest.class,
+    TranslationProcessorTest.class,
+    TreeUtilTest.class,
+    UnicodeUtilsTest.class,
+    UnsequencedExpressionRewriterTest.class,
+    VarargsRewriterTest.class,
+    VariableRenamerTest.class
+  };
+
+  public static Test suite() {
+    TestSuite testSuite = new TestSuite(smallTestClasses);
+    try {
+      Class.forName("java.lang.invoke.LambdaMetafactory");
+
+      
+      testSuite.addTestSuite(LambdaExpressionTest.class);
+    } catch (ClassNotFoundException e) {
+      
+    }
+    return testSuite;
+  }
+}
+
+<code block>
+
+package com.google.devtools.j2objc.translate;
+
+import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.util.FileUtil;
+
+import java.io.IOException;
+
+
+public class LambdaExpressionTest extends GenerationTest {
+  @Override
+  protected void setUp() throws IOException {
+    tempDir = FileUtil.createTempDir("testout");
+    Options.load(new String[] { "-d", tempDir.getAbsolutePath(), "-sourcepath",
+        tempDir.getAbsolutePath(), "-q", 
+        "-encoding", "UTF-8", 
+        "-source", "8", 
+        "-Xforce-incomplete-java8" 
+    });
+    parser = GenerationTest.initializeParser(tempDir);
+  }
+
+  private String functionHeader = "interface Function<T, R> { R apply(T t); }";
+  private String callableHeader = "interface Callable<R> { R call(); }";
+  private String fourToOneHeader = "interface FourToOne<F, G, H, I, R> {"
+      + "  R apply(F f, G g, H h, I i); }";
+
+  
+  public void testBlockBodyCreation() throws IOException {
+    String translation = translateSourceFile(functionHeader + "class Test { Function f = x -> x;}",
+        "Test", "Test.m");
+    assertTranslatedLines(translation, "id x){", "return x;");
+  }
+
+  public void testCaptureDetection() throws IOException {
+    String nonCaptureTranslation = translateSourceFile(
+        functionHeader + "class Test { Function f = x -> x;}", "Test", "Test.m");
+    String nonCaptureTranslationOuter = translateSourceFile(
+        functionHeader + "class Test { int y; Function f = x -> y;}", "Test", "Test.m");
+    String captureTranslation = translateSourceFile(
+        functionHeader + "class Test { Function<Function, Function> f = y -> x -> y;}", "Test",
+        "Test.m");
+    assertTranslation(nonCaptureTranslation, "GetNonCapturingLambda");
+    assertTranslation(nonCaptureTranslationOuter, "GetNonCapturingLambda");
+    assertTranslatedSegments(captureTranslation, "GetNonCapturingLambda", "GetCapturingLambda");
+  }
+
+  public void testObjectSelfAddition() throws IOException {
+    String translation = translateSourceFile(callableHeader + "class Test { Callable f = () -> 1;}",
+        "Test", "Test.m");
+    assertTranslation(translation, "^id(id _self)");
+  }
+
+  public void testTypeInference() throws IOException {
+    String quadObjectTranslation = translateSourceFile(
+        fourToOneHeader + "class Test { FourToOne f = (a, b, c, d) -> 1;}", "Test", "Test.m");
+    assertTranslation(quadObjectTranslation,
+        "@selector(applyWithId:withId:withId:withId:), ^id(id _self, id a, id b, id c, id d)");
+    String mixedObjectTranslation = translateSourceFile(fourToOneHeader
+        + "class Test { FourToOne<String, Double, Integer, Boolean, String> f = "
+        + "(a, b, c, d) -> \"1\";}", "Test", "Test.m");
+    assertTranslation(mixedObjectTranslation,
+        "^NSString *(id _self, NSString * a, JavaLangDouble * b, JavaLangInteger * c, JavaLangBoolean * d)");
+  }
+
+  public void testOuterFunctions() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function outerF = (x) -> x;}", "Test", "Test.m");
+    assertTranslation(translation, "JreStrongAssign(&self->outerF_, GetNonCapturingLambda");
+  }
+
+  public void testStaticFunctions() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { static Function staticF = (x) -> x;}", "Test", "Test.m");
+    assertTranslatedSegments(translation, "id<Function> Test_staticF_;",
+        "if (self == [Test class]) {", "JreStrongAssign(&Test_staticF_, GetNonCapturingLambda");
+  }
+
+  public void testNestedLambdas() throws IOException {
+    String outerCapture = translateSourceFile(functionHeader
+        + "class Test { Function<String, Function<String, String>> f = x -> y -> x;}", "Test",
+        "Test.m");
+    assertTranslatedSegments(outerCapture, "GetNonCapturingLambda", "[Function class]",
+        "@selector(applyWithId:)", "^id<Function>(id _self, NSString * x)",
+        "return GetCapturingLambda", "[Function class]", "@selector(applyWithId:)",
+        "^NSString *(id _self, NSString * y)", "return x;");
+    String noCapture = translateSourceFile(functionHeader
+        + "class Test { Function<String, Function<String, String>> f = x -> y -> y;}", "Test",
+        "Test.m");
+    assertTranslatedSegments(noCapture, "GetNonCapturingLambda",
+        "@selector(applyWithId:)", "^id<Function>(id _self, NSString * x)",
+        "return GetNonCapturingLambda", "@selector(applyWithId:)",
+        "^NSString *(id _self, NSString * y)", "return y;");
+  }
+
+  
+  public void testProtocolCast() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function f = (Function) (x) -> x;}", "Test", "Test.m");
+    assertTranslatedSegments(translation,
+        "(id<Function>) check_protocol_cast(GetNonCapturingLambda([Function class], @protocol(Function), ",
+        "@protocol(Function)");
+  }
+
+  
+  public void testImportExclusion() throws IOException {
+    String translation = translateSourceFile(
+        functionHeader + "class Test { Function f = (Function) (x) -> x;}", "Test", "Test.m");
+    assertNotInTranslation(translation, "lambda$0.h");
+  }
+
+  
+  public void testLambdaUniquify() throws IOException {
+    String translation = translateSourceFile(
+functionHeader
+        + "class Test { class Foo{ class Bar { Function f = x -> x; }}\n"
+        + "Function f = x -> x;}",
+        "Test", "Test.m");
+    assertTranslatedSegments(translation, "@\"Test_lambda$", "@\"Test_Foo_Bar_lambda");
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.translate;
+
+import com.google.devtools.j2objc.ast.ArrayAccess;
+import com.google.devtools.j2objc.ast.ArrayInitializer;
+import com.google.devtools.j2objc.ast.AssertStatement;
+import com.google.devtools.j2objc.ast.Assignment;
+import com.google.devtools.j2objc.ast.CastExpression;
+import com.google.devtools.j2objc.ast.ClassInstanceCreation;
+import com.google.devtools.j2objc.ast.ConditionalExpression;
+import com.google.devtools.j2objc.ast.ConstructorInvocation;
+import com.google.devtools.j2objc.ast.DoStatement;
+import com.google.devtools.j2objc.ast.EnumConstantDeclaration;
+import com.google.devtools.j2objc.ast.Expression;
+import com.google.devtools.j2objc.ast.FunctionInvocation;
+import com.google.devtools.j2objc.ast.IfStatement;
+import com.google.devtools.j2objc.ast.InfixExpression;
+import com.google.devtools.j2objc.ast.MethodInvocation;
+import com.google.devtools.j2objc.ast.ParenthesizedExpression;
+import com.google.devtools.j2objc.ast.PostfixExpression;
+import com.google.devtools.j2objc.ast.PrefixExpression;
+import com.google.devtools.j2objc.ast.ReturnStatement;
+import com.google.devtools.j2objc.ast.SimpleName;
+import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
+import com.google.devtools.j2objc.ast.SuperMethodInvocation;
+import com.google.devtools.j2objc.ast.SwitchStatement;
+import com.google.devtools.j2objc.ast.TreeNode;
+import com.google.devtools.j2objc.ast.TreeUtil;
+import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.ast.Type;
+import com.google.devtools.j2objc.ast.VariableDeclarationFragment;
+import com.google.devtools.j2objc.ast.WhileStatement;
+import com.google.devtools.j2objc.types.IOSMethodBinding;
+import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.NameTable;
+
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.IVariableBinding;
+
+import java.util.List;
+
+
+public class Autoboxer extends TreeVisitor {
+
+  private static final String VALUE_METHOD = "Value";
+  private static final String VALUEOF_METHOD = "valueOf";
+
+  
+  private Expression box(Expression expr) {
+    ITypeBinding wrapperBinding = typeEnv.getWrapperType(expr.getTypeBinding());
+    if (wrapperBinding != null) {
+      return newBoxExpression(expr, wrapperBinding);
+    } else {
+      return expr.copy();
+    }
+  }
+
+  private Expression boxWithType(Expression expr, ITypeBinding wrapperType) {
+    if (typeEnv.isBoxedPrimitive(wrapperType)) {
+      return newBoxExpression(expr, wrapperType);
+    }
+    return box(expr);
+  }
+
+  private Expression newBoxExpression(Expression expr, ITypeBinding wrapperType) {
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(wrapperType);
+    assert primitiveType != null;
+    IMethodBinding wrapperMethod = BindingUtil.findDeclaredMethod(
+        wrapperType, VALUEOF_METHOD, primitiveType.getName());
+    assert wrapperMethod != null : "could not find valueOf method for " + wrapperType;
+    MethodInvocation invocation = new MethodInvocation(wrapperMethod, new SimpleName(wrapperType));
+    invocation.getArguments().add(expr.copy());
+    return invocation;
+  }
+
+  private ITypeBinding findWrapperSuperclass(ITypeBinding type) {
+    while (type != null) {
+      if (typeEnv.isBoxedPrimitive(type)) {
+        return type;
+      }
+      type = type.getSuperclass();
+    }
+    return null;
+  }
+
+  
+  private Expression unbox(Expression expr) {
+    ITypeBinding wrapperType = findWrapperSuperclass(expr.getTypeBinding());
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(wrapperType);
+    if (primitiveType != null) {
+      IMethodBinding valueMethod = BindingUtil.findDeclaredMethod(
+          wrapperType, primitiveType.getName() + VALUE_METHOD);
+      assert valueMethod != null : "could not find value method for " + wrapperType;
+      return new MethodInvocation(valueMethod, expr.copy());
+    } else {
+      return expr.copy();
+    }
+  }
+
+  @Override
+  public void endVisit(Assignment node) {
+    Expression lhs = node.getLeftHandSide();
+    ITypeBinding lhType = lhs.getTypeBinding();
+    Expression rhs = node.getRightHandSide();
+    ITypeBinding rhType = rhs.getTypeBinding();
+    Assignment.Operator op = node.getOperator();
+    if (op != Assignment.Operator.ASSIGN && !lhType.isPrimitive()) {
+      rewriteBoxedAssignment(node);
+    } else if (lhType.isPrimitive() && !rhType.isPrimitive()) {
+      node.setRightHandSide(unbox(rhs));
+    } else if (!lhType.isPrimitive() && rhType.isPrimitive()) {
+      node.setRightHandSide(boxWithType(rhs, lhType));
+    }
+  }
+
+  private void rewriteBoxedAssignment(Assignment node) {
+    Expression lhs = node.getLeftHandSide();
+    Expression rhs = node.getRightHandSide();
+    ITypeBinding type = lhs.getTypeBinding();
+    if (!typeEnv.isBoxedPrimitive(type)) {
+      return;
+    }
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(type);
+    String funcName = "Boxed" + getAssignFunctionName(node.getOperator())
+        + getOperatorFunctionModifier(lhs) + NameTable.capitalize(primitiveType.getName());
+    FunctionInvocation invocation = new FunctionInvocation(funcName, type, type, type);
+    invocation.getArguments().add(new PrefixExpression(
+        typeEnv.getPointerType(type), PrefixExpression.Operator.ADDRESS_OF, TreeUtil.remove(lhs)));
+    invocation.getArguments().add(unbox(rhs));
+    node.replaceWith(invocation);
+  }
+
+  private static String getOperatorFunctionModifier(Expression expr) {
+    IVariableBinding var = TreeUtil.getVariableBinding(expr);
+    if (var == null) {
+      assert TreeUtil.trimParentheses(expr) instanceof ArrayAccess
+          : "Expression cannot be resolved to a variable or array access.";
+      return "Array";
+    }
+    if (var.isField() && !BindingUtil.isWeakReference(var)) {
+      return "Strong";
+    }
+    return "";
+  }
+
+  private static String getAssignFunctionName(Assignment.Operator op) {
+    switch (op) {
+      case PLUS_ASSIGN:
+        return "PlusAssign";
+      case MINUS_ASSIGN:
+        return "MinusAssign";
+      case TIMES_ASSIGN:
+        return "TimesAssign";
+      case DIVIDE_ASSIGN:
+        return "DivideAssign";
+      case BIT_AND_ASSIGN:
+        return "BitAndAssign";
+      case BIT_OR_ASSIGN:
+        return "BitOrAssign";
+      case BIT_XOR_ASSIGN:
+        return "BitXorAssign";
+      case REMAINDER_ASSIGN:
+        return "ModAssign";
+      case LEFT_SHIFT_ASSIGN:
+        return "LShiftAssign";
+      case RIGHT_SHIFT_SIGNED_ASSIGN:
+        return "RShiftAssign";
+      case RIGHT_SHIFT_UNSIGNED_ASSIGN:
+        return "URShiftAssign";
+      default:
+        throw new IllegalArgumentException();
+    }
+  }
+
+  @Override
+  public void endVisit(ArrayAccess node) {
+    Expression index = node.getIndex();
+    if (!index.getTypeBinding().isPrimitive()) {
+      node.setIndex(unbox(index));
+    }
+  }
+
+  @Override
+  public void endVisit(ArrayInitializer node) {
+    ITypeBinding type = node.getTypeBinding().getElementType();
+    List<Expression> expressions = node.getExpressions();
+    for (int i = 0; i < expressions.size(); i++) {
+      Expression expr = expressions.get(i);
+      Expression result = boxOrUnboxExpression(expr, type);
+      if (expr != result) {
+        expressions.set(i, result);
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(AssertStatement node) {
+    Expression expression = node.getMessage();
+    if (expression != null) {
+      ITypeBinding exprType = expression.getTypeBinding();
+      if (exprType.isPrimitive()) {
+        node.setMessage(box(expression));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(CastExpression node) {
+    ITypeBinding type = node.getTypeBinding();
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (type.isPrimitive() && !exprType.isPrimitive()) {
+      
+      
+      type = typeEnv.getWrapperType(type);
+      node.setType(Type.newType(type));
+    }
+    Expression newExpr = boxOrUnboxExpression(expr, type);
+    if (newExpr != expr) {
+      TreeNode parent = node.getParent();
+      if (parent instanceof ParenthesizedExpression) {
+        parent.replaceWith(newExpr);
+      } else {
+        node.replaceWith(newExpr);
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(ClassInstanceCreation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(ConditionalExpression node) {
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expr));
+    }
+
+    ITypeBinding nodeType = node.getTypeBinding();
+    Expression thenExpr = node.getThenExpression();
+    ITypeBinding thenType = thenExpr.getTypeBinding();
+    Expression elseExpr = node.getElseExpression();
+    ITypeBinding elseType = elseExpr.getTypeBinding();
+
+    if (thenType.isPrimitive() && !nodeType.isPrimitive()) {
+      node.setThenExpression(box(thenExpr));
+    } else if (!thenType.isPrimitive() && nodeType.isPrimitive()) {
+      node.setThenExpression(unbox(thenExpr));
+    }
+
+    if (elseType.isPrimitive() && !nodeType.isPrimitive()) {
+      node.setElseExpression(box(elseExpr));
+    } else if (!elseType.isPrimitive() && nodeType.isPrimitive()) {
+      node.setElseExpression(unbox(elseExpr));
+    }
+  }
+
+  @Override
+  public void endVisit(ConstructorInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(DoStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  @Override
+  public void endVisit(EnumConstantDeclaration node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(IfStatement node) {
+    Expression expr = node.getExpression();
+    ITypeBinding binding = expr.getTypeBinding();
+
+    if (!binding.isPrimitive()) {
+      node.setExpression(unbox(expr));
+    }
+  }
+
+  @Override
+  public void endVisit(InfixExpression node) {
+    ITypeBinding type = node.getTypeBinding();
+    InfixExpression.Operator op = node.getOperator();
+    List<Expression> operands = node.getOperands();
+
+    
+    if ((op == InfixExpression.Operator.EQUALS || op == InfixExpression.Operator.NOT_EQUALS)
+        && !operands.get(0).getTypeBinding().isPrimitive()
+        && !operands.get(1).getTypeBinding().isPrimitive()) {
+      return;
+    }
+    
+    if (op == InfixExpression.Operator.PLUS && typeEnv.isJavaStringType(type)) {
+      return;
+    }
+
+    for (int i = 0; i < operands.size(); i++) {
+      Expression expr = operands.get(i);
+      if (!expr.getTypeBinding().isPrimitive()) {
+        operands.set(i, unbox(expr));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(MethodInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(PrefixExpression node) {
+    PrefixExpression.Operator op = node.getOperator();
+    Expression operand = node.getOperand();
+    if (op == PrefixExpression.Operator.INCREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, operand, "BoxedPreIncr");
+    } else if (op == PrefixExpression.Operator.DECREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, operand, "BoxedPreDecr");
+    } else if (!operand.getTypeBinding().isPrimitive()) {
+      node.setOperand(unbox(operand));
+    }
+  }
+
+  @Override
+  public void endVisit(PostfixExpression node) {
+    PostfixExpression.Operator op = node.getOperator();
+    if (op == PostfixExpression.Operator.INCREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, node.getOperand(), "BoxedPostIncr");
+    } else if (op == PostfixExpression.Operator.DECREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, node.getOperand(), "BoxedPostDecr");
+    }
+  }
+
+  private void rewriteBoxedPrefixOrPostfix(TreeNode node, Expression operand, String funcName) {
+    ITypeBinding type = operand.getTypeBinding();
+    if (!typeEnv.isBoxedPrimitive(type)) {
+      return;
+    }
+    funcName += getOperatorFunctionModifier(operand)
+        + NameTable.capitalize(typeEnv.getPrimitiveType(type).getName());
+    FunctionInvocation invocation = new FunctionInvocation(funcName, type, type, type);
+    invocation.getArguments().add(new PrefixExpression(
+        typeEnv.getPointerType(type), PrefixExpression.Operator.ADDRESS_OF,
+        TreeUtil.remove(operand)));
+    node.replaceWith(invocation);
+  }
+
+  @Override
+  public void endVisit(ReturnStatement node) {
+    Expression expr = node.getExpression();
+    if (expr != null) {
+      IMethodBinding methodBinding = TreeUtil.getOwningMethodBinding(node);
+      ITypeBinding returnType = methodBinding.getReturnType();
+      ITypeBinding exprType = expr.getTypeBinding();
+      if (returnType.isPrimitive() && !exprType.isPrimitive()) {
+        node.setExpression(unbox(expr));
+      }
+      if (!returnType.isPrimitive() && exprType.isPrimitive()) {
+        node.setExpression(box(expr));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(SuperConstructorInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(SuperMethodInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(VariableDeclarationFragment node) {
+    Expression initializer = node.getInitializer();
+    if (initializer != null) {
+      ITypeBinding nodeType = node.getVariableBinding().getType();
+      ITypeBinding initType = initializer.getTypeBinding();
+      if (nodeType.isPrimitive() && !initType.isPrimitive()) {
+        node.setInitializer(unbox(initializer));
+      } else if (!nodeType.isPrimitive() && initType.isPrimitive()) {
+        node.setInitializer(boxWithType(initializer, nodeType));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(WhileStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  @Override
+  public void endVisit(SwitchStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  private void convertArguments(IMethodBinding methodBinding, List<Expression> args) {
+    if (methodBinding instanceof IOSMethodBinding) {
+      return; 
+    }
+    ITypeBinding[] paramTypes = methodBinding.getParameterTypes();
+    for (int i = 0; i < args.size(); i++) {
+      ITypeBinding paramType;
+      if (methodBinding.isVarargs() && i >= paramTypes.length - 1) {
+        paramType = paramTypes[paramTypes.length - 1].getComponentType();
+      } else {
+        paramType = paramTypes[i];
+      }
+      Expression arg = args.get(i);
+      Expression replacementArg = boxOrUnboxExpression(arg, paramType);
+      if (replacementArg != arg) {
+        args.set(i, replacementArg);
+      }
+    }
+  }
+
+  private Expression boxOrUnboxExpression(Expression arg, ITypeBinding argType) {
+    ITypeBinding argBinding = arg.getTypeBinding();
+    if (argType.isPrimitive() && !argBinding.isPrimitive()) {
+      return unbox(arg);
+    } else if (!argType.isPrimitive() && argBinding.isPrimitive()) {
+      return box(arg);
+    } else {
+      return arg;
+    }
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.translate;
+
+import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.ast.Statement;
+
+import java.io.IOException;
+import java.util.List;
+
+
+public class AutoboxerTest extends GenerationTest {
+
+  public void testDoNotBoxIntInVarargMethod() throws IOException {
+    String source = "public class Test { Test(String s) {} "
+        + "int one(String s, int i) { return two(new Test(s), i, 1, 2); }"
+        + "int two(Test t, int i, Integer ... args) { return 0; } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    
+    
+    assertTranslation(translation, "twoWithTest:[new_Test_initWithNSString_(s) autorelease] "
+        + "withInt:i withJavaLangIntegerArray:"
+        + "[IOSObjectArray arrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2) } count:2 type:JavaLangInteger_class_()]];");
+  }
+
+  public void testUnboxReturn() throws IOException {
+    String source = "public class Test { Integer value; int intValue() { return value; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "return [((JavaLangInteger *) nil_chk(value_)) intValue];");
+  }
+
+  public void testBooleanAssignment() throws IOException {
+    String source = "boolean b = true; Boolean foo = Boolean.FALSE; b = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("b = [((JavaLangBoolean *) nil_chk(foo)) booleanValue];", result);
+
+    source = "boolean b = true; Boolean foo = Boolean.FALSE; foo = b;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangBoolean_valueOfWithBoolean_(b);", result);
+  }
+
+  public void testByteAssignment() throws IOException {
+    String source = "byte b = 5; Byte foo = Byte.valueOf((byte) 3); b = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("b = [foo charValue];", result);
+
+    source = "byte b = 5; Byte foo = Byte.valueOf((byte) 3); foo = b;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangByte_valueOfWithByte_(b);", result);
+  }
+
+  public void testCharAssignment() throws IOException {
+    String source = "char c = 'a'; Character foo = Character.valueOf('b'); c = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("c = [foo charValue];", result);
+
+    source = "char c = 'a'; Character foo = Character.valueOf('b'); foo = c;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangCharacter_valueOfWithChar_(c);", result);
+  }
+
+  public void testShortAssignment() throws IOException {
+    String source = "short s = 5; Short foo = Short.valueOf((short) 3); s = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("s = [foo shortValue];", result);
+
+    source = "short s = 5; Short foo = Short.valueOf((short) 3); foo = s;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangShort_valueOfWithShort_(s);", result);
+  }
+
+  public void testIntAssignment() throws IOException {
+    String source = "int i = 5; Integer foo = Integer.valueOf(3); i = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("i = [foo intValue];", result);
+
+    source = "int i = 5; Integer foo = Integer.valueOf(3); foo = i;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangInteger_valueOfWithInt_(i);", result);
+  }
+
+  public void testLongAssignment() throws IOException {
+    String source = "long l = 5; Long foo = Long.valueOf(3L); l = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("l = [foo longLongValue];", result);
+
+    source = "long l = 5; Long foo = Long.valueOf(3L); foo = l;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangLong_valueOfWithLong_(l);", result);
+  }
+
+  public void testFloatAssignment() throws IOException {
+    String source = "float f = 5.0f; Float foo = Float.valueOf(3.0f); f = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("f = [foo floatValue];", result);
+
+    source = "float f = 5.0f; Float foo = Float.valueOf(3.0f); foo = f;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangFloat_valueOfWithFloat_(f);", result);
+  }
+
+  public void testDoubleAssignment() throws IOException {
+    String source = "double d = 5.0; Double foo = Double.valueOf(3.0); d = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("d = [foo doubleValue];", result);
+
+    source = "double d = 5.0; Double foo = Double.valueOf(3.0); foo = d;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangDouble_valueOfWithDouble_(d);", result);
+  }
+
+  public void testInfixLeftOperand() throws IOException {
+    String source = "Integer test = new Integer(5); int result = test + 3;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(1));
+    assertEquals("jint result = [test intValue] + 3;", result);
+  }
+
+  public void testInfixRightOperand() throws IOException {
+    String source = "Integer test = new Integer(5); int result = 3 + test;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(1));
+    assertEquals("jint result = 3 + [test intValue];", result);
+  }
+
+  public void testInfixBothOperands() throws IOException {
+    String source = "Integer foo = new Integer(5); Integer bar = new Integer(3);"
+        + "int result = foo + bar;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("jint result = [foo intValue] + [bar intValue];", result);
+  }
+
+  public void testInfixNeitherOperand() throws IOException {
+    
+    String source = "int result = 3 + 5;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(0));
+    assertEquals("jint result = 3 + 5;", result);
+  }
+
+  public void testVariableDeclaration() throws IOException {
+    String source = "Integer test = 3;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(0));
+    assertEquals("JavaLangInteger *test = JavaLangInteger_valueOfWithInt_(3);", result);
+  }
+
+  public void testMethodArgs() throws IOException {
+    String source = "public class Test { void foo(Integer i) {} "
+        + "void test() { int i = 3; foo(i); }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "[self fooWithJavaLangInteger:JavaLangInteger_valueOfWithInt_(i)];");
+  }
+
+  public void testConditionalExpression() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { "
+        + "void test() { Boolean b = true ? false : null; } }",
+        "Test", "Test.m");
+    assertTranslation(translation, "JavaLangBoolean_valueOfWithBoolean_(NO)");
+  }
+
+  public void testReturnWithConditional() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { "
+        + "boolean test() { Boolean b = null; return b != null ? b : false; } }",
+        "Test", "Test.m");
+    assertTranslation(translation, "b != nil ? [b booleanValue] : NO");
+  }
+
+  public void testConditionalOnBoxedValue() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { int test(Boolean b) { return b ? 1 : 2; } }", "Test", "Test.m");
+    assertTranslation(translation,
+        "return [((JavaLangBoolean *) nil_chk(b)) booleanValue] ? 1 : 2;");
+  }
+
+  public void testArrayInitializerNotBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { public int values[] = new int[] { 1, 2, 3 }; }",
+        "Test", "Test.m");
+    assertTranslation(translation, "[IOSIntArray newArrayWithInts:(jint[]){ 1, 2, 3 } count:3]");
+    translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2; private Integer k = 3;"
+        + "  public Integer values[] = new Integer[] { i, j, k }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray newArrayWithObjects:(id[]){ self->i_, self->j_, self->k_ } count:3 "
+        + "type:JavaLangInteger_class_()]");
+  }
+
+  public void testArrayInitializerBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; "
+        + "  public void test() { Integer values[] = new Integer[] { 1, 2, i }; }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray arrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2), i_ } count:3 type:JavaLangInteger_class_()]");
+  }
+
+  public void testArrayInitializerUnboxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2;"
+        + "  public void test() { int values[] = new int[] { i, j, 3 }; }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSIntArray arrayWithInts:(jint[]){ [((JavaLangInteger *) nil_chk(i_)) intValue], "
+        + "[((JavaLangInteger *) nil_chk(j_)) intValue], 3 } count:3]");
+  }
+
+  public void testFieldArrayInitializerBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; "
+        + "  public Integer values[] = new Integer[] { 1, 2, i }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray newArrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2), self->i_ } count:3 type:JavaLangInteger_class_()]");
+  }
+
+  public void testFieldArrayInitializerUnboxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2;"
+        + "  public int values[] = new int[] { i, j, 3 }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSIntArray newArrayWithInts:(jint[]){ "
+        + "[self->i_ intValue], [self->j_ intValue], 3 } count:3]");
+  }
+
+  public void testBoxedTypeLiteral() throws IOException {
+    String source = "public class Test { Class c = int.class; }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "Test_set_c_(self, [IOSClass intClass]);");
+  }
+
+  public void testBoxedLhsOperatorAssignment() throws IOException {
+    String source = "public class Test { Integer i = 1; void foo() { i *= 2; } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "BoxedTimesAssignStrongInt(&i_, 2);");
+  }
+
+  public void testBoxedEnumConstructorArgs() throws IOException {
+    String source = "public enum Test { INT(0), BOOLEAN(false); Test(Object o) {}}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation,
+        "new_TestEnum_initWithId_withNSString_withInt_("
+        + "JavaLangInteger_valueOfWithInt_(0), @\"INT\", 0)");
+    assertTranslation(translation,
+        "new_TestEnum_initWithId_withNSString_withInt_("
+        + "JavaLangBoolean_valueOfWithBoolean_(NO), @\"BOOLEAN\", 1)");
+  }
+
+  public void testBoxedBoolInIf() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { if (b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "if ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolInWhile() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { while (b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolInDoWhile() throws IOException {
+    String source = "public class Test { "
+        + "  Boolean b = false; void foo() { do { foo(); } while (b); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolNegatedInWhile() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { while (!b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while (![((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testAutoboxCast() throws IOException {
+    String source = "public class Test { double doubleValue; "
+        + "public int hashCode() { return ((Double) doubleValue).hashCode(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "[JavaLangDouble_valueOfWithDouble_(doubleValue_) hash]");
+  }
+
+  public void testAutoboxArrayIndex() throws IOException {
+    String source =
+        "public class Test { "
+        + "  Integer index() { return 1; }"
+        + "  void test() {"
+        + "    int[] array = new int[3];"
+        + "    array[index()] = 2; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "*IOSIntArray_GetRef(array, [((JavaLangInteger *) nil_chk([self index])) intValue]) = 2;");
+  }
+
+  public void testPrefixExpression() throws IOException {
+    String source =
+        "public class Test { void test() { "
+        + "  Integer iMinutes = new Integer(1); "
+        + "  Double iSeconds = new Double(0);"
+        + "  iMinutes = -iMinutes; iSeconds = -iSeconds; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "iMinutes = JavaLangInteger_valueOfWithInt_(-[iMinutes intValue]);");
+    assertTranslation(translation,
+        "iSeconds = JavaLangDouble_valueOfWithDouble_(-[iSeconds doubleValue]);");
+  }
+
+  public void testStringConcatenation() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Boolean b = Boolean.TRUE; Integer i = new Integer(3); "
+        + "String s = b + \"foo\" + i; } }", "Test", "Test.m");
+    assertTranslation(translation, "NSString *s = JreStrcat(\"@$@\", b, @\"foo\", i)");
+  }
+
+  public void testExtendedOperandsAreUnboxed() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i1 = new Integer(2); Integer i2 = new Integer(3); "
+        + "int i3 = 1 + 2 + i1 + i2; } }", "Test", "Test.m");
+    assertTranslation(translation, "int i3 = 1 + 2 + [i1 intValue] + [i2 intValue]");
+  }
+
+  public void testUnboxOfSwitchStatementExpression() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() {"
+        + " Integer i = 3;"
+        + " switch (i) { case 1: case 2: case 3: } } }", "Test", "Test.m");
+    assertTranslation(translation, "switch ([i intValue]) {");
+  }
+
+  public void testInvokeSuperMethodAutoboxing() throws IOException {
+    String translation = translateSourceFile("class Base { "
+        + "public void print(Object o) { System.out.println(o); }}"
+        + "public class Test extends Base {"
+        + "@Override public void print(Object o) { super.print(123.456f); }}", "Test", "Test.m");
+    assertTranslation(translation,
+        "[super printWithId:JavaLangFloat_valueOfWithFloat_(123.456f)];");
+  }
+
+  public void testAssignIntLiteralToNonIntBoxedType() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void test() { Byte b = 3; Short s; s = 4; } }", "Test", "Test.m");
+    assertTranslation(translation, "JavaLangByte *b = JavaLangByte_valueOfWithByte_(3);");
+    assertTranslation(translation, "s = JavaLangShort_valueOfWithShort_(4);");
+  }
+
+  public void testBoxedIncrementAndDecrement() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i = 1; i++; Byte b = 2; b--; Character c = 'a'; ++c; "
+        + "Double d = 3.0; --d; } }", "Test", "Test.m");
+    assertTranslation(translation, "PostIncrInt(&i);");
+    assertTranslation(translation, "PostDecrByte(&b);");
+    assertTranslation(translation, "PreIncrChar(&c);");
+    assertTranslation(translation, "PreDecrDouble(&d);");
+  }
+
+  
+  public void testUnboxedDoubleParameter() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void takesDouble(double d) {} void test() { takesDouble(new Double(1.2)); }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[self takesDoubleWithDouble:[((JavaLangDouble *) [new_JavaLangDouble_initWithDouble_(1.2) "
+        + "autorelease]) doubleValue]];");
+  }
+
+  public void testWildcardBoxType() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { interface Entry<T> { T getValue(); } "
+        + "void test(Entry<? extends Long> entry) { long l = entry.getValue(); } }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "jlong l = [((JavaLangLong *) nil_chk([((id<Test_Entry>) nil_chk(entry_)) "
+        + "getValue])) longLongValue];");
+  }
+
+  public void testAssignmentWithCase() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i; i = (Integer) 12; } }", "Test", "Test.m");
+    assertTranslation(translation, "i = JavaLangInteger_valueOfWithInt_(12);");
+  }
+
+  public void testAssertMessage() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test(int i) { assert i == 0 : i; }}", "Test", "Test.m");
+    assertTranslation(translation,
+        "NSAssert(i == 0, [JavaLangInteger_valueOfWithInt_(i) description]);");
+  }
+
+  public void testNonWrapperObjectTypeCastToPrimitive() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { int test(Object o) { return (int) o; } "
+        + "int test2(Integer i) { return (int) i; } }", "Test", "Test.m");
+    assertTranslation(translation,
+        "return [((JavaLangInteger *) nil_chk((JavaLangInteger *) "
+        + "check_class_cast(o, [JavaLangInteger class]))) intValue];");
+    
+    
+    assertTranslation(translation,
+        "return [((JavaLangInteger *) nil_chk(i)) intValue];");
+  }
+
+  public void testBoxedOperators() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { Integer si; Long sl; Float sf; Double sd;"
+        + " Integer[] ai; Long[] al; Float[] af; Double[] ad;"
+        + " void test(Integer wi, Long wl, Float wf, Double wd) {"
+        + " si++; wi++; ++sl; ++wl; sf--; wf--; --sd; --wd;"
+        + " si += 5; wi += 5; sl &= 6l; wl &= 6l;"
+        + " si <<= 2; wi <<= 2; sl >>>= 3; wl >>>= 3;"
+        + " ai[0]++; --al[1]; af[2] += 9; ad[3] -= 8; } }", "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "BoxedPostIncrStrongInt(&si_);",
+        "BoxedPostIncrInt(&wi);",
+        "BoxedPreIncrStrongLong(&sl_);",
+        "BoxedPreIncrLong(&wl);",
+        "BoxedPostDecrStrongFloat(&sf_);",
+        "BoxedPostDecrFloat(&wf);",
+        "BoxedPreDecrStrongDouble(&sd_);",
+        "BoxedPreDecrDouble(&wd);",
+        "BoxedPlusAssignStrongInt(&si_, 5);",
+        "BoxedPlusAssignInt(&wi, 5);",
+        "BoxedBitAndAssignStrongLong(&sl_, 6l);",
+        "BoxedBitAndAssignLong(&wl, 6l);",
+        "BoxedLShiftAssignStrongInt(&si_, 2);",
+        "BoxedLShiftAssignInt(&wi, 2);",
+        "BoxedURShiftAssignStrongLong(&sl_, 3);",
+        "BoxedURShiftAssignLong(&wl, 3);",
+        "BoxedPostIncrArrayInt(IOSObjectArray_GetRef(nil_chk(ai_), 0));",
+        "BoxedPreDecrArrayLong(IOSObjectArray_GetRef(nil_chk(al_), 1));",
+        "BoxedPlusAssignArrayFloat(IOSObjectArray_GetRef(nil_chk(af_), 2), 9);",
+        "BoxedMinusAssignArrayDouble(IOSObjectArray_GetRef(nil_chk(ad_), 3), 8);");
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.translate;
+
+import com.google.devtools.j2objc.ast.ArrayAccess;
+import com.google.devtools.j2objc.ast.ArrayInitializer;
+import com.google.devtools.j2objc.ast.AssertStatement;
+import com.google.devtools.j2objc.ast.Assignment;
+import com.google.devtools.j2objc.ast.CastExpression;
+import com.google.devtools.j2objc.ast.ClassInstanceCreation;
+import com.google.devtools.j2objc.ast.ConditionalExpression;
+import com.google.devtools.j2objc.ast.ConstructorInvocation;
+import com.google.devtools.j2objc.ast.DoStatement;
+import com.google.devtools.j2objc.ast.EnumConstantDeclaration;
+import com.google.devtools.j2objc.ast.Expression;
+import com.google.devtools.j2objc.ast.FunctionInvocation;
+import com.google.devtools.j2objc.ast.IfStatement;
+import com.google.devtools.j2objc.ast.InfixExpression;
+import com.google.devtools.j2objc.ast.MethodInvocation;
+import com.google.devtools.j2objc.ast.ParenthesizedExpression;
+import com.google.devtools.j2objc.ast.PostfixExpression;
+import com.google.devtools.j2objc.ast.PrefixExpression;
+import com.google.devtools.j2objc.ast.ReturnStatement;
+import com.google.devtools.j2objc.ast.SimpleName;
+import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
+import com.google.devtools.j2objc.ast.SuperMethodInvocation;
+import com.google.devtools.j2objc.ast.SwitchStatement;
+import com.google.devtools.j2objc.ast.TreeNode;
+import com.google.devtools.j2objc.ast.TreeUtil;
+import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.ast.Type;
+import com.google.devtools.j2objc.ast.VariableDeclarationFragment;
+import com.google.devtools.j2objc.ast.WhileStatement;
+import com.google.devtools.j2objc.types.IOSMethodBinding;
+import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.NameTable;
+
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.IVariableBinding;
+
+import java.util.List;
+
+
+public class Autoboxer extends TreeVisitor {
+
+  private static final String VALUE_METHOD = "Value";
+  private static final String VALUEOF_METHOD = "valueOf";
+
+  
+  private Expression box(Expression expr) {
+    ITypeBinding wrapperBinding = typeEnv.getWrapperType(expr.getTypeBinding());
+    if (wrapperBinding != null) {
+      return newBoxExpression(expr, wrapperBinding);
+    } else {
+      return expr.copy();
+    }
+  }
+
+  private Expression boxWithType(Expression expr, ITypeBinding wrapperType) {
+    if (typeEnv.isBoxedPrimitive(wrapperType)) {
+      return newBoxExpression(expr, wrapperType);
+    }
+    return box(expr);
+  }
+
+  private Expression newBoxExpression(Expression expr, ITypeBinding wrapperType) {
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(wrapperType);
+    assert primitiveType != null;
+    IMethodBinding wrapperMethod = BindingUtil.findDeclaredMethod(
+        wrapperType, VALUEOF_METHOD, primitiveType.getName());
+    assert wrapperMethod != null : "could not find valueOf method for " + wrapperType;
+    MethodInvocation invocation = new MethodInvocation(wrapperMethod, new SimpleName(wrapperType));
+    invocation.getArguments().add(expr.copy());
+    return invocation;
+  }
+
+  private ITypeBinding findWrapperSuperclass(ITypeBinding type) {
+    while (type != null) {
+      if (typeEnv.isBoxedPrimitive(type)) {
+        return type;
+      }
+      type = type.getSuperclass();
+    }
+    return null;
+  }
+
+  
+  private Expression unbox(Expression expr) {
+    ITypeBinding wrapperType = findWrapperSuperclass(expr.getTypeBinding());
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(wrapperType);
+    if (primitiveType != null) {
+      IMethodBinding valueMethod = BindingUtil.findDeclaredMethod(
+          wrapperType, primitiveType.getName() + VALUE_METHOD);
+      assert valueMethod != null : "could not find value method for " + wrapperType;
+      return new MethodInvocation(valueMethod, expr.copy());
+    } else {
+      return expr.copy();
+    }
+  }
+
+  @Override
+  public void endVisit(Assignment node) {
+    Expression lhs = node.getLeftHandSide();
+    ITypeBinding lhType = lhs.getTypeBinding();
+    Expression rhs = node.getRightHandSide();
+    ITypeBinding rhType = rhs.getTypeBinding();
+    Assignment.Operator op = node.getOperator();
+    if (op != Assignment.Operator.ASSIGN && !lhType.isPrimitive()) {
+      rewriteBoxedAssignment(node);
+    } else if (lhType.isPrimitive() && !rhType.isPrimitive()) {
+      node.setRightHandSide(unbox(rhs));
+    } else if (!lhType.isPrimitive() && rhType.isPrimitive()) {
+      node.setRightHandSide(boxWithType(rhs, lhType));
+    }
+  }
+
+  private void rewriteBoxedAssignment(Assignment node) {
+    Expression lhs = node.getLeftHandSide();
+    Expression rhs = node.getRightHandSide();
+    ITypeBinding type = lhs.getTypeBinding();
+    if (!typeEnv.isBoxedPrimitive(type)) {
+      return;
+    }
+    ITypeBinding primitiveType = typeEnv.getPrimitiveType(type);
+    IVariableBinding var = TreeUtil.getVariableBinding(lhs);
+    assert var != null : "No variable binding for lhs of assignment.";
+    String funcName = "Boxed" + getAssignFunctionName(node.getOperator());
+    if (var.isField() && !BindingUtil.isWeakReference(var)) {
+      funcName += "Strong";
+    }
+    funcName += NameTable.capitalize(primitiveType.getName());
+    FunctionInvocation invocation = new FunctionInvocation(funcName, type, type, type);
+    invocation.getArguments().add(new PrefixExpression(
+        typeEnv.getPointerType(type), PrefixExpression.Operator.ADDRESS_OF, TreeUtil.remove(lhs)));
+    invocation.getArguments().add(unbox(rhs));
+    node.replaceWith(invocation);
+  }
+
+  private static String getAssignFunctionName(Assignment.Operator op) {
+    switch (op) {
+      case PLUS_ASSIGN:
+        return "PlusAssign";
+      case MINUS_ASSIGN:
+        return "MinusAssign";
+      case TIMES_ASSIGN:
+        return "TimesAssign";
+      case DIVIDE_ASSIGN:
+        return "DivideAssign";
+      case BIT_AND_ASSIGN:
+        return "BitAndAssign";
+      case BIT_OR_ASSIGN:
+        return "BitOrAssign";
+      case BIT_XOR_ASSIGN:
+        return "BitXorAssign";
+      case REMAINDER_ASSIGN:
+        return "ModAssign";
+      case LEFT_SHIFT_ASSIGN:
+        return "LShiftAssign";
+      case RIGHT_SHIFT_SIGNED_ASSIGN:
+        return "RShiftAssign";
+      case RIGHT_SHIFT_UNSIGNED_ASSIGN:
+        return "URShiftAssign";
+      default:
+        throw new IllegalArgumentException();
+    }
+  }
+
+  @Override
+  public void endVisit(ArrayAccess node) {
+    Expression index = node.getIndex();
+    if (!index.getTypeBinding().isPrimitive()) {
+      node.setIndex(unbox(index));
+    }
+  }
+
+  @Override
+  public void endVisit(ArrayInitializer node) {
+    ITypeBinding type = node.getTypeBinding().getElementType();
+    List<Expression> expressions = node.getExpressions();
+    for (int i = 0; i < expressions.size(); i++) {
+      Expression expr = expressions.get(i);
+      Expression result = boxOrUnboxExpression(expr, type);
+      if (expr != result) {
+        expressions.set(i, result);
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(AssertStatement node) {
+    Expression expression = node.getMessage();
+    if (expression != null) {
+      ITypeBinding exprType = expression.getTypeBinding();
+      if (exprType.isPrimitive()) {
+        node.setMessage(box(expression));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(CastExpression node) {
+    ITypeBinding type = node.getTypeBinding();
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (type.isPrimitive() && !exprType.isPrimitive()) {
+      
+      
+      type = typeEnv.getWrapperType(type);
+      node.setType(Type.newType(type));
+    }
+    Expression newExpr = boxOrUnboxExpression(expr, type);
+    if (newExpr != expr) {
+      TreeNode parent = node.getParent();
+      if (parent instanceof ParenthesizedExpression) {
+        parent.replaceWith(newExpr);
+      } else {
+        node.replaceWith(newExpr);
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(ClassInstanceCreation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(ConditionalExpression node) {
+    Expression expr = node.getExpression();
+    ITypeBinding exprType = expr.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expr));
+    }
+
+    ITypeBinding nodeType = node.getTypeBinding();
+    Expression thenExpr = node.getThenExpression();
+    ITypeBinding thenType = thenExpr.getTypeBinding();
+    Expression elseExpr = node.getElseExpression();
+    ITypeBinding elseType = elseExpr.getTypeBinding();
+
+    if (thenType.isPrimitive() && !nodeType.isPrimitive()) {
+      node.setThenExpression(box(thenExpr));
+    } else if (!thenType.isPrimitive() && nodeType.isPrimitive()) {
+      node.setThenExpression(unbox(thenExpr));
+    }
+
+    if (elseType.isPrimitive() && !nodeType.isPrimitive()) {
+      node.setElseExpression(box(elseExpr));
+    } else if (!elseType.isPrimitive() && nodeType.isPrimitive()) {
+      node.setElseExpression(unbox(elseExpr));
+    }
+  }
+
+  @Override
+  public void endVisit(ConstructorInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(DoStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  @Override
+  public void endVisit(EnumConstantDeclaration node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(IfStatement node) {
+    Expression expr = node.getExpression();
+    ITypeBinding binding = expr.getTypeBinding();
+
+    if (!binding.isPrimitive()) {
+      node.setExpression(unbox(expr));
+    }
+  }
+
+  @Override
+  public void endVisit(InfixExpression node) {
+    ITypeBinding type = node.getTypeBinding();
+    InfixExpression.Operator op = node.getOperator();
+    List<Expression> operands = node.getOperands();
+
+    
+    if ((op == InfixExpression.Operator.EQUALS || op == InfixExpression.Operator.NOT_EQUALS)
+        && !operands.get(0).getTypeBinding().isPrimitive()
+        && !operands.get(1).getTypeBinding().isPrimitive()) {
+      return;
+    }
+    
+    if (op == InfixExpression.Operator.PLUS && typeEnv.isJavaStringType(type)) {
+      return;
+    }
+
+    for (int i = 0; i < operands.size(); i++) {
+      Expression expr = operands.get(i);
+      if (!expr.getTypeBinding().isPrimitive()) {
+        operands.set(i, unbox(expr));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(MethodInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(PrefixExpression node) {
+    PrefixExpression.Operator op = node.getOperator();
+    Expression operand = node.getOperand();
+    if (op == PrefixExpression.Operator.INCREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, operand, "BoxedPreIncr");
+    } else if (op == PrefixExpression.Operator.DECREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, operand, "BoxedPreDecr");
+    } else if (!operand.getTypeBinding().isPrimitive()) {
+      node.setOperand(unbox(operand));
+    }
+  }
+
+  @Override
+  public void endVisit(PostfixExpression node) {
+    PostfixExpression.Operator op = node.getOperator();
+    if (op == PostfixExpression.Operator.INCREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, node.getOperand(), "BoxedPostIncr");
+    } else if (op == PostfixExpression.Operator.DECREMENT) {
+      rewriteBoxedPrefixOrPostfix(node, node.getOperand(), "BoxedPostDecr");
+    }
+  }
+
+  private void rewriteBoxedPrefixOrPostfix(TreeNode node, Expression operand, String funcName) {
+    ITypeBinding type = operand.getTypeBinding();
+    if (!typeEnv.isBoxedPrimitive(type)) {
+      return;
+    }
+    IVariableBinding var = TreeUtil.getVariableBinding(operand);
+    if (var != null) {
+      if (var.isField() && !BindingUtil.isWeakReference(var)) {
+        funcName += "Strong";
+      }
+    } else {
+      assert TreeUtil.trimParentheses(operand) instanceof ArrayAccess
+          : "Operand cannot be resolved to a variable or array access.";
+      funcName += "Array";
+    }
+    funcName += NameTable.capitalize(typeEnv.getPrimitiveType(type).getName());
+    FunctionInvocation invocation = new FunctionInvocation(funcName, type, type, type);
+    invocation.getArguments().add(new PrefixExpression(
+        typeEnv.getPointerType(type), PrefixExpression.Operator.ADDRESS_OF,
+        TreeUtil.remove(operand)));
+    node.replaceWith(invocation);
+  }
+
+  @Override
+  public void endVisit(ReturnStatement node) {
+    Expression expr = node.getExpression();
+    if (expr != null) {
+      IMethodBinding methodBinding = TreeUtil.getOwningMethodBinding(node);
+      ITypeBinding returnType = methodBinding.getReturnType();
+      ITypeBinding exprType = expr.getTypeBinding();
+      if (returnType.isPrimitive() && !exprType.isPrimitive()) {
+        node.setExpression(unbox(expr));
+      }
+      if (!returnType.isPrimitive() && exprType.isPrimitive()) {
+        node.setExpression(box(expr));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(SuperConstructorInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(SuperMethodInvocation node) {
+    convertArguments(node.getMethodBinding(), node.getArguments());
+  }
+
+  @Override
+  public void endVisit(VariableDeclarationFragment node) {
+    Expression initializer = node.getInitializer();
+    if (initializer != null) {
+      ITypeBinding nodeType = node.getVariableBinding().getType();
+      ITypeBinding initType = initializer.getTypeBinding();
+      if (nodeType.isPrimitive() && !initType.isPrimitive()) {
+        node.setInitializer(unbox(initializer));
+      } else if (!nodeType.isPrimitive() && initType.isPrimitive()) {
+        node.setInitializer(boxWithType(initializer, nodeType));
+      }
+    }
+  }
+
+  @Override
+  public void endVisit(WhileStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  @Override
+  public void endVisit(SwitchStatement node) {
+    Expression expression = node.getExpression();
+    ITypeBinding exprType = expression.getTypeBinding();
+    if (!exprType.isPrimitive()) {
+      node.setExpression(unbox(expression));
+    }
+  }
+
+  private void convertArguments(IMethodBinding methodBinding, List<Expression> args) {
+    if (methodBinding instanceof IOSMethodBinding) {
+      return; 
+    }
+    ITypeBinding[] paramTypes = methodBinding.getParameterTypes();
+    for (int i = 0; i < args.size(); i++) {
+      ITypeBinding paramType;
+      if (methodBinding.isVarargs() && i >= paramTypes.length - 1) {
+        paramType = paramTypes[paramTypes.length - 1].getComponentType();
+      } else {
+        paramType = paramTypes[i];
+      }
+      Expression arg = args.get(i);
+      Expression replacementArg = boxOrUnboxExpression(arg, paramType);
+      if (replacementArg != arg) {
+        args.set(i, replacementArg);
+      }
+    }
+  }
+
+  private Expression boxOrUnboxExpression(Expression arg, ITypeBinding argType) {
+    ITypeBinding argBinding = arg.getTypeBinding();
+    if (argType.isPrimitive() && !argBinding.isPrimitive()) {
+      return unbox(arg);
+    } else if (!argType.isPrimitive() && argBinding.isPrimitive()) {
+      return box(arg);
+    } else {
+      return arg;
+    }
+  }
+}
+
+<code block>
+
+
+package com.google.devtools.j2objc.translate;
+
+import com.google.devtools.j2objc.GenerationTest;
+import com.google.devtools.j2objc.ast.Statement;
+
+import java.io.IOException;
+import java.util.List;
+
+
+public class AutoboxerTest extends GenerationTest {
+
+  public void testDoNotBoxIntInVarargMethod() throws IOException {
+    String source = "public class Test { Test(String s) {} "
+        + "int one(String s, int i) { return two(new Test(s), i, 1, 2); }"
+        + "int two(Test t, int i, Integer ... args) { return 0; } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    
+    
+    assertTranslation(translation, "twoWithTest:[new_Test_initWithNSString_(s) autorelease] "
+        + "withInt:i withJavaLangIntegerArray:"
+        + "[IOSObjectArray arrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2) } count:2 type:JavaLangInteger_class_()]];");
+  }
+
+  public void testUnboxReturn() throws IOException {
+    String source = "public class Test { Integer value; int intValue() { return value; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "return [((JavaLangInteger *) nil_chk(value_)) intValue];");
+  }
+
+  public void testBooleanAssignment() throws IOException {
+    String source = "boolean b = true; Boolean foo = Boolean.FALSE; b = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("b = [((JavaLangBoolean *) nil_chk(foo)) booleanValue];", result);
+
+    source = "boolean b = true; Boolean foo = Boolean.FALSE; foo = b;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangBoolean_valueOfWithBoolean_(b);", result);
+  }
+
+  public void testByteAssignment() throws IOException {
+    String source = "byte b = 5; Byte foo = Byte.valueOf((byte) 3); b = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("b = [foo charValue];", result);
+
+    source = "byte b = 5; Byte foo = Byte.valueOf((byte) 3); foo = b;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangByte_valueOfWithByte_(b);", result);
+  }
+
+  public void testCharAssignment() throws IOException {
+    String source = "char c = 'a'; Character foo = Character.valueOf('b'); c = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("c = [foo charValue];", result);
+
+    source = "char c = 'a'; Character foo = Character.valueOf('b'); foo = c;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangCharacter_valueOfWithChar_(c);", result);
+  }
+
+  public void testShortAssignment() throws IOException {
+    String source = "short s = 5; Short foo = Short.valueOf((short) 3); s = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("s = [foo shortValue];", result);
+
+    source = "short s = 5; Short foo = Short.valueOf((short) 3); foo = s;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangShort_valueOfWithShort_(s);", result);
+  }
+
+  public void testIntAssignment() throws IOException {
+    String source = "int i = 5; Integer foo = Integer.valueOf(3); i = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("i = [foo intValue];", result);
+
+    source = "int i = 5; Integer foo = Integer.valueOf(3); foo = i;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangInteger_valueOfWithInt_(i);", result);
+  }
+
+  public void testLongAssignment() throws IOException {
+    String source = "long l = 5; Long foo = Long.valueOf(3L); l = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("l = [foo longLongValue];", result);
+
+    source = "long l = 5; Long foo = Long.valueOf(3L); foo = l;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangLong_valueOfWithLong_(l);", result);
+  }
+
+  public void testFloatAssignment() throws IOException {
+    String source = "float f = 5.0f; Float foo = Float.valueOf(3.0f); f = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("f = [foo floatValue];", result);
+
+    source = "float f = 5.0f; Float foo = Float.valueOf(3.0f); foo = f;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangFloat_valueOfWithFloat_(f);", result);
+  }
+
+  public void testDoubleAssignment() throws IOException {
+    String source = "double d = 5.0; Double foo = Double.valueOf(3.0); d = foo;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("d = [foo doubleValue];", result);
+
+    source = "double d = 5.0; Double foo = Double.valueOf(3.0); foo = d;";
+    stmts = translateStatements(source);
+    result = generateStatement(stmts.get(2));
+    assertEquals("foo = JavaLangDouble_valueOfWithDouble_(d);", result);
+  }
+
+  public void testInfixLeftOperand() throws IOException {
+    String source = "Integer test = new Integer(5); int result = test + 3;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(1));
+    assertEquals("jint result = [test intValue] + 3;", result);
+  }
+
+  public void testInfixRightOperand() throws IOException {
+    String source = "Integer test = new Integer(5); int result = 3 + test;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(1));
+    assertEquals("jint result = 3 + [test intValue];", result);
+  }
+
+  public void testInfixBothOperands() throws IOException {
+    String source = "Integer foo = new Integer(5); Integer bar = new Integer(3);"
+        + "int result = foo + bar;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(2));
+    assertEquals("jint result = [foo intValue] + [bar intValue];", result);
+  }
+
+  public void testInfixNeitherOperand() throws IOException {
+    
+    String source = "int result = 3 + 5;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(0));
+    assertEquals("jint result = 3 + 5;", result);
+  }
+
+  public void testVariableDeclaration() throws IOException {
+    String source = "Integer test = 3;";
+    List<Statement> stmts = translateStatements(source);
+    String result = generateStatement(stmts.get(0));
+    assertEquals("JavaLangInteger *test = JavaLangInteger_valueOfWithInt_(3);", result);
+  }
+
+  public void testMethodArgs() throws IOException {
+    String source = "public class Test { void foo(Integer i) {} "
+        + "void test() { int i = 3; foo(i); }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "[self fooWithJavaLangInteger:JavaLangInteger_valueOfWithInt_(i)];");
+  }
+
+  public void testConditionalExpression() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { "
+        + "void test() { Boolean b = true ? false : null; } }",
+        "Test", "Test.m");
+    assertTranslation(translation, "JavaLangBoolean_valueOfWithBoolean_(NO)");
+  }
+
+  public void testReturnWithConditional() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { "
+        + "boolean test() { Boolean b = null; return b != null ? b : false; } }",
+        "Test", "Test.m");
+    assertTranslation(translation, "b != nil ? [b booleanValue] : NO");
+  }
+
+  public void testConditionalOnBoxedValue() throws IOException {
+    String translation = translateSourceFile(
+        "public class Test { int test(Boolean b) { return b ? 1 : 2; } }", "Test", "Test.m");
+    assertTranslation(translation,
+        "return [((JavaLangBoolean *) nil_chk(b)) booleanValue] ? 1 : 2;");
+  }
+
+  public void testArrayInitializerNotBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { public int values[] = new int[] { 1, 2, 3 }; }",
+        "Test", "Test.m");
+    assertTranslation(translation, "[IOSIntArray newArrayWithInts:(jint[]){ 1, 2, 3 } count:3]");
+    translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2; private Integer k = 3;"
+        + "  public Integer values[] = new Integer[] { i, j, k }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray newArrayWithObjects:(id[]){ self->i_, self->j_, self->k_ } count:3 "
+        + "type:JavaLangInteger_class_()]");
+  }
+
+  public void testArrayInitializerBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; "
+        + "  public void test() { Integer values[] = new Integer[] { 1, 2, i }; }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray arrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2), i_ } count:3 type:JavaLangInteger_class_()]");
+  }
+
+  public void testArrayInitializerUnboxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2;"
+        + "  public void test() { int values[] = new int[] { i, j, 3 }; }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSIntArray arrayWithInts:(jint[]){ [((JavaLangInteger *) nil_chk(i_)) intValue], "
+        + "[((JavaLangInteger *) nil_chk(j_)) intValue], 3 } count:3]");
+  }
+
+  public void testFieldArrayInitializerBoxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; "
+        + "  public Integer values[] = new Integer[] { 1, 2, i }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSObjectArray newArrayWithObjects:(id[]){ JavaLangInteger_valueOfWithInt_(1), "
+        + "JavaLangInteger_valueOfWithInt_(2), self->i_ } count:3 type:JavaLangInteger_class_()]");
+  }
+
+  public void testFieldArrayInitializerUnboxed() throws IOException {
+    
+    
+    String translation = translateSourceFile(
+        "public class Test { private Integer i = 1; private Integer j = 2;"
+        + "  public int values[] = new int[] { i, j, 3 }; }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[IOSIntArray newArrayWithInts:(jint[]){ "
+        + "[self->i_ intValue], [self->j_ intValue], 3 } count:3]");
+  }
+
+  public void testBoxedTypeLiteral() throws IOException {
+    String source = "public class Test { Class c = int.class; }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "Test_set_c_(self, [IOSClass intClass]);");
+  }
+
+  public void testBoxedLhsOperatorAssignment() throws IOException {
+    String source = "public class Test { Integer i = 1; void foo() { i *= 2; } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation, "BoxedTimesAssignStrongInt(&i_, 2);");
+  }
+
+  public void testBoxedEnumConstructorArgs() throws IOException {
+    String source = "public enum Test { INT(0), BOOLEAN(false); Test(Object o) {}}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation,
+        "new_TestEnum_initWithId_withNSString_withInt_("
+        + "JavaLangInteger_valueOfWithInt_(0), @\"INT\", 0)");
+    assertTranslation(translation,
+        "new_TestEnum_initWithId_withNSString_withInt_("
+        + "JavaLangBoolean_valueOfWithBoolean_(NO), @\"BOOLEAN\", 1)");
+  }
+
+  public void testBoxedBoolInIf() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { if (b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "if ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolInWhile() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { while (b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolInDoWhile() throws IOException {
+    String source = "public class Test { "
+        + "  Boolean b = false; void foo() { do { foo(); } while (b); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while ([((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testBoxedBoolNegatedInWhile() throws IOException {
+    String source = "public class Test { Boolean b = false; void foo() { while (!b) foo(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "while (![((JavaLangBoolean *) nil_chk(b_)) booleanValue])");
+  }
+
+  public void testAutoboxCast() throws IOException {
+    String source = "public class Test { double doubleValue; "
+        + "public int hashCode() { return ((Double) doubleValue).hashCode(); } }";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+
+    assertTranslation(translation, "[JavaLangDouble_valueOfWithDouble_(doubleValue_) hash]");
+  }
+
+  public void testAutoboxArrayIndex() throws IOException {
+    String source =
+        "public class Test { "
+        + "  Integer index() { return 1; }"
+        + "  void test() {"
+        + "    int[] array = new int[3];"
+        + "    array[index()] = 2; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "*IOSIntArray_GetRef(array, [((JavaLangInteger *) nil_chk([self index])) intValue]) = 2;");
+  }
+
+  public void testPrefixExpression() throws IOException {
+    String source =
+        "public class Test { void test() { "
+        + "  Integer iMinutes = new Integer(1); "
+        + "  Double iSeconds = new Double(0);"
+        + "  iMinutes = -iMinutes; iSeconds = -iSeconds; }}";
+    String translation = translateSourceFile(source, "Test", "Test.m");
+    assertTranslation(translation,
+        "iMinutes = JavaLangInteger_valueOfWithInt_(-[iMinutes intValue]);");
+    assertTranslation(translation,
+        "iSeconds = JavaLangDouble_valueOfWithDouble_(-[iSeconds doubleValue]);");
+  }
+
+  public void testStringConcatenation() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Boolean b = Boolean.TRUE; Integer i = new Integer(3); "
+        + "String s = b + \"foo\" + i; } }", "Test", "Test.m");
+    assertTranslation(translation, "NSString *s = JreStrcat(\"@$@\", b, @\"foo\", i)");
+  }
+
+  public void testExtendedOperandsAreUnboxed() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i1 = new Integer(2); Integer i2 = new Integer(3); "
+        + "int i3 = 1 + 2 + i1 + i2; } }", "Test", "Test.m");
+    assertTranslation(translation, "int i3 = 1 + 2 + [i1 intValue] + [i2 intValue]");
+  }
+
+  public void testUnboxOfSwitchStatementExpression() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() {"
+        + " Integer i = 3;"
+        + " switch (i) { case 1: case 2: case 3: } } }", "Test", "Test.m");
+    assertTranslation(translation, "switch ([i intValue]) {");
+  }
+
+  public void testInvokeSuperMethodAutoboxing() throws IOException {
+    String translation = translateSourceFile("class Base { "
+        + "public void print(Object o) { System.out.println(o); }}"
+        + "public class Test extends Base {"
+        + "@Override public void print(Object o) { super.print(123.456f); }}", "Test", "Test.m");
+    assertTranslation(translation,
+        "[super printWithId:JavaLangFloat_valueOfWithFloat_(123.456f)];");
+  }
+
+  public void testAssignIntLiteralToNonIntBoxedType() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void test() { Byte b = 3; Short s; s = 4; } }", "Test", "Test.m");
+    assertTranslation(translation, "JavaLangByte *b = JavaLangByte_valueOfWithByte_(3);");
+    assertTranslation(translation, "s = JavaLangShort_valueOfWithShort_(4);");
+  }
+
+  public void testBoxedIncrementAndDecrement() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i = 1; i++; Byte b = 2; b--; Character c = 'a'; ++c; "
+        + "Double d = 3.0; --d; } }", "Test", "Test.m");
+    assertTranslation(translation, "PostIncrInt(&i);");
+    assertTranslation(translation, "PostDecrByte(&b);");
+    assertTranslation(translation, "PreIncrChar(&c);");
+    assertTranslation(translation, "PreDecrDouble(&d);");
+  }
+
+  
+  public void testUnboxedDoubleParameter() throws Exception {
+    String translation = translateSourceFile(
+        "class Test { void takesDouble(double d) {} void test() { takesDouble(new Double(1.2)); }}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "[self takesDoubleWithDouble:[((JavaLangDouble *) [new_JavaLangDouble_initWithDouble_(1.2) "
+        + "autorelease]) doubleValue]];");
+  }
+
+  public void testWildcardBoxType() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { interface Entry<T> { T getValue(); } "
+        + "void test(Entry<? extends Long> entry) { long l = entry.getValue(); } }",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "jlong l = [((JavaLangLong *) nil_chk([((id<Test_Entry>) nil_chk(entry_)) "
+        + "getValue])) longLongValue];");
+  }
+
+  public void testAssignmentWithCase() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test() { Integer i; i = (Integer) 12; } }", "Test", "Test.m");
+    assertTranslation(translation, "i = JavaLangInteger_valueOfWithInt_(12);");
+  }
+
+  public void testAssertMessage() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test(int i) { assert i == 0 : i; }}", "Test", "Test.m");
+    assertTranslation(translation,
+        "NSAssert(i == 0, [JavaLangInteger_valueOfWithInt_(i) description]);");
+  }
+
+  public void testNonWrapperObjectTypeCastToPrimitive() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { int test(Object o) { return (int) o; } "
+        + "int test2(Integer i) { return (int) i; } }", "Test", "Test.m");
+    assertTranslation(translation,
+        "return [((JavaLangInteger *) nil_chk((JavaLangInteger *) "
+        + "check_class_cast(o, [JavaLangInteger class]))) intValue];");
+    
+    
+    assertTranslation(translation,
+        "return [((JavaLangInteger *) nil_chk(i)) intValue];");
+  }
+
+  public void testBoxedOperators() throws IOException {
+    
+    String translation = translateSourceFile(
+        "class Test { Integer si; Long sl; Float sf; Double sd;"
+        + " Integer[] ai; Long[] al; Float[] af; Double ad;"
+        + " void test(Integer wi, Long wl, Float wf, Double wd) {"
+        + " si++; wi++; ++sl; ++wl; sf--; wf--; --sd; --wd;"
+        + " si += 5; wi += 5; sl &= 6l; wl &= 6l;"
+        + " si <<= 2; wi <<= 2; sl >>>= 3; wl >>>= 3;"
+        + " ai[0]++; --al[1]; } }", "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "BoxedPostIncrStrongInt(&si_);",
+        "BoxedPostIncrInt(&wi);",
+        "BoxedPreIncrStrongLong(&sl_);",
+        "BoxedPreIncrLong(&wl);",
+        "BoxedPostDecrStrongFloat(&sf_);",
+        "BoxedPostDecrFloat(&wf);",
+        "BoxedPreDecrStrongDouble(&sd_);",
+        "BoxedPreDecrDouble(&wd);",
+        "BoxedPlusAssignStrongInt(&si_, 5);",
+        "BoxedPlusAssignInt(&wi, 5);",
+        "BoxedBitAndAssignStrongLong(&sl_, 6l);",
+        "BoxedBitAndAssignLong(&wl, 6l);",
+        "BoxedLShiftAssignStrongInt(&si_, 2);",
+        "BoxedLShiftAssignInt(&wi, 2);",
+        "BoxedURShiftAssignStrongLong(&sl_, 3);",
+        "BoxedURShiftAssignLong(&wl, 3);",
+        "BoxedPostIncrArrayInt(IOSObjectArray_GetRef(nil_chk(ai_), 0));",
+        "BoxedPreDecrArrayLong(IOSObjectArray_GetRef(nil_chk(al_), 1));");
+  }
+}

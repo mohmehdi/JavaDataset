@@ -1,0 +1,2863 @@
+
+
+package zmq;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.channels.SelectableChannel;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+
+public abstract class SocketBase extends Own
+    implements IPollEvents, Pipe.IPipeEvents
+{
+    
+    private final Map<String, Own> endpoints;
+
+    
+    private final Map<String, Pipe> inprocs;
+
+    
+    private int tag;
+
+    
+    private boolean ctxTerminated;
+
+    
+    
+    
+    private boolean destroyed;
+
+    
+    private final Mailbox mailbox;
+
+    
+    private final List<Pipe> pipes;
+
+    
+    private Poller poller;
+    private SelectableChannel handle;
+
+    
+    private long lastTsc;
+
+    
+    private int ticks;
+
+    
+    private boolean rcvmore;
+
+    
+    private SocketBase monitorSocket;
+
+    
+    private int monitorEvents;
+
+    protected ValueReference<Integer> errno;
+
+    protected SocketBase(Ctx parent, int tid, int sid)
+    {
+        super(parent, tid);
+        tag = 0xbaddecaf;
+        ctxTerminated = false;
+        destroyed = false;
+        lastTsc = 0;
+        ticks = 0;
+        rcvmore = false;
+        monitorSocket = null;
+        monitorEvents = 0;
+
+        options.socketId = sid;
+        options.linger = parent.get(ZMQ.ZMQ_BLOCKY) != 0 ? -1 : 0;
+
+        endpoints = new MultiMap<String, Own>();
+        inprocs = new MultiMap<String, Pipe>();
+        pipes = new ArrayList<Pipe>();
+
+        mailbox = new Mailbox("socket-" + sid);
+
+        errno = new ValueReference<Integer>(0);
+    }
+
+    
+    
+    protected abstract void xattachPipe(Pipe pipe, boolean icanhasall);
+    protected abstract void xpipeTerminated(Pipe pipe);
+
+    
+    public boolean checkTag()
+    {
+        return tag == 0xbaddecaf;
+    }
+
+    
+    public static SocketBase create(int type, Ctx parent, int tid, int sid)
+    {
+        SocketBase s = null;
+        switch (type) {
+        case ZMQ.ZMQ_PAIR:
+            s = new Pair(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PUB:
+            s = new Pub(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_SUB:
+            s = new Sub(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_REQ:
+            s = new Req(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_REP:
+            s = new Rep(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_DEALER:
+            s = new Dealer(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_ROUTER:
+            s = new Router(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PULL:
+            s = new Pull(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PUSH:
+            s = new Push(parent, tid, sid);
+            break;
+
+        case ZMQ.ZMQ_XPUB:
+            s = new XPub(parent, tid, sid);
+            break;
+
+        case ZMQ.ZMQ_XSUB:
+            s = new XSub(parent, tid, sid);
+            break;
+
+        default:
+            throw new IllegalArgumentException("type=" + type);
+        }
+        return s;
+    }
+
+    public void destroy()
+    {
+        try {
+            mailbox.close();
+        }
+        catch (IOException ignore) {
+        }
+
+        stopMonitor();
+        assert (destroyed);
+    }
+
+    
+    public Mailbox getMailbox()
+    {
+        return mailbox;
+    }
+
+    
+    
+    public void stop()
+    {
+        
+        
+        
+        
+        sendStop();
+    }
+
+    
+    
+    private void checkProtocol(String protocol)
+    {
+        
+        if (!protocol.equals("inproc") && !protocol.equals("ipc") && !protocol.equals("tcp") ) {
+            throw new UnsupportedOperationException(protocol);
+        }
+
+        
+        
+        
+        if ((protocol.equals("pgm") || protocol.equals("epgm")) &&
+              options.type != ZMQ.ZMQ_PUB && options.type != ZMQ.ZMQ_SUB &&
+              options.type != ZMQ.ZMQ_XPUB && options.type != ZMQ.ZMQ_XSUB) {
+            throw new UnsupportedOperationException(protocol + ",type=" + options.type);
+        }
+
+        
+    }
+
+    
+    private void attachPipe(Pipe pipe)
+    {
+        attachPipe(pipe, false);
+    }
+
+    private void attachPipe(Pipe pipe, boolean icanhasall)
+    {
+        
+
+        pipe.setEventSink(this);
+        pipes.add(pipe);
+
+        
+        xattachPipe(pipe, icanhasall);
+
+        
+        
+        if (isTerminating()) {
+            registerTermAcks(1);
+            pipe.terminate(false);
+        }
+    }
+
+    public void setSocketOpt(int option, Object optval)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (xsetsockopt(option, optval)) {
+            return;
+        }
+
+        
+        
+        options.setSocketOpt(option, optval);
+    }
+
+    public int getSocketOpt(int option)
+    {
+        if (option != ZMQ.ZMQ_EVENTS && ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (option == ZMQ.ZMQ_RCVMORE) {
+            return rcvmore ? 1 : 0;
+        }
+        if (option == ZMQ.ZMQ_EVENTS) {
+            boolean rc = processCommands(0, false);
+            if (!rc && errno.get() == ZError.ETERM) {
+                return -1;
+            }
+            assert (rc);
+            int val = 0;
+            if (hasOut()) {
+                val |= ZMQ.ZMQ_POLLOUT;
+            }
+            if (hasIn()) {
+                val |= ZMQ.ZMQ_POLLIN;
+            }
+            return val;
+        }
+
+        return (Integer) getsockoptx(option);
+    }
+
+    public Object getsockoptx(int option)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        if (option == ZMQ.ZMQ_RCVMORE) {
+            return rcvmore ? 1 : 0;
+        }
+
+        if (option == ZMQ.ZMQ_FD) {
+            return mailbox.getFd();
+        }
+
+        if (option == ZMQ.ZMQ_EVENTS) {
+            boolean rc = processCommands(0, false);
+            if (!rc && errno.get() == ZError.ETERM) {
+                return -1;
+            }
+            assert (rc);
+            int val = 0;
+            if (hasOut()) {
+                val |= ZMQ.ZMQ_POLLOUT;
+            }
+            if (hasIn()) {
+                val |= ZMQ.ZMQ_POLLIN;
+            }
+            return val;
+        }
+        
+        
+        return options.getsockopt(option);
+    }
+
+    public boolean bind(final String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        boolean brc = processCommands(0, false);
+        if (!brc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        if (protocol.equals("inproc")) {
+            Ctx.Endpoint endpoint = new Ctx.Endpoint(this, options);
+            boolean rc = registerEndpoint(addr, endpoint);
+            if (rc) {
+                
+                options.lastEndpoint = addr;
+            }
+            else {
+                errno.set(ZError.EADDRINUSE);
+            }
+            return rc;
+        }
+        if (protocol.equals("pgm") || protocol.equals("epgm")) {
+            
+            
+            return connect(addr);
+        }
+
+        
+        
+        IOThread ioThread = chooseIoThread(options.affinity);
+        if (ioThread == null) {
+            throw new IllegalStateException("EMTHREAD");
+        }
+
+        if (protocol.equals("tcp")) {
+            TcpListener listener = new TcpListener(ioThread, this, options);
+            int rc = listener.setAddress(address);
+            if (rc != 0) {
+                listener.destroy();
+                event_bind_failed(address, rc);
+                errno.set(rc);
+                return false;
+            }
+
+            
+            options.lastEndpoint = listener.getAddress();
+
+            addEndpoint(options.lastEndpoint, listener);
+            return true;
+        }
+
+        if (protocol.equals("ipc")) {
+            IpcListener listener = new IpcListener(ioThread, this, options);
+            int rc = listener.setAddress(address);
+            if (rc != 0) {
+                listener.destroy();
+                event_bind_failed(address, rc);
+                errno.set(rc);
+                return false;
+            }
+
+            
+            options.lastEndpoint = listener.getAddress();
+
+            addEndpoint(addr, listener);
+            return true;
+        }
+
+        throw new IllegalArgumentException(addr);
+    }
+
+    public boolean connect(String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        boolean brc = processCommands(0, false);
+        if (!brc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        if (protocol.equals("inproc")) {
+            
+            
+            
+
+            
+            Ctx.Endpoint peer = findEndpoint(addr);
+            if (peer.socket == null) {
+                return false;
+            }
+            
+            
+            int sndhwm = 0;
+            if (options.sendHwm != 0 && peer.options.recvHwm != 0) {
+                sndhwm = options.sendHwm + peer.options.recvHwm;
+            }
+            int rcvhwm = 0;
+            if (options.recvHwm != 0 && peer.options.sendHwm != 0) {
+                rcvhwm = options.recvHwm + peer.options.sendHwm;
+            }
+
+            
+            ZObject[] parents = {this, peer.socket};
+            Pipe[] pipes = {null, null};
+            int[] hwms = {sndhwm, rcvhwm};
+            boolean[] delays = {options.delayOnDisconnect, options.delayOnClose};
+            Pipe.pipepair(parents, pipes, hwms, delays);
+
+            
+            attachPipe(pipes[0]);
+
+            
+            if (peer.options.recvIdentity) {
+                Msg id = new Msg(options.identitySize);
+                id.put(options.identity, 0 , options.identitySize);
+                id.setFlags(Msg.IDENTITY);
+                boolean written = pipes[0].write(id);
+                assert (written);
+                pipes[0].flush();
+            }
+
+            
+            if (options.recvIdentity) {
+                Msg id = new Msg(peer.options.identitySize);
+                id.put(peer.options.identity, 0 , peer.options.identitySize);
+                id.setFlags(Msg.IDENTITY);
+                boolean written = pipes[1].write(id);
+                assert (written);
+                pipes[1].flush();
+            }
+
+            
+            
+            
+            sendBind(peer.socket, pipes[1], false);
+
+            
+            options.lastEndpoint = addr;
+
+            
+            inprocs.put(addr, pipes[0]);
+
+            return true;
+        }
+
+        
+        IOThread ioThread = chooseIoThread(options.affinity);
+        if (ioThread == null) {
+            throw new IllegalStateException("Empty IO Thread");
+        }
+        boolean ipv4only = options.ipv4only != 0;
+        Address paddr = new Address(protocol, address, ipv4only);
+
+        
+        paddr.resolve();
+
+        
+        SessionBase session = SessionBase.create(ioThread, true, this,
+            options, paddr);
+        assert (session != null);
+
+        
+        
+        boolean icanhasall = false;
+        if (protocol.equals("pgm") || protocol.equals("epgm")) {
+            icanhasall = true;
+        }
+
+        if (options.delayAttachOnConnect != 1 || icanhasall) {
+            
+            ZObject[] parents = {this, session};
+            Pipe[] pipes = {null, null};
+            int[] hwms = {options.sendHwm, options.recvHwm};
+            boolean[] delays = {options.delayOnDisconnect, options.delayOnClose};
+            Pipe.pipepair(parents, pipes, hwms, delays);
+
+            
+            attachPipe(pipes[0], icanhasall);
+
+            
+            session.attachPipe(pipes[1]);
+        }
+
+        
+        options.lastEndpoint = paddr.toString();
+
+        addEndpoint(addr, session);
+        return true;
+    }
+
+    
+    private void addEndpoint(String addr, Own endpoint)
+    {
+        
+        launchChild(endpoint);
+        endpoints.put(addr, endpoint);
+    }
+
+    public boolean termEndpoint(String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (addr == null) {
+            throw new IllegalArgumentException();
+        }
+
+        
+        
+        boolean rc = processCommands(0, false);
+        if (!rc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+
+        String protocol = uri.getScheme();
+        
+        if (protocol.equals("inproc")) {
+            if (!inprocs.containsKey(addr)) {
+                return false;
+            }
+
+            Iterator<Entry<String, Pipe>> it = inprocs.entrySet().iterator();
+            while (it.hasNext()) {
+                it.next().getValue().terminate(true);
+                it.remove();
+            }
+            return true;
+        }
+
+        if (!endpoints.containsKey(addr)) {
+            return false;
+        }
+        
+        Iterator<Entry<String, Own>> it = endpoints.entrySet().iterator();
+
+        while (it.hasNext()) {
+            Entry<String, Own> e = it.next();
+            if (!e.getKey().equals(addr)) {
+                continue;
+            }
+            term_child(e.getValue());
+            it.remove();
+        }
+        return true;
+
+    }
+
+    public boolean send(Msg msg, int flags)
+    {
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM);
+            return false;
+        }
+
+        
+        if (msg == null) {
+            throw new IllegalArgumentException();
+        }
+
+        
+        boolean brc = processCommands(0, true);
+        if (!brc) {
+            return false;
+        }
+
+        
+        msg.resetFlags(Msg.MORE);
+
+        
+        if ((flags & ZMQ.ZMQ_SNDMORE) > 0) {
+            msg.setFlags(Msg.MORE);
+        }
+
+        
+        boolean rc = xsend(msg);
+
+        if (rc) {
+            return true;
+        }
+
+        if (errno.get() != ZError.EAGAIN) {
+            return false;
+        }
+
+        
+        
+        if ((flags & ZMQ.ZMQ_DONTWAIT) > 0 || options.sendTimeout == 0) {
+            return false;
+        }
+
+        
+        
+        int timeout = options.sendTimeout;
+        long end = timeout < 0 ? 0 : (Clock.nowMS() + timeout);
+
+        
+        
+        
+        while (true) {
+            if (!processCommands(timeout, false)) {
+                return false;
+            }
+
+            rc = xsend(msg);
+            if (rc) {
+                break;
+            }
+
+            if (errno.get() != ZError.EAGAIN) {
+                return false;
+            }
+
+            if (timeout > 0) {
+                timeout = (int) (end - Clock.nowMS());
+                if (timeout <= 0) {
+                    errno.set(ZError.EAGAIN);
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    public Msg recv(int flags)
+    {
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM);
+            return null;
+        }
+
+        
+        
+        
+        
+        
+        
+        
+        
+        if (++ticks == Config.INBOUND_POLL_RATE.getValue()) {
+            if (!processCommands(0, false)) {
+                return null;
+            }
+            ticks = 0;
+        }
+
+        
+        Msg msg = xrecv();
+        if (msg == null && errno.get() != ZError.EAGAIN) {
+            return null;
+        }
+
+        
+        if (msg != null) {
+            extractFlags(msg);
+            return msg;
+        }
+
+        
+        
+        
+        
+        if ((flags & ZMQ.ZMQ_DONTWAIT) > 0 || options.recvTimeout == 0) {
+            if (!processCommands(0, false)) {
+                return null;
+            }
+            ticks = 0;
+
+            msg = xrecv();
+            if (msg == null) {
+                return null;
+            }
+            extractFlags(msg);
+            return msg;
+        }
+
+        
+        
+        int timeout = options.recvTimeout;
+        long end = timeout < 0 ? 0 : (Clock.nowMS() + timeout);
+
+        
+        
+        boolean block = (ticks != 0);
+        while (true) {
+            if (!processCommands(block ? timeout : 0, false)) {
+                return null;
+            }
+            msg = xrecv();
+
+            if (msg != null) {
+                ticks = 0;
+                break;
+            }
+
+            if (errno.get() != ZError.EAGAIN) {
+                return null;
+            }
+
+            block = true;
+            if (timeout > 0) {
+                timeout = (int) (end - Clock.nowMS());
+                if (timeout <= 0) {
+                    errno.set(ZError.EAGAIN);
+                    return null;
+                }
+            }
+        }
+
+        extractFlags(msg);
+        return msg;
+
+    }
+
+    public void close()
+    {
+        
+        tag = 0xdeadbeef;
+
+        
+        
+        
+        sendReap(this);
+    }
+
+    
+    
+    boolean hasIn()
+    {
+        return xhasIn();
+    }
+
+    boolean hasOut()
+    {
+        return xhasOut();
+    }
+
+    
+    
+    public void startReaping(Poller poller)
+    {
+        
+        this.poller = poller;
+        handle = mailbox.getFd();
+        this.poller.addHandle(handle, this);
+        this.poller.setPollIn(handle);
+
+        
+        
+        terminate();
+        checkDestroy();
+    }
+
+    
+    
+    
+    
+    private boolean processCommands(int timeout, boolean throttle)
+    {
+        Command cmd;
+        if (timeout != 0) {
+            
+            cmd = mailbox.recv(timeout);
+        }
+        else {
+            
+            
+
+            
+            long tsc = 0; 
+
+            
+            
+            
+            
+            
+            
+            if (tsc != 0 && throttle) {
+                
+                
+                
+                if (tsc >= lastTsc && tsc - lastTsc <= Config.MAX_COMMAND_DELAY.getValue()) {
+                    return true;
+                }
+                lastTsc = tsc;
+            }
+
+            
+            cmd = mailbox.recv(0);
+        }
+
+        
+        while (true) {
+            if (cmd == null) {
+                break;
+            }
+
+            cmd.destination().processCommand(cmd);
+            cmd = mailbox.recv(0);
+        }
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM); 
+            return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    protected void processStop()
+    {
+        
+        
+        
+        
+        stopMonitor();
+        ctxTerminated = true;
+
+    }
+
+    @Override
+    protected void processBind(Pipe pipe)
+    {
+        attachPipe(pipe);
+    }
+
+    @Override
+    protected void processTerm(int linger)
+    {
+        
+        
+        
+        unregisterEndpoints(this);
+
+        
+        for (int i = 0; i != pipes.size(); ++i) {
+            pipes.get(i).terminate(false);
+        }
+        registerTermAcks(pipes.size());
+
+        
+        super.processTerm(linger);
+    }
+
+    
+    @Override
+    protected void processDestroy()
+    {
+        destroyed = true;
+    }
+
+    
+    
+    
+    protected boolean xsetsockopt(int option, Object optval)
+    {
+        return false;
+    }
+
+    protected boolean xhasOut()
+    {
+        return false;
+    }
+
+    protected boolean xsend(Msg msg)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected boolean xhasIn()
+    {
+        return false;
+    }
+
+    protected Msg xrecv()
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xreadActivated(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xwriteActivated(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xhiccuped(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must override");
+    }
+
+    @Override
+    public void inEvent()
+    {
+        
+        
+        
+        
+        try {
+            processCommands(0, false);
+        }
+        catch (ZError.CtxTerminatedException e) {
+        }
+
+        checkDestroy();
+    }
+
+    @Override
+    public void outEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void connectEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void acceptEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void timerEvent(int id)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    
+    
+    private void checkDestroy()
+    {
+        
+        if (destroyed) {
+            
+            poller.removeHandle(handle);
+            
+            destroySocket(this);
+
+            
+            sendReaped();
+
+            
+            super.processDestroy();
+        }
+    }
+
+    @Override
+    public void readActivated(Pipe pipe)
+    {
+        xreadActivated(pipe);
+    }
+
+    @Override
+    public void writeActivated(Pipe pipe)
+    {
+        xwriteActivated(pipe);
+    }
+
+    @Override
+    public void hiccuped(Pipe pipe)
+    {
+        if (options.delayAttachOnConnect == 1) {
+            pipe.terminate(false);
+        }
+        else {
+            
+            xhiccuped(pipe);
+        }
+    }
+
+    @Override
+    public void pipeTerminated(Pipe pipe)
+    {
+        
+        xpipeTerminated(pipe);
+
+        
+        Iterator<Entry<String, Pipe>> it = inprocs.entrySet().iterator();
+        while (it.hasNext()) {
+            if (it.next().getValue() == pipe) {
+                it.remove();
+                break;
+            }
+        }
+
+        
+        
+        pipes.remove(pipe);
+        if (isTerminating()) {
+            unregisterTermAck();
+        }
+    }
+
+    
+    
+    private void extractFlags(Msg msg)
+    {
+        
+        if ((msg.flags() & Msg.IDENTITY) > 0) {
+            assert (options.recvIdentity);
+        }
+
+        
+        rcvmore = msg.hasMore();
+    }
+
+    public boolean monitor(final String addr, int events)
+    {
+        boolean rc;
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (addr == null) {
+            stopMonitor();
+            return true;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        
+        if (!protocol.equals("inproc")) {
+            stopMonitor();
+            throw new IllegalArgumentException("inproc socket required");
+        }
+
+        
+        monitorEvents = events;
+
+        monitorSocket = getCtx().createSocket(ZMQ.ZMQ_PAIR);
+        if (monitorSocket == null) {
+            return false;
+        }
+
+        
+        int linger = 0;
+        try {
+            monitorSocket.setSocketOpt(ZMQ.ZMQ_LINGER, linger);
+        }
+        catch (IllegalArgumentException e) {
+            stopMonitor();
+            throw e;
+        }
+
+        
+        rc = monitorSocket.bind(addr);
+        if (!rc) {
+            stopMonitor();
+        }
+        return rc;
+    }
+
+    public void event_connected(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECTED, addr, ch));
+    }
+
+    public void eventConnectDelayed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECT_DELAYED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECT_DELAYED, addr, errno));
+    }
+
+    public void eventConnectRetried(String addr, int interval)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECT_RETRIED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECT_RETRIED, addr, interval));
+    }
+
+    public void event_listening(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_LISTENING) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_LISTENING, addr, ch));
+    }
+
+    public void event_bind_failed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_BIND_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_BIND_FAILED, addr, errno));
+    }
+
+    public void eventAccepted(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_ACCEPTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_ACCEPTED, addr, ch));
+    }
+
+    public void eventAcceptFailed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_ACCEPT_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_ACCEPT_FAILED, addr, errno));
+    }
+
+    public void eventClosed(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CLOSED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CLOSED, addr, ch));
+    }
+
+    public void eventCloseFailed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CLOSE_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CLOSE_FAILED, addr, errno));
+    }
+
+    public void eventDisconnected(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_DISCONNECTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_DISCONNECTED, addr, ch));
+    }
+
+    protected void monitorEvent(ZMQ.Event event)
+    {
+        if (monitorSocket == null) {
+            return;
+        }
+
+        event.write(monitorSocket);
+    }
+
+    protected void stopMonitor()
+    {
+        if (monitorSocket != null) {
+            if ((monitorEvents & ZMQ.ZMQ_EVENT_MONITOR_STOPPED) != 0) {
+                monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_MONITOR_STOPPED, "", 0));
+            }
+            monitorSocket.close();
+            monitorSocket = null;
+            monitorEvents = 0;
+        }
+    }
+
+    @Override
+    public String toString()
+    {
+        return super.toString() + "[" + options.socketId + "]";
+    }
+
+    public SelectableChannel getFD()
+    {
+        return mailbox.getFd();
+    }
+
+    public String typeString()
+    {
+        switch (options.type) {
+        case ZMQ.ZMQ_PAIR:
+            return "PAIR";
+        case ZMQ.ZMQ_PUB:
+            return "PUB";
+        case ZMQ.ZMQ_SUB:
+            return "SUB";
+        case ZMQ.ZMQ_REQ:
+            return "REQ";
+        case ZMQ.ZMQ_REP:
+            return "REP";
+        case ZMQ.ZMQ_DEALER:
+            return "DEALER";
+        case ZMQ.ZMQ_ROUTER:
+            return "ROUTER";
+        case ZMQ.ZMQ_PULL:
+            return "PULL";
+        case ZMQ.ZMQ_PUSH:
+            return "PUSH";
+        default:
+            return "UNKOWN";
+        }
+    }
+
+    public int errno()
+    {
+        return errno.get();
+    }
+}
+
+<code block>
+
+
+package zmq;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.Pipe;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.util.concurrent.atomic.AtomicInteger;
+
+
+
+
+
+
+public class Signaler
+        implements Closeable
+{
+    
+    private final Pipe.SinkChannel w;
+    private final Pipe.SourceChannel r;
+    private final Selector selector;
+
+    
+    private final AtomicInteger wcursor = new AtomicInteger(0);
+    private int rcursor = 0;
+
+    public Signaler()
+    {
+        
+        Pipe pipe;
+
+        try {
+            pipe = Pipe.open();
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+        r = pipe.source();
+        w = pipe.sink();
+
+        
+        try {
+            Utils.unblockSocket(w);
+            Utils.unblockSocket(r);
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+        try {
+            selector = Selector.open();
+            r.register(selector, SelectionKey.OP_READ);
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+    }
+
+    @Override
+    public void close() throws IOException
+    {
+        IOException exception = null;
+        try {
+            r.close();
+        }
+        catch (IOException e) {
+            exception = e;
+        }
+        try {
+            w.close();
+        }
+        catch (IOException e) {
+            exception = e;
+        }
+        try {
+            selector.close();
+        }
+        catch (IOException e) {
+            exception = e;
+        }
+        if (exception != null) {
+            throw exception;
+        }
+    }
+
+    public SelectableChannel getFd()
+    {
+        return r;
+    }
+
+    public void send()
+    {
+        int nbytes = 0;
+        ByteBuffer dummy = ByteBuffer.allocate(1);
+
+        while (true) {
+            try {
+                Thread.interrupted();
+                nbytes = w.write(dummy);
+            }
+            catch (IOException e) {
+                throw new ZError.IOException(e);
+            }
+            if (nbytes == 0) {
+                continue;
+            }
+            assert (nbytes == 1);
+            wcursor.incrementAndGet();
+            break;
+        }
+    }
+
+    public boolean waitEvent(long timeout)
+    {
+        int rc = 0;
+
+        try {
+            if (timeout == 0) {
+                
+                
+                
+                return rcursor < wcursor.get();
+
+            }
+            else if (timeout < 0) {
+                rc = selector.select(0);
+            }
+            else {
+                rc = selector.select(timeout);
+            }
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+        if (rc == 0) {
+            return false;
+        }
+
+        selector.selectedKeys().clear();
+
+        return true;
+    }
+
+    public void recv()
+    {
+        int nbytes = 0;
+        try {
+            ByteBuffer dummy = ByteBuffer.allocate(1);
+            nbytes = r.read(dummy);
+            assert nbytes == 1;
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+        rcursor++;
+    }
+}
+
+<code block>
+
+
+package zmq;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.channels.SelectableChannel;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+
+public abstract class SocketBase extends Own
+    implements IPollEvents, Pipe.IPipeEvents
+{
+    
+    private final Map<String, Own> endpoints;
+
+    
+    private final Map<String, Pipe> inprocs;
+
+    
+    private int tag;
+
+    
+    private boolean ctxTerminated;
+
+    
+    
+    
+    private boolean destroyed;
+
+    
+    private final Mailbox mailbox;
+
+    
+    private final List<Pipe> pipes;
+
+    
+    private Poller poller;
+    private SelectableChannel handle;
+
+    
+    private long lastTsc;
+
+    
+    private int ticks;
+
+    
+    private boolean rcvmore;
+
+    
+    private SocketBase monitorSocket;
+
+    
+    private int monitorEvents;
+
+    protected ValueReference<Integer> errno;
+
+    protected SocketBase(Ctx parent, int tid, int sid)
+    {
+        super(parent, tid);
+        tag = 0xbaddecaf;
+        ctxTerminated = false;
+        destroyed = false;
+        lastTsc = 0;
+        ticks = 0;
+        rcvmore = false;
+        monitorSocket = null;
+        monitorEvents = 0;
+
+        options.socketId = sid;
+        options.linger = parent.get(ZMQ.ZMQ_BLOCKY) != 0 ? -1 : 0;
+
+        endpoints = new MultiMap<String, Own>();
+        inprocs = new MultiMap<String, Pipe>();
+        pipes = new ArrayList<Pipe>();
+
+        mailbox = new Mailbox("socket-" + sid);
+
+        errno = new ValueReference<Integer>(0);
+    }
+
+    
+    
+    protected abstract void xattachPipe(Pipe pipe, boolean icanhasall);
+    protected abstract void xpipeTerminated(Pipe pipe);
+
+    
+    public boolean checkTag()
+    {
+        return tag == 0xbaddecaf;
+    }
+
+    
+    public static SocketBase create(int type, Ctx parent, int tid, int sid)
+    {
+        SocketBase s = null;
+        switch (type) {
+        case ZMQ.ZMQ_PAIR:
+            s = new Pair(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PUB:
+            s = new Pub(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_SUB:
+            s = new Sub(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_REQ:
+            s = new Req(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_REP:
+            s = new Rep(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_DEALER:
+            s = new Dealer(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_ROUTER:
+            s = new Router(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PULL:
+            s = new Pull(parent, tid, sid);
+            break;
+        case ZMQ.ZMQ_PUSH:
+            s = new Push(parent, tid, sid);
+            break;
+
+        case ZMQ.ZMQ_XPUB:
+            s = new XPub(parent, tid, sid);
+            break;
+
+        case ZMQ.ZMQ_XSUB:
+            s = new XSub(parent, tid, sid);
+            break;
+
+        default:
+            throw new IllegalArgumentException("type=" + type);
+        }
+        return s;
+    }
+
+    public void destroy()
+    {
+        stopMonitor();
+        assert (destroyed);
+    }
+
+    
+    public Mailbox getMailbox()
+    {
+        return mailbox;
+    }
+
+    
+    
+    public void stop()
+    {
+        
+        
+        
+        
+        sendStop();
+    }
+
+    
+    
+    private void checkProtocol(String protocol)
+    {
+        
+        if (!protocol.equals("inproc") && !protocol.equals("ipc") && !protocol.equals("tcp") ) {
+            throw new UnsupportedOperationException(protocol);
+        }
+
+        
+        
+        
+        if ((protocol.equals("pgm") || protocol.equals("epgm")) &&
+              options.type != ZMQ.ZMQ_PUB && options.type != ZMQ.ZMQ_SUB &&
+              options.type != ZMQ.ZMQ_XPUB && options.type != ZMQ.ZMQ_XSUB) {
+            throw new UnsupportedOperationException(protocol + ",type=" + options.type);
+        }
+
+        
+    }
+
+    
+    private void attachPipe(Pipe pipe)
+    {
+        attachPipe(pipe, false);
+    }
+
+    private void attachPipe(Pipe pipe, boolean icanhasall)
+    {
+        
+
+        pipe.setEventSink(this);
+        pipes.add(pipe);
+
+        
+        xattachPipe(pipe, icanhasall);
+
+        
+        
+        if (isTerminating()) {
+            registerTermAcks(1);
+            pipe.terminate(false);
+        }
+    }
+
+    public void setSocketOpt(int option, Object optval)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (xsetsockopt(option, optval)) {
+            return;
+        }
+
+        
+        
+        options.setSocketOpt(option, optval);
+    }
+
+    public int getSocketOpt(int option)
+    {
+        if (option != ZMQ.ZMQ_EVENTS && ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (option == ZMQ.ZMQ_RCVMORE) {
+            return rcvmore ? 1 : 0;
+        }
+        if (option == ZMQ.ZMQ_EVENTS) {
+            boolean rc = processCommands(0, false);
+            if (!rc && errno.get() == ZError.ETERM) {
+                return -1;
+            }
+            assert (rc);
+            int val = 0;
+            if (hasOut()) {
+                val |= ZMQ.ZMQ_POLLOUT;
+            }
+            if (hasIn()) {
+                val |= ZMQ.ZMQ_POLLIN;
+            }
+            return val;
+        }
+
+        return (Integer) getsockoptx(option);
+    }
+
+    public Object getsockoptx(int option)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        if (option == ZMQ.ZMQ_RCVMORE) {
+            return rcvmore ? 1 : 0;
+        }
+
+        if (option == ZMQ.ZMQ_FD) {
+            return mailbox.getFd();
+        }
+
+        if (option == ZMQ.ZMQ_EVENTS) {
+            boolean rc = processCommands(0, false);
+            if (!rc && errno.get() == ZError.ETERM) {
+                return -1;
+            }
+            assert (rc);
+            int val = 0;
+            if (hasOut()) {
+                val |= ZMQ.ZMQ_POLLOUT;
+            }
+            if (hasIn()) {
+                val |= ZMQ.ZMQ_POLLIN;
+            }
+            return val;
+        }
+        
+        
+        return options.getsockopt(option);
+    }
+
+    public boolean bind(final String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        boolean brc = processCommands(0, false);
+        if (!brc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        if (protocol.equals("inproc")) {
+            Ctx.Endpoint endpoint = new Ctx.Endpoint(this, options);
+            boolean rc = registerEndpoint(addr, endpoint);
+            if (rc) {
+                
+                options.lastEndpoint = addr;
+            }
+            else {
+                errno.set(ZError.EADDRINUSE);
+            }
+            return rc;
+        }
+        if (protocol.equals("pgm") || protocol.equals("epgm")) {
+            
+            
+            return connect(addr);
+        }
+
+        
+        
+        IOThread ioThread = chooseIoThread(options.affinity);
+        if (ioThread == null) {
+            throw new IllegalStateException("EMTHREAD");
+        }
+
+        if (protocol.equals("tcp")) {
+            TcpListener listener = new TcpListener(ioThread, this, options);
+            int rc = listener.setAddress(address);
+            if (rc != 0) {
+                listener.destroy();
+                event_bind_failed(address, rc);
+                errno.set(rc);
+                return false;
+            }
+
+            
+            options.lastEndpoint = listener.getAddress();
+
+            addEndpoint(options.lastEndpoint, listener);
+            return true;
+        }
+
+        if (protocol.equals("ipc")) {
+            IpcListener listener = new IpcListener(ioThread, this, options);
+            int rc = listener.setAddress(address);
+            if (rc != 0) {
+                listener.destroy();
+                event_bind_failed(address, rc);
+                errno.set(rc);
+                return false;
+            }
+
+            
+            options.lastEndpoint = listener.getAddress();
+
+            addEndpoint(addr, listener);
+            return true;
+        }
+
+        throw new IllegalArgumentException(addr);
+    }
+
+    public boolean connect(String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        boolean brc = processCommands(0, false);
+        if (!brc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        if (protocol.equals("inproc")) {
+            
+            
+            
+
+            
+            Ctx.Endpoint peer = findEndpoint(addr);
+            if (peer.socket == null) {
+                return false;
+            }
+            
+            
+            int sndhwm = 0;
+            if (options.sendHwm != 0 && peer.options.recvHwm != 0) {
+                sndhwm = options.sendHwm + peer.options.recvHwm;
+            }
+            int rcvhwm = 0;
+            if (options.recvHwm != 0 && peer.options.sendHwm != 0) {
+                rcvhwm = options.recvHwm + peer.options.sendHwm;
+            }
+
+            
+            ZObject[] parents = {this, peer.socket};
+            Pipe[] pipes = {null, null};
+            int[] hwms = {sndhwm, rcvhwm};
+            boolean[] delays = {options.delayOnDisconnect, options.delayOnClose};
+            Pipe.pipepair(parents, pipes, hwms, delays);
+
+            
+            attachPipe(pipes[0]);
+
+            
+            if (peer.options.recvIdentity) {
+                Msg id = new Msg(options.identitySize);
+                id.put(options.identity, 0 , options.identitySize);
+                id.setFlags(Msg.IDENTITY);
+                boolean written = pipes[0].write(id);
+                assert (written);
+                pipes[0].flush();
+            }
+
+            
+            if (options.recvIdentity) {
+                Msg id = new Msg(peer.options.identitySize);
+                id.put(peer.options.identity, 0 , peer.options.identitySize);
+                id.setFlags(Msg.IDENTITY);
+                boolean written = pipes[1].write(id);
+                assert (written);
+                pipes[1].flush();
+            }
+
+            
+            
+            
+            sendBind(peer.socket, pipes[1], false);
+
+            
+            options.lastEndpoint = addr;
+
+            
+            inprocs.put(addr, pipes[0]);
+
+            return true;
+        }
+
+        
+        IOThread ioThread = chooseIoThread(options.affinity);
+        if (ioThread == null) {
+            throw new IllegalStateException("Empty IO Thread");
+        }
+        boolean ipv4only = options.ipv4only != 0;
+        Address paddr = new Address(protocol, address, ipv4only);
+
+        
+        paddr.resolve();
+
+        
+        SessionBase session = SessionBase.create(ioThread, true, this,
+            options, paddr);
+        assert (session != null);
+
+        
+        
+        boolean icanhasall = false;
+        if (protocol.equals("pgm") || protocol.equals("epgm")) {
+            icanhasall = true;
+        }
+
+        if (options.delayAttachOnConnect != 1 || icanhasall) {
+            
+            ZObject[] parents = {this, session};
+            Pipe[] pipes = {null, null};
+            int[] hwms = {options.sendHwm, options.recvHwm};
+            boolean[] delays = {options.delayOnDisconnect, options.delayOnClose};
+            Pipe.pipepair(parents, pipes, hwms, delays);
+
+            
+            attachPipe(pipes[0], icanhasall);
+
+            
+            session.attachPipe(pipes[1]);
+        }
+
+        
+        options.lastEndpoint = paddr.toString();
+
+        addEndpoint(addr, session);
+        return true;
+    }
+
+    
+    private void addEndpoint(String addr, Own endpoint)
+    {
+        
+        launchChild(endpoint);
+        endpoints.put(addr, endpoint);
+    }
+
+    public boolean termEndpoint(String addr)
+    {
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (addr == null) {
+            throw new IllegalArgumentException();
+        }
+
+        
+        
+        boolean rc = processCommands(0, false);
+        if (!rc) {
+            return false;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+
+        String protocol = uri.getScheme();
+        
+        if (protocol.equals("inproc")) {
+            if (!inprocs.containsKey(addr)) {
+                return false;
+            }
+
+            Iterator<Entry<String, Pipe>> it = inprocs.entrySet().iterator();
+            while (it.hasNext()) {
+                it.next().getValue().terminate(true);
+                it.remove();
+            }
+            return true;
+        }
+
+        if (!endpoints.containsKey(addr)) {
+            return false;
+        }
+        
+        Iterator<Entry<String, Own>> it = endpoints.entrySet().iterator();
+
+        while (it.hasNext()) {
+            Entry<String, Own> e = it.next();
+            if (!e.getKey().equals(addr)) {
+                continue;
+            }
+            term_child(e.getValue());
+            it.remove();
+        }
+        return true;
+
+    }
+
+    public boolean send(Msg msg, int flags)
+    {
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM);
+            return false;
+        }
+
+        
+        if (msg == null) {
+            throw new IllegalArgumentException();
+        }
+
+        
+        boolean brc = processCommands(0, true);
+        if (!brc) {
+            return false;
+        }
+
+        
+        msg.resetFlags(Msg.MORE);
+
+        
+        if ((flags & ZMQ.ZMQ_SNDMORE) > 0) {
+            msg.setFlags(Msg.MORE);
+        }
+
+        
+        boolean rc = xsend(msg);
+
+        if (rc) {
+            return true;
+        }
+
+        if (errno.get() != ZError.EAGAIN) {
+            return false;
+        }
+
+        
+        
+        if ((flags & ZMQ.ZMQ_DONTWAIT) > 0 || options.sendTimeout == 0) {
+            return false;
+        }
+
+        
+        
+        int timeout = options.sendTimeout;
+        long end = timeout < 0 ? 0 : (Clock.nowMS() + timeout);
+
+        
+        
+        
+        while (true) {
+            if (!processCommands(timeout, false)) {
+                return false;
+            }
+
+            rc = xsend(msg);
+            if (rc) {
+                break;
+            }
+
+            if (errno.get() != ZError.EAGAIN) {
+                return false;
+            }
+
+            if (timeout > 0) {
+                timeout = (int) (end - Clock.nowMS());
+                if (timeout <= 0) {
+                    errno.set(ZError.EAGAIN);
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    public Msg recv(int flags)
+    {
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM);
+            return null;
+        }
+
+        
+        
+        
+        
+        
+        
+        
+        
+        if (++ticks == Config.INBOUND_POLL_RATE.getValue()) {
+            if (!processCommands(0, false)) {
+                return null;
+            }
+            ticks = 0;
+        }
+
+        
+        Msg msg = xrecv();
+        if (msg == null && errno.get() != ZError.EAGAIN) {
+            return null;
+        }
+
+        
+        if (msg != null) {
+            extractFlags(msg);
+            return msg;
+        }
+
+        
+        
+        
+        
+        if ((flags & ZMQ.ZMQ_DONTWAIT) > 0 || options.recvTimeout == 0) {
+            if (!processCommands(0, false)) {
+                return null;
+            }
+            ticks = 0;
+
+            msg = xrecv();
+            if (msg == null) {
+                return null;
+            }
+            extractFlags(msg);
+            return msg;
+        }
+
+        
+        
+        int timeout = options.recvTimeout;
+        long end = timeout < 0 ? 0 : (Clock.nowMS() + timeout);
+
+        
+        
+        boolean block = (ticks != 0);
+        while (true) {
+            if (!processCommands(block ? timeout : 0, false)) {
+                return null;
+            }
+            msg = xrecv();
+
+            if (msg != null) {
+                ticks = 0;
+                break;
+            }
+
+            if (errno.get() != ZError.EAGAIN) {
+                return null;
+            }
+
+            block = true;
+            if (timeout > 0) {
+                timeout = (int) (end - Clock.nowMS());
+                if (timeout <= 0) {
+                    errno.set(ZError.EAGAIN);
+                    return null;
+                }
+            }
+        }
+
+        extractFlags(msg);
+        return msg;
+
+    }
+
+    public void close()
+    {
+        
+        tag = 0xdeadbeef;
+
+        
+        
+        
+        sendReap(this);
+    }
+
+    
+    
+    boolean hasIn()
+    {
+        return xhasIn();
+    }
+
+    boolean hasOut()
+    {
+        return xhasOut();
+    }
+
+    
+    
+    public void startReaping(Poller poller)
+    {
+        
+        this.poller = poller;
+        handle = mailbox.getFd();
+        this.poller.addHandle(handle, this);
+        this.poller.setPollIn(handle);
+
+        
+        
+        terminate();
+        checkDestroy();
+    }
+
+    
+    
+    
+    
+    private boolean processCommands(int timeout, boolean throttle)
+    {
+        Command cmd;
+        if (timeout != 0) {
+            
+            cmd = mailbox.recv(timeout);
+        }
+        else {
+            
+            
+
+            
+            long tsc = 0; 
+
+            
+            
+            
+            
+            
+            
+            if (tsc != 0 && throttle) {
+                
+                
+                
+                if (tsc >= lastTsc && tsc - lastTsc <= Config.MAX_COMMAND_DELAY.getValue()) {
+                    return true;
+                }
+                lastTsc = tsc;
+            }
+
+            
+            cmd = mailbox.recv(0);
+        }
+
+        
+        while (true) {
+            if (cmd == null) {
+                break;
+            }
+
+            cmd.destination().processCommand(cmd);
+            cmd = mailbox.recv(0);
+        }
+        if (ctxTerminated) {
+            errno.set(ZError.ETERM); 
+            return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    protected void processStop()
+    {
+        
+        
+        
+        
+        stopMonitor();
+        ctxTerminated = true;
+
+    }
+
+    @Override
+    protected void processBind(Pipe pipe)
+    {
+        attachPipe(pipe);
+    }
+
+    @Override
+    protected void processTerm(int linger)
+    {
+        
+        
+        
+        unregisterEndpoints(this);
+
+        
+        for (int i = 0; i != pipes.size(); ++i) {
+            pipes.get(i).terminate(false);
+        }
+        registerTermAcks(pipes.size());
+
+        
+        super.processTerm(linger);
+    }
+
+    
+    @Override
+    protected void processDestroy()
+    {
+        destroyed = true;
+    }
+
+    
+    
+    
+    protected boolean xsetsockopt(int option, Object optval)
+    {
+        return false;
+    }
+
+    protected boolean xhasOut()
+    {
+        return false;
+    }
+
+    protected boolean xsend(Msg msg)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected boolean xhasIn()
+    {
+        return false;
+    }
+
+    protected Msg xrecv()
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xreadActivated(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xwriteActivated(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must Override");
+    }
+
+    protected void xhiccuped(Pipe pipe)
+    {
+        throw new UnsupportedOperationException("Must override");
+    }
+
+    @Override
+    public void inEvent()
+    {
+        
+        
+        
+        
+        try {
+            processCommands(0, false);
+        }
+        catch (ZError.CtxTerminatedException e) {
+        }
+
+        checkDestroy();
+    }
+
+    @Override
+    public void outEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void connectEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void acceptEvent()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void timerEvent(int id)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    
+    
+    private void checkDestroy()
+    {
+        
+        if (destroyed) {
+            
+            poller.removeHandle(handle);
+            
+            destroySocket(this);
+
+            
+            sendReaped();
+
+            
+            super.processDestroy();
+        }
+    }
+
+    @Override
+    public void readActivated(Pipe pipe)
+    {
+        xreadActivated(pipe);
+    }
+
+    @Override
+    public void writeActivated(Pipe pipe)
+    {
+        xwriteActivated(pipe);
+    }
+
+    @Override
+    public void hiccuped(Pipe pipe)
+    {
+        if (options.delayAttachOnConnect == 1) {
+            pipe.terminate(false);
+        }
+        else {
+            
+            xhiccuped(pipe);
+        }
+    }
+
+    @Override
+    public void pipeTerminated(Pipe pipe)
+    {
+        
+        xpipeTerminated(pipe);
+
+        
+        Iterator<Entry<String, Pipe>> it = inprocs.entrySet().iterator();
+        while (it.hasNext()) {
+            if (it.next().getValue() == pipe) {
+                it.remove();
+                break;
+            }
+        }
+
+        
+        
+        pipes.remove(pipe);
+        if (isTerminating()) {
+            unregisterTermAck();
+        }
+    }
+
+    
+    
+    private void extractFlags(Msg msg)
+    {
+        
+        if ((msg.flags() & Msg.IDENTITY) > 0) {
+            assert (options.recvIdentity);
+        }
+
+        
+        rcvmore = msg.hasMore();
+    }
+
+    public boolean monitor(final String addr, int events)
+    {
+        boolean rc;
+        if (ctxTerminated) {
+            throw new ZError.CtxTerminatedException();
+        }
+
+        
+        if (addr == null) {
+            stopMonitor();
+            return true;
+        }
+
+        
+        URI uri;
+        try {
+            uri = new URI(addr);
+        }
+        catch (URISyntaxException e) {
+            throw new IllegalArgumentException(e);
+        }
+        String protocol = uri.getScheme();
+        String address = uri.getAuthority();
+        String path = uri.getPath();
+        if (address == null) {
+            address = path;
+        }
+
+        checkProtocol(protocol);
+
+        
+        if (!protocol.equals("inproc")) {
+            stopMonitor();
+            throw new IllegalArgumentException("inproc socket required");
+        }
+
+        
+        monitorEvents = events;
+
+        monitorSocket = getCtx().createSocket(ZMQ.ZMQ_PAIR);
+        if (monitorSocket == null) {
+            return false;
+        }
+
+        
+        int linger = 0;
+        try {
+            monitorSocket.setSocketOpt(ZMQ.ZMQ_LINGER, linger);
+        }
+        catch (IllegalArgumentException e) {
+            stopMonitor();
+            throw e;
+        }
+
+        
+        rc = monitorSocket.bind(addr);
+        if (!rc) {
+            stopMonitor();
+        }
+        return rc;
+    }
+
+    public void event_connected(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECTED, addr, ch));
+    }
+
+    public void eventConnectDelayed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECT_DELAYED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECT_DELAYED, addr, errno));
+    }
+
+    public void eventConnectRetried(String addr, int interval)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CONNECT_RETRIED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CONNECT_RETRIED, addr, interval));
+    }
+
+    public void event_listening(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_LISTENING) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_LISTENING, addr, ch));
+    }
+
+    public void event_bind_failed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_BIND_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_BIND_FAILED, addr, errno));
+    }
+
+    public void eventAccepted(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_ACCEPTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_ACCEPTED, addr, ch));
+    }
+
+    public void eventAcceptFailed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_ACCEPT_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_ACCEPT_FAILED, addr, errno));
+    }
+
+    public void eventClosed(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CLOSED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CLOSED, addr, ch));
+    }
+
+    public void eventCloseFailed(String addr, int errno)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_CLOSE_FAILED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_CLOSE_FAILED, addr, errno));
+    }
+
+    public void eventDisconnected(String addr, SelectableChannel ch)
+    {
+        if ((monitorEvents & ZMQ.ZMQ_EVENT_DISCONNECTED) == 0) {
+            return;
+        }
+
+        monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_DISCONNECTED, addr, ch));
+    }
+
+    protected void monitorEvent(ZMQ.Event event)
+    {
+        if (monitorSocket == null) {
+            return;
+        }
+
+        event.write(monitorSocket);
+    }
+
+    protected void stopMonitor()
+    {
+        if (monitorSocket != null) {
+            if ((monitorEvents & ZMQ.ZMQ_EVENT_MONITOR_STOPPED) != 0) {
+                monitorEvent(new ZMQ.Event(ZMQ.ZMQ_EVENT_MONITOR_STOPPED, "", 0));
+            }
+            monitorSocket.close();
+            monitorSocket = null;
+            monitorEvents = 0;
+        }
+    }
+
+    @Override
+    public String toString()
+    {
+        return super.toString() + "[" + options.socketId + "]";
+    }
+
+    public SelectableChannel getFD()
+    {
+        return mailbox.getFd();
+    }
+
+    public String typeString()
+    {
+        switch (options.type) {
+        case ZMQ.ZMQ_PAIR:
+            return "PAIR";
+        case ZMQ.ZMQ_PUB:
+            return "PUB";
+        case ZMQ.ZMQ_SUB:
+            return "SUB";
+        case ZMQ.ZMQ_REQ:
+            return "REQ";
+        case ZMQ.ZMQ_REP:
+            return "REP";
+        case ZMQ.ZMQ_DEALER:
+            return "DEALER";
+        case ZMQ.ZMQ_ROUTER:
+            return "ROUTER";
+        case ZMQ.ZMQ_PULL:
+            return "PULL";
+        case ZMQ.ZMQ_PUSH:
+            return "PUSH";
+        default:
+            return "UNKOWN";
+        }
+    }
+
+    public int errno()
+    {
+        return errno.get();
+    }
+}
+
+<code block>
+
+
+package zmq;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.Pipe;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.util.concurrent.atomic.AtomicInteger;
+
+
+
+
+
+
+public class Signaler
+        implements Closeable
+{
+    
+    private Pipe.SinkChannel w;
+    private Pipe.SourceChannel r;
+    private Selector selector;
+
+    
+    private final AtomicInteger wcursor = new AtomicInteger(0);
+    private int rcursor = 0;
+
+    public Signaler()
+    {
+        
+        makeFdPair();
+
+        
+        try {
+            Utils.unblockSocket(w);
+            Utils.unblockSocket(r);
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+        try {
+            selector = Selector.open();
+            r.register(selector, SelectionKey.OP_READ);
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+    }
+
+    @Override
+    public void close() throws IOException
+    {
+        r.close();
+        w.close();
+        selector.close();
+    }
+
+    
+    
+    private void makeFdPair()
+    {
+        Pipe pipe;
+
+        try {
+            pipe = Pipe.open();
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+        r = pipe.source();
+        w = pipe.sink();
+    }
+
+    public SelectableChannel getFd()
+    {
+        return r;
+    }
+
+    public void send()
+    {
+        int nbytes = 0;
+        ByteBuffer dummy = ByteBuffer.allocate(1);
+
+        while (true) {
+            try {
+                Thread.interrupted();
+                nbytes = w.write(dummy);
+            }
+            catch (IOException e) {
+                throw new ZError.IOException(e);
+            }
+            if (nbytes == 0) {
+                continue;
+            }
+            assert (nbytes == 1);
+            wcursor.incrementAndGet();
+            break;
+        }
+    }
+
+    public boolean waitEvent(long timeout)
+    {
+        int rc = 0;
+
+        try {
+            if (timeout == 0) {
+                
+                
+                
+                return rcursor < wcursor.get();
+
+            }
+            else if (timeout < 0) {
+                rc = selector.select(0);
+            }
+            else {
+                rc = selector.select(timeout);
+            }
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+
+        if (rc == 0) {
+            return false;
+        }
+
+        selector.selectedKeys().clear();
+
+        return true;
+    }
+
+    public void recv()
+    {
+        int nbytes = 0;
+        try {
+            ByteBuffer dummy = ByteBuffer.allocate(1);
+            nbytes = r.read(dummy);
+            assert nbytes == 1;
+        }
+        catch (IOException e) {
+            throw new ZError.IOException(e);
+        }
+        rcursor++;
+    }
+}

@@ -1,0 +1,14 @@
+Java_Projects/restlet_framework_java/restlet_framework_java-7ffe3798/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v2_0/Swagger2Reader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-7ffe3798/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v2_0/Swagger2Reader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/SwaggerUtils.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/SwaggerReader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/model/ApiDeclaration.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v2_0/Swagger2Reader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/raml/RamlUtils.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/curr/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/model/Endpoint.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/SwaggerUtils.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/SwaggerReader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v1_2/model/ApiDeclaration.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/swagger/v2_0/Swagger2Reader.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/conversion/raml/RamlUtils.java
+Java_Projects/restlet_framework_java/restlet_framework_java-e4de9513/prev/modules/org.restlet.ext.apispark/src/org/restlet/ext/apispark/internal/model/Endpoint.java

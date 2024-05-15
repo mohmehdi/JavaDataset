@@ -1,0 +1,4 @@
+Java_Projects/JGroups/JGroups-f1533756/curr/src/org/jgroups/auth/FixedMembershipToken.java
+Java_Projects/JGroups/JGroups-f1533756/curr/tests/junit-functional/org/jgroups/protocols/AUTHTest.java
+Java_Projects/JGroups/JGroups-f1533756/prev/src/org/jgroups/auth/FixedMembershipToken.java
+Java_Projects/JGroups/JGroups-f1533756/prev/tests/junit-functional/org/jgroups/protocols/AUTHTest.java

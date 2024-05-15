@@ -1,0 +1,4021 @@
+
+
+package io.undertow;
+
+import io.undertow.client.ClientConnection;
+import io.undertow.server.ServerConnection;
+import io.undertow.util.HeaderMap;
+import io.undertow.util.HttpString;
+import org.jboss.logging.BasicLogger;
+import org.jboss.logging.Logger;
+import org.jboss.logging.annotations.Cause;
+import org.jboss.logging.annotations.LogMessage;
+import org.jboss.logging.annotations.Message;
+import org.jboss.logging.annotations.MessageLogger;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.net.URI;
+import java.nio.file.Path;
+import java.sql.SQLException;
+import java.util.List;
+
+import static org.jboss.logging.Logger.Level.DEBUG;
+import static org.jboss.logging.Logger.Level.INFO;
+import static org.jboss.logging.Logger.Level.WARN;
+
+
+@MessageLogger(projectCode = "UT")
+public interface UndertowLogger extends BasicLogger {
+
+    UndertowLogger ROOT_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName());
+    UndertowLogger CLIENT_LOGGER = Logger.getMessageLogger(UndertowLogger.class, ClientConnection.class.getPackage().getName());
+
+    UndertowLogger REQUEST_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request");
+    UndertowLogger PROXY_REQUEST_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".proxy");
+    UndertowLogger REQUEST_DUMPER_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request.dump");
+    
+    UndertowLogger REQUEST_IO_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request.io");
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5001, value = "An exception occurred processing the request")
+    void exceptionProcessingRequest(@Cause Throwable cause);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5002, value = "Exception reading file %s: %s")
+    void exceptionReadingFile(final Path file, final IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5003, value = "IOException reading from channel")
+    void ioExceptionReadingFromChannel(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5005, value = "Cannot remove uploaded file %s")
+    void cannotRemoveUploadedFile(Path file);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5006, value = "Connection from %s terminated as request header was larger than %s")
+    void requestHeaderWasTooLarge(SocketAddress address, int size);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5007, value = "Request was not fully consumed")
+    void requestWasNotFullyConsumed();
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5008, value = "An invalid token '%s' with value '%s' has been received.")
+    void invalidTokenReceived(final String tokenName, final String tokenValue);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5009, value = "A mandatory token %s is missing from the request.")
+    void missingAuthorizationToken(final String tokenName);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5010, value = "Verification of authentication tokens for user '%s' has failed using mechanism '%s'.")
+    void authenticationFailed(final String userName, final String mechanism);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5011, value = "Ignoring AJP request with prefix %s")
+    void ignoringAjpRequestWithPrefixCode(byte prefix);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5013, value = "An IOException occurred")
+    void ioException(@Cause IOException e);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5014, value = "Failed to parse HTTP request")
+    void failedToParseRequest(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5015, value = "Error rotating access log")
+    void errorRotatingAccessLog(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5016, value = "Error writing access log")
+    void errorWritingAccessLog(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5017, value = "Unknown variable %s")
+    void unknownVariable(String token);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5018, value = "Exception invoking close listener %s")
+    void exceptionInvokingCloseListener(ServerConnection.CloseListener l, @Cause Throwable e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5019, value = "Cannot upgrade connection")
+    void cannotUpgradeConnection(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5020, value = "Error writing JDBC log")
+    void errorWritingJDBCLog(@Cause SQLException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5021, value = "Proxy request to %s timed out")
+    void proxyRequestTimedOut(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5022, value = "Exception generating error page %s")
+    void exceptionGeneratingErrorPage(@Cause Exception e, String location);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5023, value = "Exception handling request to %s")
+    void exceptionHandlingRequest(@Cause Throwable t, String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5024, value = "Could not register resource change listener for caching resource manager, automatic invalidation of cached resource will not work")
+    void couldNotRegisterChangeListener(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5025, value = "Could not initiate SPDY connection and no HTTP fallback defined")
+    void couldNotInitiateSpdyConnection();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5026, value = "Jetty ALPN support not found on boot class path, %s client will not be available.")
+    void jettyALPNNotFound(String protocol);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5027, value = "Timing out request to %s")
+    void timingOutRequest(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5028, value = "Proxy request to %s failed")
+    void proxyRequestFailed(String requestURI, @Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5030, value = "Proxy request to %s could not resolve a backend server")
+    void proxyRequestFailedToResolveBackend(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5031, value = "Proxy request to %s could not connect to backend server %s")
+    void proxyFailedToConnectToBackend(String requestURI, URI uri);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5032, value = "Listener not making progress on framed channel, closing channel to prevent infinite loop")
+    void listenerNotProgressing();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5033, value = "Failed to initiate HTTP2 connection")
+    void couldNotInitiateHttp2Connection();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5034, value = "Remote endpoint failed to send initial settings frame in HTTP2 connection, frame type %s")
+    void remoteEndpointFailedToSendInitialSettings(int type);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5035, value = "Closing channel because of parse timeout for remote address %s")
+    void parseRequestTimedOut(java.net.SocketAddress remoteAddress);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5036, value = "ALPN negotiation failed for %s and no fallback defined, closing connection")
+    void noALPNFallback(SocketAddress address);
+
+    
+    @LogMessage(level = WARN)
+    @Message(id = 5037, value = "Name of the cookie containing the session id, %s, had been too long and was truncated to: %s")
+    void stickySessionCookieLengthTruncated(String original, String current);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5038, value = "Balancer created: id: %s, name: %s, stickySession: %s, stickySessionCookie: %s, stickySessionPath: %s, stickySessionRemove: %s, stickySessionForce: %s, waitWorker: %s, maxattempts: %s")
+    void balancerCreated(int id, String name, boolean stickySession, String stickySessionCookie, String stickySessionPath, boolean stickySessionRemove,
+                                            boolean stickySessionForce, int waitWorker, int maxattempts);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5039, value = "Undertow starts mod_cluster proxy advertisements on %s with frequency %s ms")
+    void proxyAdvertisementsStarted(String address, int frequency);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5040, value = "Gonna send payload:\n%s")
+    void proxyAdvertiseMessagePayload(String payload);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5041, value = "Cannot send advertise message. Address: %s")
+    void proxyAdvertiseCannotSendMessage(@Cause Exception e, InetSocketAddress address);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5042, value = "Undertow mod_cluster proxy MCMPHandler created")
+    void mcmpHandlerCreated();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5043, value = "Error in processing MCMP commands: Type:%s, Mess: %s")
+    void mcmpProcessingError(String type, String errString);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5044, value = "Removing node %s")
+    void removingNode(String jvmRoute);
+
+    
+    @LogMessage(level = INFO)
+    @Message(id = 5045, value = "Registering context %s, for node %s")
+    void registeringContext(String contextPath, String jvmRoute);
+
+    
+    @LogMessage(level = DEBUG)
+    @Message(id = 5046, value = "Registering context %s, for node %s, with aliases %s")
+    void registeringContext(String contextPath, String jvmRoute, List<String> aliases);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5047, value = "Unregistering context %s, from node %s")
+    void unregisteringContext(String contextPath, String jvmRoute);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5048, value = "Node %s in error")
+    void nodeIsInError(String jvmRoute);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5049, value = "NodeConfig created: connectionURI: %s, balancer: %s, domain: %s, jvmRoute: %s, flushPackets: %s, flushwait: %s, ping: %s," +
+            "ttl: %s, timeout: %s, maxConnections: %s, cacheConnections: %s, requestQueueSize: %s, queueNewRequests: %s")
+    void nodeConfigCreated(URI connectionURI, String balancer, String domain, String jvmRoute, boolean flushPackets, int flushwait, int ping, long ttl,
+                           int timeout, int maxConnections, int cacheConnections, int requestQueueSize, boolean queueNewRequests);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5050, value = "Failed to process management request")
+    void failedToProcessManagementReq(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5051, value = "Failed to send ping response")
+    void failedToSendPingResponse(@Cause Exception e);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5052, value = "Failed to send ping response, node.getJvmRoute(): %s, jvmRoute: %s")
+    void failedToSendPingResponseDBG(@Cause Exception e, String node, String jvmRoute);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5053, value = "Registering node %s, connection: %s")
+    void registeringNode(String jvmRoute, URI connectionURI);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5054, value = "MCMP processing, key: %s, value: %s")
+    void mcmpKeyValue(HttpString name, String value);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5055, value = "HttpClientPingTask run for connection: %s")
+    void httpClientPingTask(URI connection);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5056, value = "Received node load in STATUS message, node jvmRoute: %s, load: %s")
+    void receivedNodeLoad(String jvmRoute, String loadValue);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5057, value = "Sending MCMP response to destination: %s, HTTP status: %s, Headers: %s, response: %s")
+    void mcmpSendingResponse(InetSocketAddress destination, int status, HeaderMap headers, String response);
+
+    @LogMessage(level = WARN)
+    @Message(id = 5058, value = "Could not bind multicast socket to %s (%s address): %s; make sure your multicast address is of the same type as the IP stack (IPv4 or IPv6). Multicast socket will not be bound to an address, but this may lead to cross talking (see http:
+    void potentialCrossTalking(InetAddress group, String s, String localizedMessage);
+
+    @LogMessage(level = WARN)
+    @Message(id = 5059, value = "Request dumping handler is in use. This handler is intended for debugging use only, and may dump sensitive data to the logs")
+    void warnRequestDumpingHandler();
+
+    @LogMessage(level = org.jboss.logging.Logger.Level.WARN)
+    @Message(id = 5060, value = "Predicate %s uses old style square braces to define predicates, which will be removed in a future release. predicate[value] should be changed to predicate(value)")
+    void oldStylePredicateSyntax(String string);
+
+    @Message(id=5061, value = "More than %s restarts detected, breaking assumed infinite loop")
+    IllegalStateException maxRestartsExceeded(int maxRestarts);
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import io.undertow.UndertowMessages;
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.attribute.ExchangeAttributes;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.util.HttpString;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+
+public class SetHeaderHandler implements HttpHandler {
+
+    private final HttpString header;
+    private final ExchangeAttribute value;
+    private final HttpHandler next;
+
+    public SetHeaderHandler(final String header, final String value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        this.next = ResponseCodeHandler.HANDLE_404;
+        this.value = ExchangeAttributes.constant(value);
+        this.header = new HttpString(header);
+    }
+
+    public SetHeaderHandler(final HttpHandler next, final String header, final ExchangeAttribute value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        if(next == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("next");
+        }
+        this.next = next;
+        this.value = value;
+        this.header = new HttpString(header);
+    }
+
+    public SetHeaderHandler(final HttpHandler next, final String header, final String value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        if(next == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("next");
+        }
+        this.next = next;
+        this.value = ExchangeAttributes.constant(value);
+        this.header = new HttpString(header);
+    }
+    @Override
+    public void handleRequest(final HttpServerExchange exchange) throws Exception {
+        exchange.getResponseHeaders().put(header, value.readAttribute(exchange));
+        next.handleRequest(exchange);
+    }
+
+    public ExchangeAttribute getValue() {
+        return value;
+    }
+
+    public HttpString getHeader() {
+        return header;
+    }
+
+    public static class Builder implements HandlerBuilder {
+        @Override
+        public String name() {
+            return "header";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            Map<String, Class<?>> parameters = new HashMap<>();
+            parameters.put("header", String.class);
+            parameters.put("value", ExchangeAttribute.class);
+
+            return parameters;
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            final Set<String> req = new HashSet<>();
+            req.add("value");
+            req.add("header");
+            return req;
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public HandlerWrapper build(final Map<String, Object> config) {
+            final ExchangeAttribute value = (ExchangeAttribute) config.get("value");
+            final String header = (String) config.get("header");
+
+            return new HandlerWrapper() {
+                @Override
+                public HttpHandler wrap(HttpHandler handler) {
+                    return new SetHeaderHandler(handler, header, value);
+                }
+            };
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.util.HttpString;
+import io.undertow.util.StatusCodes;
+
+
+public class AllowedMethodsHandler implements HttpHandler {
+
+    private final Set<HttpString> allowedMethods;
+    private final HttpHandler next;
+
+    public AllowedMethodsHandler(final HttpHandler next, final Set<HttpString> allowedMethods) {
+        this.allowedMethods = new HashSet<>(allowedMethods);
+        this.next = next;
+    }
+
+    public AllowedMethodsHandler(final HttpHandler next, final HttpString... allowedMethods) {
+        this.allowedMethods = new HashSet<>(Arrays.asList(allowedMethods));
+        this.next = next;
+    }
+
+    @Override
+    public void handleRequest(final HttpServerExchange exchange) throws Exception {
+        if (allowedMethods.contains(exchange.getRequestMethod())) {
+            next.handleRequest(exchange);
+        } else {
+            exchange.setResponseCode(StatusCodes.METHOD_NOT_ALLOWED);
+            exchange.endExchange();
+        }
+    }
+
+    public Set<HttpString> getAllowedMethods() {
+        return Collections.unmodifiableSet(allowedMethods);
+    }
+
+    public static class Builder implements HandlerBuilder {
+
+        @Override
+        public String name() {
+            return "allowed-methods";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            return Collections.<String, Class<?>>singletonMap("methods", String[].class);
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            return Collections.singleton("methods");
+        }
+
+        @Override
+        public String defaultParameter() {
+            return "methods";
+        }
+
+        @Override
+        public HandlerWrapper build(Map<String, Object> config) {
+            return new Wrapper((String[]) config.get("methods"));
+        }
+
+    }
+
+    private static class Wrapper implements HandlerWrapper {
+
+        private final String[] methods;
+
+        private Wrapper(String[] methods) {
+            this.methods = methods;
+        }
+
+        @Override
+        public HttpHandler wrap(HttpHandler handler) {
+            HttpString[] strings = new HttpString[methods.length];
+                for(int i = 0; i < methods.length; ++i) {
+                    strings[i] = new HttpString(methods[i]);
+                }
+
+            return new AllowedMethodsHandler(handler, strings);
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.predicate.Predicate;
+import io.undertow.server.HandlerWrapper;
+
+
+public class PredicatedHandler {
+    private final Predicate predicate;
+    private final HandlerWrapper handler;
+    private final HandlerWrapper elseHandler;
+
+    public PredicatedHandler(Predicate predicate, HandlerWrapper handler) {
+        this(predicate, handler, null);
+    }
+
+    public PredicatedHandler(Predicate predicate, HandlerWrapper handler, HandlerWrapper elseHandler) {
+        this.predicate = predicate;
+        this.handler = handler;
+        this.elseHandler = elseHandler;
+    }
+
+    public Predicate getPredicate() {
+        return predicate;
+    }
+
+    public HandlerWrapper getHandler() {
+        return handler;
+    }
+
+    public HandlerWrapper getElseHandler() {
+        return elseHandler;
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.UndertowLogger;
+import io.undertow.UndertowMessages;
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.attribute.ExchangeAttributeParser;
+import io.undertow.attribute.ExchangeAttributes;
+import io.undertow.predicate.Predicate;
+import io.undertow.predicate.PredicateBuilder;
+import io.undertow.predicate.Predicates;
+import io.undertow.predicate.PredicatesHandler;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.util.FileUtils;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.Array;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
+
+
+public class PredicatedHandlersParser {
+
+    public static final String ELSE = "else";
+    public static final String ARROW = "->";
+    public static final String NOT = "not";
+    public static final String OR = "or";
+    public static final String AND = "and";
+    public static final String TRUE = "true";
+    public static final String FALSE = "false";
+
+    public static List<PredicatedHandler> parse(final File file, final ClassLoader classLoader) {
+        return parse(file.toPath(), classLoader);
+    }
+
+    public static List<PredicatedHandler> parse(final Path file, final ClassLoader classLoader) {
+        try {
+            return parse(new String(Files.readAllBytes(file)), classLoader);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static List<PredicatedHandler> parse(final InputStream inputStream, final ClassLoader classLoader) {
+        return parse(FileUtils.readFile(inputStream), classLoader);
+    }
+
+    public static List<PredicatedHandler> parse(final String contents, final ClassLoader classLoader) {
+        Deque<Token> tokens = tokenize(contents);
+
+        Node node = parse(contents, tokens);
+        Map<String, PredicateBuilder> predicateBuilders = loadPredicateBuilders(classLoader);
+        Map<String, HandlerBuilder> handlerBuilders = loadHandlerBuilders(classLoader);
+
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        return handleNode(contents, node, predicateBuilders, handlerBuilders, attributeParser);
+    }
+
+
+    public static Predicate parsePredicate(String string, ClassLoader classLoader) {
+        Deque<Token> tokens = tokenize(string);
+        Node node = parse(string, tokens);
+        Map<String, PredicateBuilder> predicateBuilders = loadPredicateBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        return handlePredicateNode(string, node, predicateBuilders, attributeParser);
+    }
+
+    public static HandlerWrapper parseHandler(String string, ClassLoader classLoader) {
+        Deque<Token> tokens = tokenize(string);
+        Node node = parse(string, tokens);
+        Map<String, HandlerBuilder> handlerBuilders = loadHandlerBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        return handleHandlerNode(string, (ExpressionNode)node, handlerBuilders, attributeParser);
+    }
+    private static List<PredicatedHandler> handleNode(String contents, Node node, Map<String, PredicateBuilder> predicateBuilders, Map<String, HandlerBuilder> handlerBuilders, ExchangeAttributeParser attributeParser) {
+        if(node instanceof BlockNode) {
+            return handleBlockNode(contents, (BlockNode) node, predicateBuilders, handlerBuilders, attributeParser);
+        } else if(node instanceof ExpressionNode) {
+            HandlerWrapper handler =  handleHandlerNode(contents, (ExpressionNode) node, handlerBuilders, attributeParser);
+            return Collections.singletonList(new PredicatedHandler(Predicates.truePredicate(), handler));
+        } else if(node instanceof PredicateOperatorNode) {
+            return Collections.singletonList(handlePredicateOperatorNode(contents, (PredicateOperatorNode)node, predicateBuilders, handlerBuilders, attributeParser));
+        } else {
+            throw error(contents, node.getToken().getPosition(), "unexpected token " + node.getToken());
+        }
+    }
+
+    private static PredicatedHandler handlePredicateOperatorNode(String contents, PredicateOperatorNode node, Map<String, PredicateBuilder> predicateBuilders, Map<String, HandlerBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        Predicate predicate = handlePredicateNode(contents, node.getLeft(), predicateBuilders, parser);
+        HandlerWrapper ret = handlePredicatedAction(contents, node.getRight(), predicateBuilders, handlerBuilders, parser);
+        HandlerWrapper elseBranch = null;
+        if(node.getElseBranch() != null) {
+            elseBranch = handlePredicatedAction(contents, node.getElseBranch(), predicateBuilders, handlerBuilders, parser);
+        }
+        return new PredicatedHandler(predicate, ret, elseBranch);
+    }
+
+    private static HandlerWrapper handlePredicatedAction(String contents, Node node, Map<String, PredicateBuilder> predicateBuilders, Map<String, HandlerBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        if(node instanceof ExpressionNode) {
+            return handleHandlerNode(contents, (ExpressionNode) node, handlerBuilders, parser);
+        } else if(node instanceof BlockNode) {
+            List<PredicatedHandler> handlers = handleBlockNode(contents, (BlockNode) node, predicateBuilders, handlerBuilders, parser);
+            return  new PredicatesHandler.Wrapper(handlers, false);
+        } else {
+            throw error(contents, node.getToken().getPosition(), "unexpected token " + node.getToken());
+        }
+    }
+
+    private static List<PredicatedHandler> handleBlockNode(String contents, BlockNode node, Map<String, PredicateBuilder> predicateBuilders, Map<String, HandlerBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        List<PredicatedHandler> ret = new ArrayList<>();
+        for(Node line : node.getBlock()) {
+            ret.addAll(handleNode(contents, line, predicateBuilders, handlerBuilders, parser));
+        }
+        return ret;
+
+    }
+
+    private static HandlerWrapper handleHandlerNode(String contents, ExpressionNode node, Map<String, HandlerBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        Token token = node.getToken();
+        HandlerBuilder builder = handlerBuilders.get(token.getToken());
+        if (builder == null) {
+            throw error(contents, token.getPosition(), "no handler named " + token.getToken() + " known handlers are " + handlerBuilders.keySet());
+        }
+        Map<String, Object> parameters = new HashMap<>();
+
+        for(Map.Entry<String, Node> val : node.getValues().entrySet()) {
+            String name = val.getKey();
+            if(name == null) {
+                if(builder.defaultParameter() == null) {
+                    throw error(contents, token.getPosition(), "default parameter not supported");
+                }
+                name = builder.defaultParameter();
+            }
+            Class<?> type = builder.parameters().get(name);
+            if(type == null) {
+                throw error(contents, val.getValue().getToken().getPosition(), "unknown parameter " + name);
+            }
+            if(val.getValue() instanceof ValueNode) {
+                parameters.put(name, coerceToType(contents, val.getValue().getToken(), type, parser));
+            } else if(val.getValue() instanceof ArrayNode) {
+                parameters.put(name, readArrayType(contents, name, (ArrayNode)val.getValue(), parser, type));
+            } else {
+                throw error(contents, val.getValue().getToken().getPosition(), "unexpected node " + val.getValue());
+            }
+        }
+        return builder.build(parameters);
+    }
+
+    private static Predicate handlePredicateNode(String contents, Node node, Map<String, PredicateBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        if(node instanceof AndNode) {
+            AndNode andNode = (AndNode)node;
+            return Predicates.and(handlePredicateNode(contents, andNode.getLeft(), handlerBuilders, parser), handlePredicateNode(contents, andNode.getRight(), handlerBuilders, parser));
+        } else if(node instanceof OrNode) {
+            OrNode orNode = (OrNode)node;
+            return Predicates.or(handlePredicateNode(contents, orNode.getLeft(), handlerBuilders, parser), handlePredicateNode(contents, orNode.getRight(), handlerBuilders, parser));
+        } else if(node instanceof NotNode) {
+            NotNode orNode = (NotNode)node;
+            return Predicates.not(handlePredicateNode(contents, orNode.getNode(), handlerBuilders, parser));
+        } else if(node instanceof ExpressionNode) {
+            return handlePredicateExpressionNode(contents, (ExpressionNode) node, handlerBuilders, parser);
+        }else if(node instanceof OperatorNode) {
+            switch (node.getToken().getToken()) {
+                case TRUE: {
+                    return Predicates.truePredicate();
+                }
+                case FALSE: {
+                    return Predicates.falsePredicate();
+                }
+            }
+        }
+        throw error(contents, node.getToken().getPosition(), "unexpected node " + node);
+    }
+
+    private static Predicate handlePredicateExpressionNode(String contents, ExpressionNode node, Map<String, PredicateBuilder> handlerBuilders, ExchangeAttributeParser parser) {
+        Token token = node.getToken();
+        PredicateBuilder builder = handlerBuilders.get(token.getToken());
+        if (builder == null) {
+            throw error(contents, token.getPosition(), "no predicate named " + token.getToken() + " known predicates are " + handlerBuilders.keySet());
+        }
+        Map<String, Object> parameters = new HashMap<>();
+
+        for(Map.Entry<String, Node> val : node.getValues().entrySet()) {
+            String name = val.getKey();
+            if(name == null) {
+                if(builder.defaultParameter() == null) {
+                    throw error(contents, token.getPosition(), "default parameter not supported");
+                }
+                name = builder.defaultParameter();
+            }
+            Class<?> type = builder.parameters().get(name);
+            if(type == null) {
+                throw error(contents, val.getValue().getToken().getPosition(), "unknown parameter " + name);
+            }
+            if(val.getValue() instanceof ValueNode) {
+                parameters.put(name, coerceToType(contents, val.getValue().getToken(), type, parser));
+            } else if(val.getValue() instanceof ArrayNode) {
+                parameters.put(name, readArrayType(contents, name, (ArrayNode)val.getValue(), parser, type));
+            } else {
+                throw error(contents, val.getValue().getToken().getPosition(), "unexpected node " + val.getValue());
+            }
+        }
+        return builder.build(parameters);
+    }
+
+    private static Object readArrayType(final String string, String paramName, ArrayNode value, ExchangeAttributeParser parser, Class type) {
+        if (!type.isArray()) {
+            throw error(string, value.getToken().getPosition(), "parameter is not an array type " + paramName);
+        }
+
+        Class<?> componentType = type.getComponentType();
+        final List<Object> values = new ArrayList<>();
+        for(Token token : value.getValues()) {
+            values.add(coerceToType(string, token, componentType, parser));
+        }
+        Object array = Array.newInstance(componentType, values.size());
+        for (int i = 0; i < values.size(); ++i) {
+            Array.set(array, i, values.get(i));
+        }
+        return array;
+    }
+
+    private static Object coerceToType(final String string, final Token token, final Class<?> type, final ExchangeAttributeParser attributeParser) {
+        if (type.isArray()) {
+            Object array = Array.newInstance(type.getComponentType(), 1);
+            Array.set(array, 0, coerceToType(string, token, type.getComponentType(), attributeParser));
+            return array;
+        }
+
+        if (type == String.class) {
+            return token.getToken();
+        } else if (type.equals(Boolean.class) || type.equals(boolean.class)) {
+            return Boolean.valueOf(token.getToken());
+        } else if (type.equals(Byte.class) || type.equals(byte.class)) {
+            return Byte.valueOf(token.getToken());
+        } else if (type.equals(Character.class) || type.equals(char.class)) {
+            if (token.getToken().length() != 1) {
+                throw error(string, token.getPosition(), "Cannot coerce " + token.getToken() + " to a Character");
+            }
+            return Character.valueOf(token.getToken().charAt(0));
+        } else if (type.equals(Short.class) || type.equals(short.class)) {
+            return Short.valueOf(token.getToken());
+        } else if (type.equals(Integer.class) || type.equals(int.class)) {
+            return Integer.valueOf(token.getToken());
+        } else if (type.equals(Long.class) || type.equals(long.class)) {
+            return Long.valueOf(token.getToken());
+        } else if (type.equals(Float.class) || type.equals(float.class)) {
+            return Float.valueOf(token.getToken());
+        } else if (type.equals(Double.class) || type.equals(double.class)) {
+            return Double.valueOf(token.getToken());
+        } else if (type.equals(ExchangeAttribute.class)) {
+            return attributeParser.parse(token.getToken());
+        }
+
+        return token.getToken();
+    }
+
+    private static Map<String, PredicateBuilder> loadPredicateBuilders(final ClassLoader classLoader) {
+        ServiceLoader<PredicateBuilder> loader = ServiceLoader.load(PredicateBuilder.class, classLoader);
+        final Map<String, PredicateBuilder> ret = new HashMap<>();
+        for (PredicateBuilder builder : loader) {
+            if (ret.containsKey(builder.name())) {
+                if (ret.get(builder.name()).getClass() != builder.getClass()) {
+                    throw UndertowMessages.MESSAGES.moreThanOnePredicateWithName(builder.name(), builder.getClass(), ret.get(builder.name()).getClass());
+                }
+            } else {
+                ret.put(builder.name(), builder);
+            }
+        }
+        return ret;
+    }
+
+    private static Map<String, HandlerBuilder> loadHandlerBuilders(final ClassLoader classLoader) {
+        ServiceLoader<HandlerBuilder> loader = ServiceLoader.load(HandlerBuilder.class, classLoader);
+        final Map<String, HandlerBuilder> ret = new HashMap<>();
+        for (HandlerBuilder builder : loader) {
+            if (ret.containsKey(builder.name())) {
+                if (ret.get(builder.name()).getClass() != builder.getClass()) {
+                    throw UndertowMessages.MESSAGES.moreThanOneHandlerWithName(builder.name(), builder.getClass(), ret.get(builder.name()).getClass());
+                }
+            } else {
+                ret.put(builder.name(), builder);
+            }
+        }
+        return ret;
+    }
+
+    static Node parse(final String string, Deque<Token> tokens) {
+        return parse(string, tokens, true);
+    }
+
+    static Node parse(final String string, Deque<Token> tokens, boolean topLevel) {
+
+        
+        
+        Deque<Token> operatorStack = new ArrayDeque<>();
+
+        Deque<Node> output = new ArrayDeque<>();
+        List<Node> blocks = new ArrayList<>();
+
+
+        while (!tokens.isEmpty()) {
+            Token token = tokens.poll();
+            if(token.getToken().equals("{")) {
+                output.push(parse(string, tokens, false));
+            } else if(token.getToken().equals("}")) {
+                if(topLevel) {
+                    throw error(string, token.getPosition(), "Unexpected token");
+                }
+                break;
+            } else if(token.getToken().equals("\n") || token.getToken().equals(";")) {
+                handleLineEnd(string, operatorStack, output, blocks);
+            } else if (isSpecialChar(token.getToken())) {
+                if (token.getToken().equals("(")) {
+                    operatorStack.push(token);
+                } else if (token.getToken().equals(")")) {
+                    for (; ; ) {
+                        Token op = operatorStack.pop();
+                        if (op == null) {
+                            throw error(string, token.getPosition(), "Unexpected end of input");
+                        } else if (op.getToken().equals("(")) {
+                            break;
+                        } else {
+                            output.push(new OperatorNode(op));
+                        }
+                    }
+                } else {
+                    output.push(new OperatorNode(token));
+                }
+            } else {
+                if (isOperator(token.getToken()) && !token.getToken().equals(ELSE)) {
+                    int prec = precedence(token.getToken());
+                    Token top = operatorStack.peek();
+                    while (top != null) {
+                        if (top.getToken().equals("(")) {
+                            break;
+                        }
+                        int exitingPrec = precedence(top.getToken());
+                        if (prec <= exitingPrec) {
+                            output.push(new OperatorNode(operatorStack.pop()));
+                        } else {
+                            break;
+                        }
+                        top = operatorStack.peek();
+                    }
+                    operatorStack.push(token);
+                } else {
+                    output.push(parseExpression(string, token, tokens));
+                }
+            }
+        }
+        handleLineEnd(string, operatorStack, output, blocks);
+        if(blocks.size() == 1) {
+            return blocks.get(0);
+        } else {
+            return new BlockNode(new Token("", 0), blocks);
+        }
+    }
+
+    private static void handleLineEnd(String string, Deque<Token> operatorStack, Deque<Node> output, List<Node> blocks) {
+        while (!operatorStack.isEmpty()) {
+            Token op = operatorStack.pop();
+            if (op.getToken().equals(")")) {
+                throw error(string, string.length(), "Mismatched parenthesis");
+            }
+            output.push(new OperatorNode(op));
+        }
+        if(output.isEmpty()) {
+            return;
+        }
+        
+        Node predicate = collapseOutput(output.pop(), output);
+        if (!output.isEmpty()) {
+            throw error(string, output.getFirst().getToken().getPosition(), "Invalid expression");
+        }
+        blocks.add(predicate);
+    }
+
+    private static Node collapseOutput(final Node token, final Deque<Node> tokens) {
+        if (token instanceof OperatorNode) {
+            OperatorNode node = (OperatorNode) token;
+            if (node.token.getToken().equals(AND)) {
+                Node n1 = collapseOutput(tokens.pop(), tokens);
+                Node n2 = collapseOutput(tokens.pop(), tokens);
+                return new AndNode(token.getToken(), n2, n1);
+            } else if (node.token.getToken().equals(OR)) {
+                Node n1 = collapseOutput(tokens.pop(), tokens);
+                Node n2 = collapseOutput(tokens.pop(), tokens);
+                return new OrNode(token.getToken(), n2, n1);
+            } else if (node.token.getToken().equals(NOT)) {
+                Node n1 = collapseOutput(tokens.pop(), tokens);
+                return new NotNode(token.getToken(), n1);
+            } else if (node.token.getToken().equals(ARROW)) {
+                Node n1 = collapseOutput(tokens.pop(), tokens);
+                Node n2 = null;
+                Node elseBranch = null;
+                final Node popped = tokens.pop();
+                if(popped.getToken().getToken().equals(ELSE)) {
+                    elseBranch = n1;
+                    n1 = collapseOutput(tokens.pop(), tokens);
+                    n2 = collapseOutput(tokens.pop(), tokens);
+                } else {
+                    n2 = collapseOutput(popped, tokens);
+                }
+                return new PredicateOperatorNode(token.getToken(), n2, n1, elseBranch);
+            }  else {
+                return token;
+            }
+        } else {
+            return token;
+        }
+
+    }
+
+    private static Node parseExpression(final String string, final Token token, final Deque<Token> tokens) {
+        if (token.getToken().equals(TRUE)) {
+            return new OperatorNode(token);
+        } else if (token.getToken().equals(FALSE)) {
+            return new OperatorNode(token);
+        } else {
+            Token next = tokens.peek();
+            String endChar = ")";
+            if (next != null && (next.getToken().equals("[") || next.getToken().equals("("))) {
+                if (next.getToken().equals("[")) {
+                    endChar = "]";
+                    UndertowLogger.ROOT_LOGGER.oldStylePredicateSyntax(string);
+                }
+                final Map<String, Node> values = new HashMap<>();
+
+                tokens.poll();
+                next = tokens.poll();
+                if (next == null) {
+                    throw error(string, string.length(), "Unexpected end of input");
+                }
+                if (next.getToken().equals("{")) {
+                    return handleSingleArrayValue(string, token, tokens, endChar);
+                }
+                while (!next.getToken().equals(endChar)) {
+                    Token equals = tokens.poll();
+                    if (equals == null) {
+                        throw error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (!equals.getToken().equals("=")) {
+                        if (equals.getToken().equals(endChar) && values.isEmpty()) {
+                            
+                            return handleSingleValue(token, next);
+                        } else if (equals.getToken().equals(",")) {
+                            tokens.push(equals);
+                            tokens.push(next);
+                            return handleSingleVarArgsValue(string, token, tokens, endChar);
+                        }
+                        throw error(string, equals.getPosition(), "Unexpected token");
+                    }
+                    Token value = tokens.poll();
+                    if (value == null) {
+                        throw error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (value.getToken().equals("{")) {
+                        values.put(next.getToken(), new ArrayNode(value, readArrayType(string, tokens,"}")));
+                    } else {
+                        if (isOperator(value.getToken()) || isSpecialChar(value.getToken())) {
+                            throw error(string, value.getPosition(), "Unexpected token");
+                        }
+                        values.put(next.getToken(), new ValueNode(value));
+                    }
+
+                    next = tokens.poll();
+                    if (next == null) {
+                        throw error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (!next.getToken().equals(endChar)) {
+                        if (!next.getToken().equals(",")) {
+                            throw error(string, string.length(), "Expecting , or " + endChar);
+                        }
+                        next = tokens.poll();
+                        if (next == null) {
+                            throw error(string, string.length(), "Unexpected end of input");
+                        }
+                    }
+                }
+                return new ExpressionNode(token, values);
+
+            } else {
+                if (next != null && isSpecialChar(next.getToken())) {
+                    throw error(string, next.getPosition(), "Unexpected character");
+                }
+                return new ExpressionNode(token, Collections.<String, Node>emptyMap());
+            }
+        }
+    }
+
+    private static Node handleSingleArrayValue(final String string, final Token builder, final Deque<Token> tokens, String endChar) {
+        List<Token> array = readArrayType(string, tokens, "}");
+        Token close = tokens.poll();
+        if (!close.getToken().equals(endChar)) {
+            throw error(string, close.getPosition(), "expected " + endChar);
+        }
+        return new ExpressionNode(builder, Collections.<String, Node>singletonMap(null, new ArrayNode(builder, array)));
+    }
+
+    private static Node handleSingleVarArgsValue(final String string, final Token expressionName, final Deque<Token> tokens, String endChar) {
+        List<Token> array = readArrayType(string, tokens, endChar);
+        return new ExpressionNode(expressionName, Collections.<String, Node>singletonMap(null, new ArrayNode(expressionName, array)));
+    }
+
+    private static List<Token> readArrayType(final String string, final Deque<Token> tokens, String expectedEndToken) {
+        final List<Token> values = new ArrayList<>();
+        Token token = tokens.poll();
+        if(token.getToken().equals(expectedEndToken)) {
+            return Collections.emptyList();
+        }
+        while (token != null) {
+            Token commaOrEnd = tokens.poll();
+            values.add(token);
+            if (commaOrEnd.getToken().equals(expectedEndToken)) {
+                return values;
+            } else if (!commaOrEnd.getToken().equals(",")) {
+                throw error(string, commaOrEnd.getPosition(), "expected either , or " + expectedEndToken);
+            }
+            token = tokens.poll();
+        }
+        throw error(string, string.length(), "unexpected end of input in array");
+    }
+
+
+    private static Node handleSingleValue(final Token token, final Token next) {
+        return new ExpressionNode(token, Collections.<String, Node>singletonMap(null, new ValueNode(next)));
+    }
+
+    private static int precedence(String operator) {
+        if (operator.equals(NOT)) {
+            return 3;
+        } else if (operator.equals(AND)) {
+            return 2;
+        } else if (operator.equals(OR)) {
+            return 1;
+        } else if (operator.equals(ARROW)) {
+            return -1000;
+        }
+        throw new IllegalStateException();
+    }
+
+
+    private static boolean isOperator(final String op) {
+        return op.equals(AND) || op.equals(OR) || op.equals(NOT) || op.equals(ARROW);
+    }
+
+    private static boolean isSpecialChar(String token) {
+        if (token.length() == 1) {
+            char c = token.charAt(0);
+            switch (c) {
+                case '(':
+                case ')':
+                case ',':
+                case '=':
+                case '[':
+                case ']':
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    public static Deque<Token> tokenize(final String string) {
+        char currentStringDelim = 0;
+        boolean inVariable = false;
+
+        int pos = 0;
+        StringBuilder current = new StringBuilder();
+        Deque<Token> ret = new ArrayDeque<>();
+        while (pos < string.length()) {
+            char c = string.charAt(pos);
+            if (currentStringDelim != 0) {
+                if (c == currentStringDelim && current.charAt(current.length() - 1) != '\\') {
+                    ret.add(new Token(current.toString(), pos));
+                    current.setLength(0);
+                    currentStringDelim = 0;
+                } else if (c == '\n') {
+                    ret.add(new Token(current.toString(), pos));
+                    current.setLength(0);
+                    currentStringDelim = 0;
+                    ret.add(new Token("\n", pos));
+                } else {
+                    current.append(c);
+                }
+            } else {
+                switch (c) {
+                    case ' ':
+                    case '\t': {
+                        if (current.length() != 0) {
+                            ret.add(new Token(current.toString(), pos));
+                            current.setLength(0);
+                        }
+                        break;
+                    }
+                    case '\n': {
+                        if (current.length() != 0) {
+                            ret.add(new Token(current.toString(), pos));
+                            current.setLength(0);
+                        }
+                        ret.add(new Token("\n", pos));
+                        break;
+                    }
+                    case ';':
+                    case '(':
+                    case ')':
+                    case ',':
+                    case '=':
+                    case '[':
+                    case ']':
+                    case '{':
+                    case '}': {
+                        if (inVariable) {
+                            current.append(c);
+                            if (c == '}') {
+                                inVariable = false;
+                            }
+                        } else {
+                            if (current.length() != 0) {
+                                ret.add(new Token(current.toString(), pos));
+                                current.setLength(0);
+                            }
+                            ret.add(new Token("" + c, pos));
+                        }
+                        break;
+                    }
+                    case '"':
+                    case '\'': {
+                        if (current.length() != 0) {
+                            throw error(string, pos, "Unexpected token");
+                        }
+                        currentStringDelim = c;
+                        break;
+                    }
+                    case '%':
+                    case '$': {
+                        current.append(c);
+                        if (string.charAt(pos + 1) == '{') {
+                            inVariable = true;
+                        }
+                        break;
+                    }
+                    case '-':
+                        if (inVariable) {
+                            current.append(c);
+                        } else {
+                            if (pos != string.length() && string.charAt(pos + 1) == '>') {
+                                pos++;
+                                if (current.length() != 0) {
+                                    ret.add(new Token(current.toString(), pos));
+                                    current.setLength(0);
+                                }
+                                ret.add(new Token(ARROW, pos));
+                            } else {
+                                current.append(c);
+                            }
+                        }
+                        break;
+                    default:
+                        current.append(c);
+                }
+            }
+            ++pos;
+        }
+        if (current.length() > 0) {
+            ret.add(new Token(current.toString(), string.length()));
+        }
+        return ret;
+    }
+
+    public static IllegalStateException error(final String string, int pos, String reason) {
+        StringBuilder b = new StringBuilder();
+        int linePos = 0;
+        for (int i = 0; i < string.length(); ++i) {
+            if (string.charAt(i) == '\n') {
+                if (i >= pos) {
+                    
+                    break;
+                } else {
+                    linePos = 0;
+                }
+            } else if (i < pos) {
+                linePos++;
+            }
+            b.append(string.charAt(i));
+        }
+        b.append('\n');
+        for (int i = 0; i < linePos; ++i) {
+            b.append(' ');
+        }
+        b.append('^');
+        throw UndertowMessages.MESSAGES.errorParsingPredicateString(reason, b.toString());
+    }
+
+    public interface Node {
+
+        Token getToken();
+
+    }
+
+
+    
+    static class ExpressionNode implements Node {
+
+        private final Token token;
+        private final Map<String, Node> values;
+
+        private ExpressionNode(Token token, Map<String, Node> values) {
+            this.token = token;
+            this.values = values;
+        }
+
+        public Token getToken() {
+            return token;
+        }
+
+        public Map<String, Node> getValues() {
+            return values;
+        }
+    }
+
+    static class ArrayNode implements Node {
+        private final Token start;
+        private final List<Token> values;
+
+        private ArrayNode(Token start, List<Token> tokens) {
+            this.start = start;
+            this.values = tokens;
+        }
+
+        public List<Token> getValues() {
+            return values;
+        }
+
+        @Override
+        public Token getToken() {
+            return start;
+        }
+    }
+
+    static class ValueNode implements Node {
+        private final Token value;
+
+        private ValueNode(Token value) {
+            this.value = value;
+        }
+
+        public Token getValue() {
+            return value;
+        }
+
+        @Override
+        public String toString() {
+            return value.getToken();
+        }
+
+        @Override
+        public Token getToken() {
+            return value;
+        }
+    }
+
+    static class OperatorNode implements Node {
+
+        private final Token token;
+
+        private OperatorNode(Token token) {
+            this.token = token;
+        }
+
+        public Token getToken() {
+            return token;
+        }
+    }
+
+
+    static class AndNode implements Node {
+        private final Token token;
+        private final Node left;
+        private final Node right;
+
+        public AndNode(Token token, Node left, Node right) {
+            this.token = token;
+            this.left = left;
+            this.right = right;
+        }
+
+        public Node getLeft() {
+            return left;
+        }
+
+        public Node getRight() {
+            return right;
+        }
+
+        public Token getToken() {
+            return token;
+        }
+    }
+
+    static class OrNode implements Node {
+        private final Token token;
+        private final Node left;
+        private final Node right;
+
+        public OrNode(Token token, Node left, Node right) {
+            this.token = token;
+            this.left = left;
+            this.right = right;
+        }
+
+        public Node getLeft() {
+            return left;
+        }
+
+        public Node getRight() {
+            return right;
+        }
+
+        public Token getToken() {
+            return token;
+        }
+    }
+
+
+    static class PredicateOperatorNode implements Node {
+        private final Token token;
+        private final Node left;
+        private final Node right;
+        private final Node elseBranch;
+
+        public PredicateOperatorNode(Token token, Node left, Node right, Node elseBranch) {
+            this.token = token;
+            this.left = left;
+            this.right = right;
+            this.elseBranch = elseBranch;
+        }
+
+        public Node getLeft() {
+            return left;
+        }
+
+        public Node getRight() {
+            return right;
+        }
+
+        public Node getElseBranch() {
+            return elseBranch;
+        }
+
+        @Override
+        public Token getToken() {
+            return token;
+        }
+    }
+
+    static class NotNode implements Node {
+
+        private final Token token;
+        private final Node node;
+
+        public NotNode(Token token, Node node) {
+            this.token = token;
+            this.node = node;
+        }
+
+        public Node getNode() {
+            return node;
+        }
+
+        public Token getToken() {
+            return token;
+        }
+    }
+
+    static class BlockNode implements Node {
+        private final Token token;
+        private final List<Node> block;
+
+        public BlockNode(Token token, List<Node> block) {
+            this.token = token;
+            this.block = block;
+        }
+
+        public List<Node> getBlock() {
+            return block;
+        }
+
+        @Override
+        public Token getToken() {
+            return token;
+        }
+    }
+
+
+    static final class Token {
+        private final String token;
+        private final int position;
+
+        public Token(final String token, final int position) {
+            this.token = token;
+            this.position = position;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public int getPosition() {
+            return position;
+        }
+
+        @Override
+        public String toString() {
+            return token + " <" + position + ">";
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.server.HandlerWrapper;
+
+
+public class HandlerParser {
+
+
+    public static HandlerWrapper parse(String string, final ClassLoader classLoader) {
+        return PredicatedHandlersParser.parseHandler(string, classLoader);
+    }
+
+
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.server.HttpServerExchange;
+
+
+public class ContainsPredicate implements Predicate {
+
+    private final ExchangeAttribute attribute;
+    private final String[] values;
+
+    ContainsPredicate(final ExchangeAttribute attribute, final String[] values) {
+        this.attribute = attribute;
+        this.values = new String[values.length];
+        System.arraycopy(values, 0, this.values, 0, values.length);
+    }
+
+    @Override
+    public boolean resolve(final HttpServerExchange value) {
+        String attr = attribute.readAttribute(value);
+        if (attr == null) {
+            return false;
+        }
+        for (int i = 0; i < values.length; ++i) {
+            if (attr.contains(values[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public ExchangeAttribute getAttribute() {
+        return attribute;
+    }
+
+    public String[] getValues() {
+        String[] ret = new String[values.length];
+        System.arraycopy(values, 0, ret, 0, values.length);
+        return ret;
+    }
+
+    public static class Builder implements PredicateBuilder {
+
+        @Override
+        public String name() {
+            return "contains";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            final Map<String, Class<?>> params = new HashMap<>();
+            params.put("value", ExchangeAttribute.class);
+            params.put("search", String[].class);
+            return params;
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            final Set<String> params = new HashSet<>();
+            params.add("value");
+            params.add("search");
+            return params;
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public Predicate build(final Map<String, Object> config) {
+            String[] search = (String[]) config.get("search");
+            ExchangeAttribute values = (ExchangeAttribute) config.get("value");
+            return new ContainsPredicate(values, search);
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import io.undertow.UndertowLogger;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.server.handlers.builder.PredicatedHandler;
+import io.undertow.util.AttachmentKey;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+
+public class PredicatesHandler implements HttpHandler {
+
+    
+    public static final AttachmentKey<Boolean> DONE = AttachmentKey.create(Boolean.class);
+    public static final AttachmentKey<Boolean> RESTART = AttachmentKey.create(Boolean.class);
+
+    private volatile Holder[] handlers = new Holder[0];
+    private volatile HttpHandler next;
+    private final boolean outerHandler;
+
+    
+    private final AttachmentKey<Integer> CURRENT_POSITION = AttachmentKey.create(Integer.class);
+
+    public PredicatesHandler(HttpHandler next) {
+        this.next = next;
+        this.outerHandler = true;
+    }
+    public PredicatesHandler(HttpHandler next, boolean outerHandler) {
+        this.next = next;
+        this.outerHandler = outerHandler;
+    }
+
+    @Override
+    public void handleRequest(HttpServerExchange exchange) throws Exception {
+        final int length = handlers.length;
+        Integer current = exchange.getAttachment(CURRENT_POSITION);
+        do {
+            int pos;
+            if (current == null) {
+                if (outerHandler) {
+                    exchange.removeAttachment(RESTART);
+                    exchange.removeAttachment(DONE);
+                    if (exchange.getAttachment(Predicate.PREDICATE_CONTEXT) == null) {
+                        exchange.putAttachment(Predicate.PREDICATE_CONTEXT, new TreeMap<String, Object>());
+                    }
+                }
+                pos = 0;
+            } else {
+                
+                if (exchange.getAttachment(DONE) != null) {
+                    exchange.removeAttachment(CURRENT_POSITION);
+                    next.handleRequest(exchange);
+                    return;
+                }
+                pos = current;
+            }
+            for (; pos < length; ++pos) {
+                final Holder handler = handlers[pos];
+                if (handler.predicate.resolve(exchange)) {
+                    exchange.putAttachment(CURRENT_POSITION, pos + 1);
+                    handler.handler.handleRequest(exchange);
+                    if(shouldRestart(exchange, current)) {
+                        break;
+                    } else {
+                        return;
+                    }
+                } else if(handler.elseBranch != null) {
+                    exchange.putAttachment(CURRENT_POSITION, pos + 1);
+                    handler.elseBranch.handleRequest(exchange);
+                    if(shouldRestart(exchange, current)) {
+                        break;
+                    } else {
+                        return;
+                    }
+                }
+            }
+        } while (shouldRestart(exchange, current));
+        next.handleRequest(exchange);
+
+    }
+
+    private boolean shouldRestart(HttpServerExchange exchange, Integer current) {
+        return exchange.getAttachment(RESTART) != null && outerHandler && current == null;
+    }
+
+    
+    public PredicatesHandler addPredicatedHandler(final Predicate predicate, final HandlerWrapper handlerWrapper, final HandlerWrapper elseBranch) {
+        Holder[] old = handlers;
+        Holder[] handlers = new Holder[old.length + 1];
+        System.arraycopy(old, 0, handlers, 0, old.length);
+        HttpHandler elseHandler = elseBranch != null ? elseBranch.wrap(this) : null;
+        handlers[old.length] = new Holder(predicate, handlerWrapper.wrap(this), elseHandler);
+        this.handlers = handlers;
+        return this;
+    }
+
+    
+    public PredicatesHandler addPredicatedHandler(final Predicate predicate, final HandlerWrapper handlerWrapper) {
+        this.addPredicatedHandler(predicate, handlerWrapper, null);
+        return this;
+    }
+
+    public PredicatesHandler addPredicatedHandler(final PredicatedHandler handler) {
+        return addPredicatedHandler(handler.getPredicate(), handler.getHandler(), handler.getElseHandler());
+    }
+
+    public void setNext(HttpHandler next) {
+        this.next = next;
+    }
+
+    public HttpHandler getNext() {
+        return next;
+    }
+
+    private static final class Holder {
+        final Predicate predicate;
+        final HttpHandler handler;
+        final HttpHandler elseBranch;
+
+        private Holder(Predicate predicate, HttpHandler handler, HttpHandler elseBranch) {
+            this.predicate = predicate;
+            this.handler = handler;
+            this.elseBranch = elseBranch;
+        }
+    }
+
+    public static final class DoneHandlerBuilder implements HandlerBuilder {
+
+        @Override
+        public String name() {
+            return "done";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public HandlerWrapper build(Map<String, Object> config) {
+            return new HandlerWrapper() {
+                @Override
+                public HttpHandler wrap(final HttpHandler handler) {
+                    return new HttpHandler() {
+                        @Override
+                        public void handleRequest(HttpServerExchange exchange) throws Exception {
+                            exchange.putAttachment(DONE, true);
+                            handler.handleRequest(exchange);
+                        }
+                    };
+                }
+            };
+        }
+    }
+
+    public static final class RestartHandlerBuilder implements HandlerBuilder {
+
+        private static final AttachmentKey<Integer> RESTART_COUNT = AttachmentKey.create(Integer.class);
+
+        private static final int MAX_RESTARTS = Integer.getInteger("io.undertow.max_restarts", 1000);
+
+        @Override
+        public String name() {
+            return "restart";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public HandlerWrapper build(Map<String, Object> config) {
+            return new HandlerWrapper() {
+                @Override
+                public HttpHandler wrap(final HttpHandler handler) {
+                    return new HttpHandler() {
+                        @Override
+                        public void handleRequest(HttpServerExchange exchange) throws Exception {
+                            Integer restarts = exchange.getAttachment(RESTART_COUNT);
+                            if(restarts == null) {
+                                restarts = 1;
+                            } else {
+                                restarts++;
+                            }
+                            exchange.putAttachment(RESTART_COUNT, restarts);
+                            if(restarts > MAX_RESTARTS) {
+                                throw UndertowLogger.ROOT_LOGGER.maxRestartsExceeded(MAX_RESTARTS);
+                            }
+                            exchange.putAttachment(RESTART, true);
+                        }
+                    };
+                }
+            };
+        }
+    }
+
+
+    public static class Wrapper implements HandlerWrapper {
+
+        private final List<PredicatedHandler> handlers;
+        private final boolean outerHandler;
+
+        public Wrapper(List<PredicatedHandler> handlers, boolean outerHandler) {
+            this.handlers = handlers;
+            this.outerHandler = outerHandler;
+        }
+
+        @Override
+        public HttpHandler wrap(HttpHandler handler) {
+            PredicatesHandler h = new PredicatesHandler(handler, outerHandler);
+            for(PredicatedHandler pred : handlers) {
+                h.addPredicatedHandler(pred.getPredicate(), pred.getHandler());
+            }
+            return h;
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import io.undertow.server.handlers.builder.PredicatedHandlersParser;
+
+
+public class PredicateParser {
+
+    public static final Predicate parse(String string, final ClassLoader classLoader) {
+        return PredicatedHandlersParser.parsePredicate(string, classLoader);
+    }
+
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import io.undertow.Handlers;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.PredicatedHandlersParser;
+import io.undertow.testutils.DefaultServer;
+import io.undertow.testutils.HttpClientUtils;
+import io.undertow.testutils.TestHttpClient;
+import io.undertow.util.StatusCodes;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.junit.Assert;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import java.io.IOException;
+
+
+@RunWith(DefaultServer.class)
+public class PredicatedHandlersTestCase {
+
+    @Test
+    public void testRewrite() throws IOException {
+        DefaultServer.setRootHandler(
+                Handlers.predicates(
+
+                        PredicatedHandlersParser.parse(
+                                        "path(/skipallrules) and true -> done\n" +
+                                        "method(GET) -> set(attribute='%{o,type}', value=get) \n" +
+                                        "regex('(.*).css') -> {rewrite['${1}.xcss'];set(attribute='%{o,chained}', value=true)} \n" +
+                                        "regex('(.*).redirect$') -> redirect['${1}.redirected']\n" +
+                                        "set[attribute='%{o,someHeader}', value=always]\n" +
+                                        "path-template('/foo/{bar}/{f}') -> set[attribute='%{o,template}', value='${bar}']\n" +
+                                        "path-template('/bar->foo') -> redirect(/);" +
+                                        "regex('(.*).css') -> set[attribute='%{o,css}', value='true'] else set[attribute='%{o,css}', value='false']; " +
+                                        "path(/restart) -> {rewrite(/foo/a/b); restart; }", getClass().getClassLoader()), new HttpHandler() {
+                            @Override
+                            public void handleRequest(HttpServerExchange exchange) throws Exception {
+                                exchange.getResponseSender().send(exchange.getRelativePath());
+                            }
+                        }));
+
+        TestHttpClient client = new TestHttpClient();
+        try {
+            HttpGet get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b");
+            HttpResponse result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            String response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("false", result.getHeaders("css")[0].getValue());
+            Assert.assertEquals("/foo/a/b", response);
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b.css");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("true", result.getHeaders("chained")[0].getValue());
+            Assert.assertEquals("/foo/a/b.xcss", response);
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("true", result.getHeaders("css")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b.redirect");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("/foo/a/b.redirected", response);
+
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/skipallrules");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals(0, result.getHeaders("someHeader").length);
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/restart");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("/foo/a/b", response);
+        } finally {
+            client.getConnectionManager().shutdown();
+        }
+    }
+
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.predicate.ContainsPredicate;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.handlers.AllowedMethodsHandler;
+import io.undertow.server.handlers.RequestDumpingHandler;
+import io.undertow.server.handlers.ResponseCodeHandler;
+import io.undertow.server.handlers.SetHeaderHandler;
+import io.undertow.server.handlers.builder.PredicatedHandlersParser.BlockNode;
+import io.undertow.server.handlers.builder.PredicatedHandlersParser.Node;
+import io.undertow.server.handlers.builder.PredicatedHandlersParser.PredicateOperatorNode;
+import io.undertow.util.HttpString;
+import org.junit.Assert;
+import org.junit.Test;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+
+
+public class PredicatedHandlersParserTestCase {
+
+    @Test
+    public void testAstRepresentation1() {
+        String value = "path(/foo) -> rewrite(/bar)";
+        Node node = PredicatedHandlersParser.parse(value, PredicatedHandlersParser.tokenize(value));
+        Assert.assertTrue(node instanceof PredicateOperatorNode);
+        PredicateOperatorNode op = (PredicateOperatorNode) node;
+        Assert.assertEquals("->", op.getToken().getToken());
+        Assert.assertEquals("path", op.getLeft().getToken().getToken());
+        Assert.assertEquals("/foo", ((PredicatedHandlersParser.ExpressionNode) op.getLeft()).getValues().get(null).toString());
+    }
+
+    @Test
+    public void testAstRepresentation2() {
+        String value = "path(/foo) -> rewrite(/bar)\npath(/foo) -> rewrite(/bar)";
+        Node node = PredicatedHandlersParser.parse(value, PredicatedHandlersParser.tokenize(value));
+        Assert.assertTrue(node instanceof BlockNode);
+        BlockNode block = (BlockNode) node;
+        PredicateOperatorNode op = (PredicateOperatorNode) block.getBlock().get(1);
+        Assert.assertEquals("->", op.getToken().getToken());
+        Assert.assertEquals("path", op.getLeft().getToken().getToken());
+        Assert.assertEquals("/foo", ((PredicatedHandlersParser.ExpressionNode) op.getLeft()).getValues().get(null).toString());
+    }
+
+    @Test
+    public void testAstRepresentation3() {
+        String value = "path(/foo) -> { rewrite(/bar); path(/x) -> rewrite(/x)}";
+        Node node = PredicatedHandlersParser.parse(value, PredicatedHandlersParser.tokenize(value));
+        Assert.assertTrue(node instanceof PredicateOperatorNode);
+
+        PredicateOperatorNode op = (PredicateOperatorNode) node;
+        Assert.assertEquals("->", op.getToken().getToken());
+        Assert.assertEquals("path", op.getLeft().getToken().getToken());
+        Assert.assertEquals("/foo", ((PredicatedHandlersParser.ExpressionNode) op.getLeft()).getValues().get(null).toString());
+
+        BlockNode block = (BlockNode) op.getRight();
+        op = (PredicateOperatorNode) block.getBlock().get(1);
+        Assert.assertEquals("->", op.getToken().getToken());
+        Assert.assertEquals("path", op.getLeft().getToken().getToken());
+        Assert.assertEquals("/x", ((PredicatedHandlersParser.ExpressionNode) op.getLeft()).getValues().get(null).toString());
+    }
+
+
+    @Test
+    public void testParsedHandler1() {
+        String value = "dump-request";
+        List<PredicatedHandler> ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        HttpHandler handler = ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertTrue(handler instanceof RequestDumpingHandler);
+    }
+
+    @Test
+    public void testParsedHandler2() {
+        String value = "header(header=a, value='b')";
+        List<PredicatedHandler> ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        SetHeaderHandler handler = (SetHeaderHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals("a", handler.getHeader().toString());
+        Assert.assertEquals("b", handler.getValue().readAttribute(null));
+    }
+
+    @Test
+    public void testParsedHandler3() {
+        String value = "allowed-methods(GET)";
+        List<PredicatedHandler> ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        AllowedMethodsHandler handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"))), handler.getAllowedMethods());
+
+        value = "allowed-methods(methods=GET)";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"))), handler.getAllowedMethods());
+
+        value = "allowed-methods(methods={GET})";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"))), handler.getAllowedMethods());
+
+        value = "allowed-methods({GET})";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"))), handler.getAllowedMethods());
+
+
+        value = "allowed-methods({GET, POST})";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"), HttpString.tryFromString("POST"))), handler.getAllowedMethods());
+
+        value = "allowed-methods(methods={GET, POST})";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"), HttpString.tryFromString("POST"))), handler.getAllowedMethods());
+
+        value = "allowed-methods(GET, POST)";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = (AllowedMethodsHandler) ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertEquals(new HashSet<>(Arrays.asList(HttpString.tryFromString("GET"), HttpString.tryFromString("POST"))), handler.getAllowedMethods());
+    }
+
+
+    @Test
+    public void testParsedPredicatedHandler1() {
+        String value = "contains(value='a', search=b) -> dump-request";
+        List<PredicatedHandler> ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        HttpHandler handler = ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertTrue(handler instanceof RequestDumpingHandler);
+
+        ContainsPredicate predicate = (ContainsPredicate) ret.get(0).getPredicate();
+        Assert.assertEquals("a", predicate.getAttribute().readAttribute(null));
+        Assert.assertArrayEquals(new String[]{"b"}, predicate.getValues());
+
+        value = "contains(value='a', search={b}) -> dump-request";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertTrue(handler instanceof RequestDumpingHandler);
+
+        predicate = (ContainsPredicate) ret.get(0).getPredicate();
+        Assert.assertEquals("a", predicate.getAttribute().readAttribute(null));
+        Assert.assertArrayEquals(new String[]{"b"}, predicate.getValues());
+
+        value = "contains[value='a', search={b, c}] -> dump-request";
+        ret = PredicatedHandlersParser.parse(value, getClass().getClassLoader());
+        Assert.assertEquals(1, ret.size());
+        handler = ret.get(0).getHandler().wrap(ResponseCodeHandler.HANDLE_200);
+        Assert.assertTrue(handler instanceof RequestDumpingHandler);
+
+        predicate = (ContainsPredicate) ret.get(0).getPredicate();
+        Assert.assertEquals("a", predicate.getAttribute().readAttribute(null));
+        Assert.assertArrayEquals(new String[]{"b", "c"}, predicate.getValues());
+    }
+
+}
+
+<code block>
+
+
+package io.undertow;
+
+import io.undertow.client.ClientConnection;
+import io.undertow.server.ServerConnection;
+import io.undertow.util.HeaderMap;
+import io.undertow.util.HttpString;
+import org.jboss.logging.BasicLogger;
+import org.jboss.logging.Logger;
+import org.jboss.logging.annotations.Cause;
+import org.jboss.logging.annotations.LogMessage;
+import org.jboss.logging.annotations.Message;
+import org.jboss.logging.annotations.MessageLogger;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.net.URI;
+import java.nio.file.Path;
+import java.sql.SQLException;
+import java.util.List;
+
+import static org.jboss.logging.Logger.Level.DEBUG;
+import static org.jboss.logging.Logger.Level.INFO;
+import static org.jboss.logging.Logger.Level.WARN;
+
+
+@MessageLogger(projectCode = "UT")
+public interface UndertowLogger extends BasicLogger {
+
+    UndertowLogger ROOT_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName());
+    UndertowLogger CLIENT_LOGGER = Logger.getMessageLogger(UndertowLogger.class, ClientConnection.class.getPackage().getName());
+
+    UndertowLogger REQUEST_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request");
+    UndertowLogger PROXY_REQUEST_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".proxy");
+    UndertowLogger REQUEST_DUMPER_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request.dump");
+    
+    UndertowLogger REQUEST_IO_LOGGER = Logger.getMessageLogger(UndertowLogger.class, UndertowLogger.class.getPackage().getName() + ".request.io");
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5001, value = "An exception occurred processing the request")
+    void exceptionProcessingRequest(@Cause Throwable cause);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5002, value = "Exception reading file %s: %s")
+    void exceptionReadingFile(final Path file, final IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5003, value = "IOException reading from channel")
+    void ioExceptionReadingFromChannel(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5005, value = "Cannot remove uploaded file %s")
+    void cannotRemoveUploadedFile(Path file);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5006, value = "Connection from %s terminated as request header was larger than %s")
+    void requestHeaderWasTooLarge(SocketAddress address, int size);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5007, value = "Request was not fully consumed")
+    void requestWasNotFullyConsumed();
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5008, value = "An invalid token '%s' with value '%s' has been received.")
+    void invalidTokenReceived(final String tokenName, final String tokenValue);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5009, value = "A mandatory token %s is missing from the request.")
+    void missingAuthorizationToken(final String tokenName);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5010, value = "Verification of authentication tokens for user '%s' has failed using mechanism '%s'.")
+    void authenticationFailed(final String userName, final String mechanism);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5011, value = "Ignoring AJP request with prefix %s")
+    void ignoringAjpRequestWithPrefixCode(byte prefix);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5013, value = "An IOException occurred")
+    void ioException(@Cause IOException e);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5014, value = "Failed to parse HTTP request")
+    void failedToParseRequest(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5015, value = "Error rotating access log")
+    void errorRotatingAccessLog(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5016, value = "Error writing access log")
+    void errorWritingAccessLog(@Cause IOException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5017, value = "Unknown variable %s")
+    void unknownVariable(String token);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5018, value = "Exception invoking close listener %s")
+    void exceptionInvokingCloseListener(ServerConnection.CloseListener l, @Cause Throwable e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5019, value = "Cannot upgrade connection")
+    void cannotUpgradeConnection(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5020, value = "Error writing JDBC log")
+    void errorWritingJDBCLog(@Cause SQLException e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5021, value = "Proxy request to %s timed out")
+    void proxyRequestTimedOut(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5022, value = "Exception generating error page %s")
+    void exceptionGeneratingErrorPage(@Cause Exception e, String location);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5023, value = "Exception handling request to %s")
+    void exceptionHandlingRequest(@Cause Throwable t, String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5024, value = "Could not register resource change listener for caching resource manager, automatic invalidation of cached resource will not work")
+    void couldNotRegisterChangeListener(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5025, value = "Could not initiate SPDY connection and no HTTP fallback defined")
+    void couldNotInitiateSpdyConnection();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5026, value = "Jetty ALPN support not found on boot class path, %s client will not be available.")
+    void jettyALPNNotFound(String protocol);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5027, value = "Timing out request to %s")
+    void timingOutRequest(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5028, value = "Proxy request to %s failed")
+    void proxyRequestFailed(String requestURI, @Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5030, value = "Proxy request to %s could not resolve a backend server")
+    void proxyRequestFailedToResolveBackend(String requestURI);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5031, value = "Proxy request to %s could not connect to backend server %s")
+    void proxyFailedToConnectToBackend(String requestURI, URI uri);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5032, value = "Listener not making progress on framed channel, closing channel to prevent infinite loop")
+    void listenerNotProgressing();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5033, value = "Failed to initiate HTTP2 connection")
+    void couldNotInitiateHttp2Connection();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5034, value = "Remote endpoint failed to send initial settings frame in HTTP2 connection, frame type %s")
+    void remoteEndpointFailedToSendInitialSettings(int type);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5035, value = "Closing channel because of parse timeout for remote address %s")
+    void parseRequestTimedOut(java.net.SocketAddress remoteAddress);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5036, value = "ALPN negotiation failed for %s and no fallback defined, closing connection")
+    void noALPNFallback(SocketAddress address);
+
+    
+    @LogMessage(level = WARN)
+    @Message(id = 5037, value = "Name of the cookie containing the session id, %s, had been too long and was truncated to: %s")
+    void stickySessionCookieLengthTruncated(String original, String current);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5038, value = "Balancer created: id: %s, name: %s, stickySession: %s, stickySessionCookie: %s, stickySessionPath: %s, stickySessionRemove: %s, stickySessionForce: %s, waitWorker: %s, maxattempts: %s")
+    void balancerCreated(int id, String name, boolean stickySession, String stickySessionCookie, String stickySessionPath, boolean stickySessionRemove,
+                                            boolean stickySessionForce, int waitWorker, int maxattempts);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5039, value = "Undertow starts mod_cluster proxy advertisements on %s with frequency %s ms")
+    void proxyAdvertisementsStarted(String address, int frequency);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5040, value = "Gonna send payload:\n%s")
+    void proxyAdvertiseMessagePayload(String payload);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5041, value = "Cannot send advertise message. Address: %s")
+    void proxyAdvertiseCannotSendMessage(@Cause Exception e, InetSocketAddress address);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5042, value = "Undertow mod_cluster proxy MCMPHandler created")
+    void mcmpHandlerCreated();
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5043, value = "Error in processing MCMP commands: Type:%s, Mess: %s")
+    void mcmpProcessingError(String type, String errString);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5044, value = "Removing node %s")
+    void removingNode(String jvmRoute);
+
+    
+    @LogMessage(level = INFO)
+    @Message(id = 5045, value = "Registering context %s, for node %s")
+    void registeringContext(String contextPath, String jvmRoute);
+
+    
+    @LogMessage(level = DEBUG)
+    @Message(id = 5046, value = "Registering context %s, for node %s, with aliases %s")
+    void registeringContext(String contextPath, String jvmRoute, List<String> aliases);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5047, value = "Unregistering context %s, from node %s")
+    void unregisteringContext(String contextPath, String jvmRoute);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5048, value = "Node %s in error")
+    void nodeIsInError(String jvmRoute);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5049, value = "NodeConfig created: connectionURI: %s, balancer: %s, domain: %s, jvmRoute: %s, flushPackets: %s, flushwait: %s, ping: %s," +
+            "ttl: %s, timeout: %s, maxConnections: %s, cacheConnections: %s, requestQueueSize: %s, queueNewRequests: %s")
+    void nodeConfigCreated(URI connectionURI, String balancer, String domain, String jvmRoute, boolean flushPackets, int flushwait, int ping, long ttl,
+                           int timeout, int maxConnections, int cacheConnections, int requestQueueSize, boolean queueNewRequests);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5050, value = "Failed to process management request")
+    void failedToProcessManagementReq(@Cause Exception e);
+
+    @LogMessage(level = Logger.Level.ERROR)
+    @Message(id = 5051, value = "Failed to send ping response")
+    void failedToSendPingResponse(@Cause Exception e);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5052, value = "Failed to send ping response, node.getJvmRoute(): %s, jvmRoute: %s")
+    void failedToSendPingResponseDBG(@Cause Exception e, String node, String jvmRoute);
+
+    @LogMessage(level = INFO)
+    @Message(id = 5053, value = "Registering node %s, connection: %s")
+    void registeringNode(String jvmRoute, URI connectionURI);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5054, value = "MCMP processing, key: %s, value: %s")
+    void mcmpKeyValue(HttpString name, String value);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5055, value = "HttpClientPingTask run for connection: %s")
+    void httpClientPingTask(URI connection);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5056, value = "Received node load in STATUS message, node jvmRoute: %s, load: %s")
+    void receivedNodeLoad(String jvmRoute, String loadValue);
+
+    @LogMessage(level = DEBUG)
+    @Message(id = 5057, value = "Sending MCMP response to destination: %s, HTTP status: %s, Headers: %s, response: %s")
+    void mcmpSendingResponse(InetSocketAddress destination, int status, HeaderMap headers, String response);
+
+    @LogMessage(level = WARN)
+    @Message(id = 5058, value = "Could not bind multicast socket to %s (%s address): %s; make sure your multicast address is of the same type as the IP stack (IPv4 or IPv6). Multicast socket will not be bound to an address, but this may lead to cross talking (see http:
+    void potentialCrossTalking(InetAddress group, String s, String localizedMessage);
+
+    @LogMessage(level = WARN)
+    @Message(id = 5059, value = "Request dumping handler is in use. This handler is intended for debugging use only, and may dump sensitive data to the logs")
+    void warnRequestDumpingHandler();
+
+    @LogMessage(level = org.jboss.logging.Logger.Level.WARN)
+    @Message(id = 5060, value = "Predicate %s uses old style square braces to define predicates, which will be removed in a future release. predicate[value] should be changed to predicate(value)")
+    void oldStylePredicateSyntax(String string);
+
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import io.undertow.UndertowMessages;
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.attribute.ExchangeAttributes;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.util.HttpString;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+
+public class SetHeaderHandler implements HttpHandler {
+
+    private final HttpString header;
+    private final ExchangeAttribute value;
+    private final HttpHandler next;
+
+    public SetHeaderHandler(final String header, final String value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        this.next = ResponseCodeHandler.HANDLE_404;
+        this.value = ExchangeAttributes.constant(value);
+        this.header = new HttpString(header);
+    }
+
+    public SetHeaderHandler(final HttpHandler next, final String header, final ExchangeAttribute value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        if(next == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("next");
+        }
+        this.next = next;
+        this.value = value;
+        this.header = new HttpString(header);
+    }
+
+    public SetHeaderHandler(final HttpHandler next, final String header, final String value) {
+        if(value == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("value");
+        }
+        if(header == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("header");
+        }
+        if(next == null) {
+            throw UndertowMessages.MESSAGES.argumentCannotBeNull("next");
+        }
+        this.next = next;
+        this.value = ExchangeAttributes.constant(value);
+        this.header = new HttpString(header);
+    }
+    @Override
+    public void handleRequest(final HttpServerExchange exchange) throws Exception {
+        exchange.getResponseHeaders().put(header, value.readAttribute(exchange));
+        next.handleRequest(exchange);
+    }
+
+
+    public static class Builder implements HandlerBuilder {
+        @Override
+        public String name() {
+            return "header";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            Map<String, Class<?>> parameters = new HashMap<>();
+            parameters.put("header", String.class);
+            parameters.put("value", ExchangeAttribute.class);
+
+            return parameters;
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            final Set<String> req = new HashSet<>();
+            req.add("value");
+            req.add("header");
+            return req;
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public HandlerWrapper build(final Map<String, Object> config) {
+            final ExchangeAttribute value = (ExchangeAttribute) config.get("value");
+            final String header = (String) config.get("header");
+
+            return new HandlerWrapper() {
+                @Override
+                public HttpHandler wrap(HttpHandler handler) {
+                    return new SetHeaderHandler(handler, header, value);
+                }
+            };
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.util.HttpString;
+import io.undertow.util.StatusCodes;
+
+
+public class AllowedMethodsHandler implements HttpHandler {
+
+    private final Set<HttpString> allowedMethods;
+    private final HttpHandler next;
+
+    public AllowedMethodsHandler(final HttpHandler next, final Set<HttpString> allowedMethods) {
+        this.allowedMethods = new HashSet<>(allowedMethods);
+        this.next = next;
+    }
+
+    public AllowedMethodsHandler(final HttpHandler next, final HttpString... allowedMethods) {
+        this.allowedMethods = new HashSet<>(Arrays.asList(allowedMethods));
+        this.next = next;
+    }
+
+    @Override
+    public void handleRequest(final HttpServerExchange exchange) throws Exception {
+        if (allowedMethods.contains(exchange.getRequestMethod())) {
+            next.handleRequest(exchange);
+        } else {
+            exchange.setResponseCode(StatusCodes.METHOD_NOT_ALLOWED);
+            exchange.endExchange();
+        }
+    }
+
+    public static class Builder implements HandlerBuilder {
+
+        @Override
+        public String name() {
+            return "allowed-methods";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            return Collections.<String, Class<?>>singletonMap("methods", String[].class);
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            return Collections.singleton("methods");
+        }
+
+        @Override
+        public String defaultParameter() {
+            return "methods";
+        }
+
+        @Override
+        public HandlerWrapper build(Map<String, Object> config) {
+            return new Wrapper((String[]) config.get("methods"));
+        }
+
+    }
+
+    private static class Wrapper implements HandlerWrapper {
+
+        private final String[] methods;
+
+        private Wrapper(String[] methods) {
+            this.methods = methods;
+        }
+
+        @Override
+        public HttpHandler wrap(HttpHandler handler) {
+            HttpString[] strings = new HttpString[methods.length];
+                for(int i = 0; i < methods.length; ++i) {
+                    strings[i] = new HttpString(methods[i]);
+                }
+
+            return new AllowedMethodsHandler(handler, strings);
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.predicate.Predicate;
+import io.undertow.server.HandlerWrapper;
+
+
+public class PredicatedHandler {
+    private final Predicate predicate;
+    private final HandlerWrapper handler;
+
+    public PredicatedHandler(Predicate predicate, HandlerWrapper handler) {
+        this.predicate = predicate;
+        this.handler = handler;
+    }
+
+    public Predicate getPredicate() {
+        return predicate;
+    }
+
+    public HandlerWrapper getHandler() {
+        return handler;
+    }
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.predicate.Predicate;
+import io.undertow.predicate.PredicateParser;
+import io.undertow.predicate.Predicates;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.util.ChainedHandlerWrapper;
+import io.undertow.util.FileUtils;
+import io.undertow.util.PredicateTokeniser;
+import io.undertow.util.PredicateTokeniser.Token;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Deque;
+import java.util.List;
+
+
+public class PredicatedHandlersParser {
+
+    public static List<PredicatedHandler> parse(final File file, final ClassLoader classLoader) {
+        return parse(file.toPath(), classLoader);
+    }
+
+    public static List<PredicatedHandler> parse(final Path file, final ClassLoader classLoader) {
+        try {
+            return parse(new String(Files.readAllBytes(file)), classLoader);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static List<PredicatedHandler> parse(final InputStream inputStream, final ClassLoader classLoader) {
+        return parse(FileUtils.readFile(inputStream), classLoader);
+    }
+
+    public static List<PredicatedHandler> parse(final String contents, final ClassLoader classLoader) {
+        String[] lines = contents.split("\\n");
+        final List<PredicatedHandler> wrappers = new ArrayList<>();
+
+        Deque<Token> tokens = PredicateTokeniser.tokenize(contents);
+        while (!tokens.isEmpty()) {
+            List<Deque<Token>> others = new ArrayList<>();
+            Predicate predicate;
+            HandlerWrapper handler;
+            Deque<Token> predicatePart = new ArrayDeque<>();
+            Deque<Token> current = predicatePart;
+            boolean done = false;
+            while (!tokens.isEmpty() && !done) {
+                Token token = tokens.poll();
+                if (token.getToken().equals("->")) {
+                    current = new ArrayDeque<>();
+                    others.add(current);
+                } else if(token.getToken().equals("\n")) {
+                    done = true;
+                } else {
+                    current.add(token);
+                }
+            }
+            if (others.isEmpty()) {
+                predicate = Predicates.truePredicate();
+                handler = HandlerParser.parse(contents, predicatePart, classLoader);
+            } else if (others.size() == 1) {
+                predicate = PredicateParser.parse(contents, predicatePart, classLoader);
+                handler = HandlerParser.parse(contents, others.get(0), classLoader);
+            } else {
+                predicate = PredicateParser.parse(contents, predicatePart, classLoader);
+                HandlerWrapper[] handlers = new HandlerWrapper[others.size()];
+                for (int i = 0; i < handlers.length; ++i) {
+                    handlers[i] = HandlerParser.parse(contents, others.get(i), classLoader);
+                }
+                handler = new ChainedHandlerWrapper(Arrays.asList(handlers));
+            }
+            wrappers.add(new PredicatedHandler(predicate, handler));
+        }
+
+
+        return wrappers;
+    }
+
+}
+
+<code block>
+
+
+package io.undertow.server.handlers.builder;
+
+import io.undertow.UndertowLogger;
+import io.undertow.UndertowMessages;
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.attribute.ExchangeAttributeParser;
+import io.undertow.attribute.ExchangeAttributes;
+import io.undertow.server.HandlerWrapper;
+import io.undertow.util.PredicateTokeniser;
+import io.undertow.util.PredicateTokeniser.Token;
+
+import java.lang.reflect.Array;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+
+
+public class HandlerParser {
+
+
+    public static final HandlerWrapper parse(String string, final ClassLoader classLoader) {
+        final Map<String, HandlerBuilder> builders = loadBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        Deque<Token> tokens = tokenize(string);
+        return parse(string, tokens, builders, attributeParser);
+    }
+
+
+    public static final HandlerWrapper parse(String string, Deque<Token> tokens, final ClassLoader classLoader) {
+        final Map<String, HandlerBuilder> builders = loadBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        return parse(string, new ArrayDeque<Token>(tokens), builders, attributeParser);
+    }
+
+    private static Map<String, HandlerBuilder> loadBuilders(final ClassLoader classLoader) {
+        ServiceLoader<HandlerBuilder> loader = ServiceLoader.load(HandlerBuilder.class, classLoader);
+        final Map<String, HandlerBuilder> ret = new HashMap<>();
+        for (HandlerBuilder builder : loader) {
+            if (ret.containsKey(builder.name())) {
+                if (ret.get(builder.name()).getClass() != builder.getClass()) {
+                    throw UndertowMessages.MESSAGES.moreThanOneHandlerWithName(builder.name(), builder.getClass(), ret.get(builder.name()).getClass());
+                }
+            } else {
+                ret.put(builder.name(), builder);
+            }
+        }
+        return ret;
+    }
+
+    static HandlerWrapper parse(final String string, final Map<String, HandlerBuilder> builders, final ExchangeAttributeParser attributeParser) {
+
+        
+        
+        Deque<Token> tokens = tokenize(string);
+        return parseBuilder(string, tokens.pop(), tokens, builders, attributeParser);
+
+    }
+
+    static HandlerWrapper parse(final String string, Deque<Token> tokens, final Map<String, HandlerBuilder> builders, final ExchangeAttributeParser attributeParser) {
+        return parseBuilder(string, tokens.pop(), tokens, builders, attributeParser);
+    }
+
+    private static HandlerWrapper parseBuilder(final String string, final Token token, final Deque<Token> tokens, final Map<String, HandlerBuilder> builders, final ExchangeAttributeParser attributeParser) {
+        HandlerBuilder builder = builders.get(token.getToken());
+        if (builder == null) {
+            throw PredicateTokeniser.error(string, token.getPosition(), "no handler named " + token.getToken());
+        }
+        if(!tokens.isEmpty()) {
+            Token last = tokens.isEmpty() ? token : tokens.getLast();
+            Token next = tokens.peek();
+            String endChar = ")";
+            if (next.getToken().equals("(") || next.getToken().equals("[")) {
+                if (next.getToken().equals("[")) {
+                    UndertowLogger.ROOT_LOGGER.oldStylePredicateSyntax(string);
+                    endChar = "]";
+                }
+                final Map<String, Object> values = new HashMap<>();
+
+                tokens.poll();
+                next = tokens.poll();
+                if (next == null) {
+                    throw PredicateTokeniser.error(string, last.getPosition(), "Unexpected end of input");
+                }
+                if (next.getToken().equals("{")) {
+                    return handleSingleArrayValue(string, builder, tokens, next, attributeParser, endChar, last);
+                }
+                while (!next.getToken().equals(endChar)) {
+                    Token equals = tokens.poll();
+                    if (!equals.getToken().equals("=")) {
+                        if (equals.getToken().equals(endChar) && values.isEmpty()) {
+                            
+                            return handleSingleValue(string, builder, next, attributeParser);
+                        } else if (equals.getToken().equals(",")) {
+                            tokens.push(equals);
+                            tokens.push(next);
+                            return handleSingleVarArgsValue(string, builder, tokens, next, attributeParser, endChar, last);
+                        }
+                        throw PredicateTokeniser.error(string, equals.getPosition(), "Unexpected token");
+                    }
+                    Token value = tokens.poll();
+                    if (value == null) {
+                        throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (value.getToken().equals("{")) {
+                        values.put(next.getToken(), readArrayType(string, tokens, next, builder, attributeParser, "}", last));
+                    } else {
+                        if (isOperator(value.getToken()) || isSpecialChar(value.getToken())) {
+                            throw PredicateTokeniser.error(string, value.getPosition(), "Unexpected token");
+                        }
+
+                        Class<?> type = builder.parameters().get(next.getToken());
+                        if (type == null) {
+                            throw PredicateTokeniser.error(string, next.getPosition(), "Unexpected parameter " + next.getToken());
+                        }
+                        values.put(next.getToken(), coerceToType(string, value, type, attributeParser));
+                    }
+
+                    next = tokens.poll();
+                    if (next == null) {
+                        throw PredicateTokeniser.error(string, last.getPosition(), "Unexpected end of input");
+                    }
+                    if (!next.getToken().equals(endChar)) {
+                        if (!next.getToken().equals(",")) {
+                            throw PredicateTokeniser.error(string, next.getPosition(), "Expecting , or " + endChar);
+                        }
+                        next = tokens.poll();
+                        if (next == null) {
+                            throw PredicateTokeniser.error(string, last.getPosition(), "Unexpected end of input");
+                        }
+                    }
+                }
+                checkParameters(string, next.getPosition(), values, builder);
+                return builder.build(values);
+
+            } else {
+                throw PredicateTokeniser.error(string, next.getPosition(), "Unexpected character");
+            }
+        } else {
+            checkParameters(string, token.getPosition(), Collections.<String,Object>emptyMap(), builder);
+            return builder.build(Collections.<String,Object>emptyMap());
+        }
+    }
+
+    private static HandlerWrapper handleSingleArrayValue(final String string, final HandlerBuilder builder, final Deque<Token> tokens, final Token token, final ExchangeAttributeParser attributeParser, String endChar, Token last) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, token.getPosition(), "default parameter not supported");
+        }
+        Object array = readArrayType(string, tokens, new Token(sv, token.getPosition()), builder, attributeParser, "}", last);
+        Token close = tokens.poll();
+        if (!close.getToken().equals(endChar)) {
+            throw PredicateTokeniser.error(string, close.getPosition(), "expected " + endChar);
+        }
+        return builder.build(Collections.singletonMap(sv, array));
+    }
+
+    private static HandlerWrapper handleSingleVarArgsValue(final String string, final HandlerBuilder builder, final Deque<Token> tokens, final Token token, final ExchangeAttributeParser attributeParser, String endChar, Token last) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, token.getPosition(), "default parameter not supported");
+        }
+        Object array = readArrayType(string, tokens, new Token(sv, token.getPosition()), builder, attributeParser, endChar, last);
+        return builder.build(Collections.singletonMap(sv, array));
+    }
+
+    private static Object readArrayType(final String string, final Deque<Token> tokens, Token paramName, HandlerBuilder builder, final ExchangeAttributeParser attributeParser, String expectedEndToken, Token last) {
+        Class<?> type = builder.parameters().get(paramName.getToken());
+        if (type == null) {
+            throw PredicateTokeniser.error(string, paramName.getPosition(), "no parameter called " + paramName.getToken());
+        } else if (!type.isArray()) {
+            throw PredicateTokeniser.error(string, paramName.getPosition(), "parameter is not an array type " + paramName.getToken());
+        }
+
+        Class<?> componentType = type.getComponentType();
+        final List<Object> values = new ArrayList<>();
+        Token token = tokens.poll();
+        while (token != null) {
+            Token commaOrEnd = tokens.poll();
+            values.add(coerceToType(string, token, componentType, attributeParser));
+            if (commaOrEnd.getToken().equals(expectedEndToken)) {
+                Object array = Array.newInstance(componentType, values.size());
+                for (int i = 0; i < values.size(); ++i) {
+                    Array.set(array, i, values.get(i));
+                }
+                return array;
+            } else if (!commaOrEnd.getToken().equals(",")) {
+                throw PredicateTokeniser.error(string, commaOrEnd.getPosition(), "expected either , or }");
+            }
+            token = tokens.poll();
+        }
+        throw PredicateTokeniser.error(string, last.getPosition(), "unexpected end of input in array");
+    }
+
+
+    private static HandlerWrapper handleSingleValue(final String string, final HandlerBuilder builder, final Token next, final ExchangeAttributeParser attributeParser) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, next.getPosition(), "default parameter not supported");
+        }
+        Map<String, Object> values = Collections.singletonMap(sv, coerceToType(string, next, builder.parameters().get(sv), attributeParser));
+        checkParameters(string, next.getPosition(), values, builder);
+        return builder.build(values);
+    }
+
+    private static void checkParameters(final String string, int pos, final Map<String, Object> values, final HandlerBuilder builder) {
+        final Set<String> required = new HashSet<>(builder.requiredParameters());
+        for (String key : values.keySet()) {
+            required.remove(key);
+        }
+        if (!required.isEmpty()) {
+            throw PredicateTokeniser.error(string, pos, "Missing required parameters " + required);
+        }
+    }
+
+
+    private static Object coerceToType(final String string, final Token token, final Class<?> type, final ExchangeAttributeParser attributeParser) {
+        if (type.isArray()) {
+            Object array = Array.newInstance(type.getComponentType(), 1);
+            Array.set(array, 0, coerceToType(string, token, type.getComponentType(), attributeParser));
+            return array;
+        }
+
+        if (type == String.class) {
+            return token.getToken();
+        } else if (type.equals(Boolean.class) || type.equals(boolean.class)) {
+            return Boolean.valueOf(token.getToken());
+        } else if (type.equals(Byte.class) || type.equals(byte.class)) {
+            return Byte.valueOf(token.getToken());
+        } else if (type.equals(Character.class) || type.equals(char.class)) {
+            if (token.getToken().length() != 1) {
+                throw PredicateTokeniser.error(string, token.getPosition(), "Cannot coerce " + token.getToken() + " to a Character");
+            }
+            return Character.valueOf(token.getToken().charAt(0));
+        } else if (type.equals(Short.class) || type.equals(short.class)) {
+            return Short.valueOf(token.getToken());
+        } else if (type.equals(Integer.class) || type.equals(int.class)) {
+            return Integer.valueOf(token.getToken());
+        } else if (type.equals(Long.class) || type.equals(long.class)) {
+            return Long.valueOf(token.getToken());
+        } else if (type.equals(Float.class) || type.equals(float.class)) {
+            return Float.valueOf(token.getToken());
+        } else if (type.equals(Double.class) || type.equals(double.class)) {
+            return Double.valueOf(token.getToken());
+        } else if (type.equals(ExchangeAttribute.class)) {
+            return attributeParser.parse(token.getToken());
+        }
+
+        return token.getToken();
+    }
+
+    private static int precedence(String operator) {
+        if (operator.equals("not")) {
+            return 3;
+        } else if (operator.equals("and")) {
+            return 2;
+        } else if (operator.equals("or")) {
+            return 1;
+        }
+        throw new IllegalStateException();
+    }
+
+
+    private static boolean isOperator(final String op) {
+        return op.equals("and") || op.equals("or") || op.equals("not");
+    }
+
+    private static boolean isSpecialChar(String token) {
+        if (token.length() != 1) {
+            return false;
+        }
+        char c = token.charAt(0);
+        switch (c) {
+            case '(':
+            case ')':
+            case ',':
+            case '=':
+            case '{':
+            case '}':
+            case '[':
+            case ']':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static Deque<Token> tokenize(final String string) {
+        char currentStringDelim = 0;
+        boolean inVariable = false;
+
+        int pos = 0;
+        StringBuilder current = new StringBuilder();
+        Deque<Token> ret = new ArrayDeque<>();
+        while (pos < string.length()) {
+            char c = string.charAt(pos);
+            if (currentStringDelim != 0) {
+                if (c == currentStringDelim && current.charAt(current.length() - 1) != '\\') {
+                    ret.add(new Token(current.toString(), pos));
+                    current.setLength(0);
+                    currentStringDelim = 0;
+                } else {
+                    current.append(c);
+                }
+            } else {
+                switch (c) {
+                    case ' ':
+                    case '\t': {
+                        if (current.length() != 0) {
+                            ret.add(new Token(current.toString(), pos));
+                            current.setLength(0);
+                        }
+                        break;
+                    }
+                    case '(':
+                    case ')':
+                    case ',':
+                    case '=':
+                    case '[':
+                    case ']':
+                    case '{':
+                    case '}': {
+                        if (inVariable) {
+                            current.append(c);
+                            if (c == '}') {
+                                inVariable = false;
+                            }
+                        } else {
+                            if (current.length() != 0) {
+                                ret.add(new Token(current.toString(), pos));
+                                current.setLength(0);
+                            }
+                            ret.add(new Token("" + c, pos));
+                        }
+                        break;
+                    }
+                    case '"':
+                    case '\'': {
+                        if (current.length() != 0) {
+                            throw PredicateTokeniser.error(string, pos, "Unexpected token");
+                        }
+                        currentStringDelim = c;
+                        break;
+                    }
+                    case '%': {
+                        current.append(c);
+                        if (string.charAt(pos + 1) == '{') {
+                            inVariable = true;
+                        }
+                        break;
+                    }
+                    default:
+                        current.append(c);
+                }
+            }
+            ++pos;
+        }
+        if (current.length() > 0) {
+            ret.add(new Token(current.toString(), string.length()));
+        }
+        return ret;
+    }
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.server.HttpServerExchange;
+
+
+class ContainsPredicate implements Predicate {
+
+    private final ExchangeAttribute attribute;
+    private final String[] values;
+
+    ContainsPredicate(final ExchangeAttribute attribute, final String[] values) {
+        this.attribute = attribute;
+        this.values = new String[values.length];
+        System.arraycopy(values, 0, this.values, 0, values.length);
+    }
+
+    @Override
+    public boolean resolve(final HttpServerExchange value) {
+        String attr = attribute.readAttribute(value);
+        if (attr == null) {
+            return false;
+        }
+        for (int i = 0; i < values.length; ++i) {
+            if (attr.contains(values[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static class Builder implements PredicateBuilder {
+
+        @Override
+        public String name() {
+            return "contains";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            final Map<String, Class<?>> params = new HashMap<>();
+            params.put("value", ExchangeAttribute.class);
+            params.put("search", String[].class);
+            return params;
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            final Set<String> params = new HashSet<>();
+            params.add("value");
+            params.add("search");
+            return params;
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public Predicate build(final Map<String, Object> config) {
+            String[] search = (String[]) config.get("search");
+            ExchangeAttribute values = (ExchangeAttribute) config.get("value");
+            return new ContainsPredicate(values, search);
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import io.undertow.server.HandlerWrapper;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.HandlerBuilder;
+import io.undertow.server.handlers.builder.PredicatedHandler;
+import io.undertow.util.AttachmentKey;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+
+public class PredicatesHandler implements HttpHandler {
+
+    
+    public static final AttachmentKey<Boolean> DONE = AttachmentKey.create(Boolean.class);
+
+    private volatile Holder[] handlers = new Holder[0];
+    private volatile HttpHandler next;
+    private final boolean outerHandler;
+
+    
+    private final AttachmentKey<Integer> CURRENT_POSITION = AttachmentKey.create(Integer.class);
+
+    public PredicatesHandler(HttpHandler next) {
+        this.next = next;
+        this.outerHandler = true;
+    }
+    public PredicatesHandler(HttpHandler next, boolean outerHandler) {
+        this.next = next;
+        this.outerHandler = outerHandler;
+    }
+
+    @Override
+    public void handleRequest(HttpServerExchange exchange) throws Exception {
+        final int length = handlers.length;
+        Integer current = exchange.getAttachment(CURRENT_POSITION);
+        int pos;
+        if (current == null) {
+            if(outerHandler) {
+                exchange.removeAttachment(DONE);
+            }
+            pos = 0;
+            exchange.putAttachment(Predicate.PREDICATE_CONTEXT, new TreeMap<String, Object>());
+        } else {
+            
+            if(exchange.getAttachment(DONE) != null) {
+                exchange.removeAttachment(CURRENT_POSITION);
+                next.handleRequest(exchange);
+                return;
+            }
+            pos = current;
+        }
+        for (; pos < length; ++pos) {
+            final Holder handler = handlers[pos];
+            if (handler.predicate.resolve(exchange)) {
+                exchange.putAttachment(CURRENT_POSITION, pos + 1);
+                handler.handler.handleRequest(exchange);
+                return;
+            }
+        }
+        next.handleRequest(exchange);
+
+    }
+
+    
+    public PredicatesHandler addPredicatedHandler(final Predicate predicate, final HandlerWrapper handlerWrapper) {
+        Holder[] old = handlers;
+        Holder[] handlers = new Holder[old.length + 1];
+        System.arraycopy(old, 0, handlers, 0, old.length);
+        handlers[old.length] = new Holder(predicate, handlerWrapper.wrap(this));
+        this.handlers = handlers;
+        return this;
+    }
+
+    public PredicatesHandler addPredicatedHandler(final PredicatedHandler handler) {
+        return addPredicatedHandler(handler.getPredicate(), handler.getHandler());
+    }
+
+    public void setNext(HttpHandler next) {
+        this.next = next;
+    }
+
+    public HttpHandler getNext() {
+        return next;
+    }
+
+    private static final class Holder {
+        final Predicate predicate;
+        final HttpHandler handler;
+
+        private Holder(Predicate predicate, HttpHandler handler) {
+            this.predicate = predicate;
+            this.handler = handler;
+        }
+    }
+
+    public static final class DoneHandlerBuilder implements HandlerBuilder {
+
+        @Override
+        public String name() {
+            return "done";
+        }
+
+        @Override
+        public Map<String, Class<?>> parameters() {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public Set<String> requiredParameters() {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public String defaultParameter() {
+            return null;
+        }
+
+        @Override
+        public HandlerWrapper build(Map<String, Object> config) {
+            return new HandlerWrapper() {
+                @Override
+                public HttpHandler wrap(final HttpHandler handler) {
+                    return new HttpHandler() {
+                        @Override
+                        public void handleRequest(HttpServerExchange exchange) throws Exception {
+                            exchange.putAttachment(DONE, true);
+                            handler.handleRequest(exchange);
+                        }
+                    };
+                }
+            };
+        }
+    }
+}
+
+<code block>
+
+
+package io.undertow.predicate;
+
+import java.lang.reflect.Array;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+
+import io.undertow.UndertowLogger;
+import io.undertow.UndertowMessages;
+import io.undertow.attribute.ExchangeAttribute;
+import io.undertow.attribute.ExchangeAttributeParser;
+import io.undertow.attribute.ExchangeAttributes;
+import io.undertow.util.PredicateTokeniser;
+import io.undertow.util.PredicateTokeniser.Token;
+
+
+public class PredicateParser {
+
+    public static final Predicate parse(String string, final ClassLoader classLoader) {
+        final Map<String, PredicateBuilder> builders = loadBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        Deque<Token> tokens = PredicateTokeniser.tokenize(string);
+        return parse(string, tokens, builders, attributeParser);
+    }
+
+    public static final Predicate parse(String string, Deque<Token> tokens, final ClassLoader classLoader) {
+        final Map<String, PredicateBuilder> builders = loadBuilders(classLoader);
+        final ExchangeAttributeParser attributeParser = ExchangeAttributes.parser(classLoader);
+        return parse(string, new ArrayDeque<>(tokens), builders, attributeParser);
+    }
+
+    private static Map<String, PredicateBuilder> loadBuilders(final ClassLoader classLoader) {
+        ServiceLoader<PredicateBuilder> loader = ServiceLoader.load(PredicateBuilder.class, classLoader);
+        final Map<String, PredicateBuilder> ret = new HashMap<>();
+        for (PredicateBuilder builder : loader) {
+            if (ret.containsKey(builder.name())) {
+                if (ret.get(builder.name()).getClass() != builder.getClass()) {
+                    throw UndertowMessages.MESSAGES.moreThanOnePredicateWithName(builder.name(), builder.getClass(), ret.get(builder.name()).getClass());
+                }
+            } else {
+                ret.put(builder.name(), builder);
+            }
+        }
+        return ret;
+    }
+
+    static Predicate parse(final String string, Deque<Token> tokens, final Map<String, PredicateBuilder> builders, final ExchangeAttributeParser attributeParser) {
+
+        
+        
+        Deque<String> operatorStack = new ArrayDeque<>();
+
+        
+        
+        Deque<Object> output = new ArrayDeque<>();
+
+        while (!tokens.isEmpty()) {
+            Token token = tokens.poll();
+            if (isSpecialChar(token.getToken())) {
+                if (token.getToken().equals("(")) {
+                    operatorStack.push("(");
+                } else if (token.getToken().equals(")")) {
+                    for (; ; ) {
+                        String op = operatorStack.pop();
+                        if (op == null) {
+                            throw PredicateTokeniser.error(string, token.getPosition(), "Unexpected end of input");
+                        } else if (op.equals("(")) {
+                            break;
+                        } else {
+                            output.push(op);
+                        }
+                    }
+                } else {
+                    throw PredicateTokeniser.error(string, token.getPosition(), "Mismatched parenthesis");
+                }
+            } else {
+                if (isOperator(token.getToken())) {
+                    int prec = precedence(token.getToken());
+                    String top = operatorStack.peek();
+                    while (top != null) {
+                        if (top.equals("(")) {
+                            break;
+                        }
+                        int exitingPrec = precedence(top);
+                        if (prec <= exitingPrec) {
+                            output.push(operatorStack.pop());
+                        } else {
+                            break;
+                        }
+                        top = operatorStack.peek();
+                    }
+                    operatorStack.push(token.getToken());
+                } else {
+                    output.push(parsePredicate(string, token, tokens, builders, attributeParser));
+                }
+            }
+        }
+        while (!operatorStack.isEmpty()) {
+            String op = operatorStack.pop();
+            if (op.equals(")")) {
+                throw PredicateTokeniser.error(string, string.length(), "Mismatched parenthesis");
+            }
+            output.push(op);
+        }
+        
+        Predicate predicate = collapseOutput(output.pop(), output).resolve();
+        if (!output.isEmpty()) {
+            throw PredicateTokeniser.error(string, 0, "Invalid expression");
+        }
+        return predicate;
+
+    }
+
+    private static Node collapseOutput(final Object token, final Deque<Object> tokens) {
+        if (token instanceof Node) {
+            return (Node) token;
+        } else if (token.equals("and")) {
+            Node n1 = collapseOutput(tokens.pop(), tokens);
+            Node n2 = collapseOutput(tokens.pop(), tokens);
+            return new AndNode(n2, n1);
+        } else if (token.equals("or")) {
+            Node n1 = collapseOutput(tokens.pop(), tokens);
+            Node n2 = collapseOutput(tokens.pop(), tokens);
+            return new OrNode(n2, n1);
+        } else if (token.equals("not")) {
+            Node n1 = collapseOutput(tokens.pop(), tokens);
+            return new NotNode(n1);
+        } else {
+            throw new IllegalStateException("Invalid operator " + token);
+        }
+
+    }
+
+    private static Object parsePredicate(final String string, final Token token, final Deque<Token> tokens, final Map<String, PredicateBuilder> builders, final ExchangeAttributeParser attributeParser) {
+        if (token.getToken().equals("true")) {
+            return new PredicateNode(TruePredicate.instance());
+        } else if (token.getToken().equals("false")) {
+            return new PredicateNode(FalsePredicate.instance());
+        } else {
+            PredicateBuilder builder = builders.get(token.getToken());
+            if (builder == null) {
+
+                throw PredicateTokeniser.error(string, token.getPosition(), "no predicate named " + token.getToken() + " known predicates: " + builders.keySet());
+            }
+            Token next = tokens.peek();
+            String endChar = ")";
+            if (next.getToken().equals("[") || next.getToken().equals("(")) {
+                if(next.getToken().equals("[")) {
+                    endChar = "]";
+                    UndertowLogger.ROOT_LOGGER.oldStylePredicateSyntax(string);
+                }
+                final Map<String, Object> values = new HashMap<>();
+
+                tokens.poll();
+                next = tokens.poll();
+                if (next == null) {
+                    throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                }
+                if (next.getToken().equals("{")) {
+                    return handleSingleArrayValue(string, builder, tokens, next, attributeParser, endChar);
+                }
+                while (!next.getToken().equals(endChar)) {
+                    Token equals = tokens.poll();
+                    if(equals == null) {
+                        throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (!equals.getToken().equals("=")) {
+                        if (equals.getToken().equals(endChar) && values.isEmpty()) {
+                            
+                            return handleSingleValue(string, builder, next, attributeParser);
+                        } else if (equals.getToken().equals(",")) {
+                            tokens.push(equals);
+                            tokens.push(next);
+                            return handleSingleVarArgsValue(string, builder, tokens, next, attributeParser, endChar);
+                        }
+                        throw PredicateTokeniser.error(string, equals.getPosition(), "Unexpected token");
+                    }
+                    Token value = tokens.poll();
+                    if (value == null) {
+                        throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (value.getToken().equals("{")) {
+                        values.put(next.getToken(), readArrayType(string, tokens, next, builder, attributeParser, "}"));
+                    } else {
+                        if (isOperator(value.getToken()) || isSpecialChar(value.getToken())) {
+                            throw PredicateTokeniser.error(string, value.getPosition(), "Unexpected token");
+                        }
+
+                        Class<?> type = builder.parameters().get(next.getToken());
+                        if (type == null) {
+                            throw PredicateTokeniser.error(string, next.getPosition(), "Unexpected parameter " + next.getToken());
+                        }
+                        values.put(next.getToken(), coerceToType(string, value, type, attributeParser));
+                    }
+
+                    next = tokens.poll();
+                    if (next == null) {
+                        throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                    }
+                    if (!next.getToken().equals(endChar)) {
+                        if (!next.getToken().equals(",")) {
+                            throw PredicateTokeniser.error(string, string.length(), "Expecting , or " + endChar);
+                        }
+                        next = tokens.poll();
+                        if (next == null) {
+                            throw PredicateTokeniser.error(string, string.length(), "Unexpected end of input");
+                        }
+                    }
+                }
+                checkParameters(string, next.getPosition(), values, builder);
+                return new BuilderNode(builder, values);
+
+            } else {
+                if (isSpecialChar(next.getToken())) {
+                    throw PredicateTokeniser.error(string, next.getPosition(), "Unexpected character");
+                }
+                return new BuilderNode(builder);
+            }
+        }
+    }
+
+    private static Node handleSingleArrayValue(final String string, final PredicateBuilder builder, final Deque<Token> tokens, final Token token, final ExchangeAttributeParser attributeParser, String endChar) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, token.getPosition(), "default parameter not supported");
+        }
+        Object array = readArrayType(string, tokens, new Token(sv, token.getPosition()), builder, attributeParser, "}");
+        Token close = tokens.poll();
+        if (!close.getToken().equals(endChar)) {
+            throw PredicateTokeniser.error(string, close.getPosition(), "expected " + endChar);
+        }
+        return new BuilderNode(builder, Collections.singletonMap(sv, array));
+    }
+
+    private static Node handleSingleVarArgsValue(final String string, final PredicateBuilder builder, final Deque<Token> tokens, final Token token, final ExchangeAttributeParser attributeParser, String endChar) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, token.getPosition(), "default parameter not supported");
+        }
+        Object array = readArrayType(string, tokens, new Token(sv, token.getPosition()), builder, attributeParser, endChar);
+        return new BuilderNode(builder, Collections.singletonMap(sv, array));
+    }
+
+    private static Object readArrayType(final String string, final Deque<Token> tokens, Token paramName, PredicateBuilder builder, final ExchangeAttributeParser attributeParser, String expectedEndToken) {
+        Class<?> type = builder.parameters().get(paramName.getToken());
+        if (type == null) {
+            throw PredicateTokeniser.error(string, paramName.getPosition(), "no parameter called " + paramName.getToken());
+        } else if (!type.isArray()) {
+            throw PredicateTokeniser.error(string, paramName.getPosition(), "parameter is not an array type " + paramName.getToken());
+        }
+
+        Class<?> componentType = type.getComponentType();
+        final List<Object> values = new ArrayList<>();
+        Token token = tokens.poll();
+        while (token != null) {
+            Token commaOrEnd = tokens.poll();
+            values.add(coerceToType(string, token, componentType, attributeParser));
+            if (commaOrEnd.getToken().equals(expectedEndToken)) {
+                Object array = Array.newInstance(componentType, values.size());
+                for (int i = 0; i < values.size(); ++i) {
+                    Array.set(array, i, values.get(i));
+                }
+                return array;
+            } else if (!commaOrEnd.getToken().equals(",")) {
+                throw PredicateTokeniser.error(string, commaOrEnd.getPosition(), "expected either , or }");
+            }
+            token = tokens.poll();
+        }
+        throw PredicateTokeniser.error(string, string.length(), "unexpected end of input in array");
+    }
+
+
+    private static Object handleSingleValue(final String string, final PredicateBuilder builder, final Token next, final ExchangeAttributeParser attributeParser) {
+        String sv = builder.defaultParameter();
+        if (sv == null) {
+            throw PredicateTokeniser.error(string, next.getPosition(), "default parameter not supported");
+        }
+        Map<String, Object> values = Collections.singletonMap(sv, coerceToType(string, next, builder.parameters().get(sv), attributeParser));
+        checkParameters(string, next.getPosition(), values, builder);
+        return new BuilderNode(builder, values);
+    }
+
+    private static void checkParameters(final String string, int pos, final Map<String, Object> values, final PredicateBuilder builder) {
+        final Set<String> required = new HashSet<>(builder.requiredParameters());
+        for (String key : values.keySet()) {
+            required.remove(key);
+        }
+        if (!required.isEmpty()) {
+            throw PredicateTokeniser.error(string, pos, "Missing required parameters " + required);
+        }
+    }
+
+
+    private static Object coerceToType(final String string, final Token token, final Class<?> type, final ExchangeAttributeParser attributeParser) {
+        if (type.isArray()) {
+            Object array = Array.newInstance(type.getComponentType(), 1);
+            Array.set(array, 0, coerceToType(string, token, type.getComponentType(), attributeParser));
+            return array;
+        }
+
+        if (type == String.class) {
+            return token.getToken();
+        } else if (type.equals(Boolean.class) || type.equals(boolean.class)) {
+            return Boolean.valueOf(token.getToken());
+        } else if (type.equals(Byte.class) || type.equals(byte.class)) {
+            return Byte.valueOf(token.getToken());
+        } else if (type.equals(Character.class) || type.equals(char.class)) {
+            if (token.getToken().length() != 1) {
+                throw PredicateTokeniser.error(string, token.getPosition(), "Cannot coerce " + token.getToken() + " to a Character");
+            }
+            return Character.valueOf(token.getToken().charAt(0));
+        } else if (type.equals(Short.class) || type.equals(short.class)) {
+            return Short.valueOf(token.getToken());
+        } else if (type.equals(Integer.class) || type.equals(int.class)) {
+            return Integer.valueOf(token.getToken());
+        } else if (type.equals(Long.class) || type.equals(long.class)) {
+            return Long.valueOf(token.getToken());
+        } else if (type.equals(Float.class) || type.equals(float.class)) {
+            return Float.valueOf(token.getToken());
+        } else if (type.equals(Double.class) || type.equals(double.class)) {
+            return Double.valueOf(token.getToken());
+        } else if (type.equals(ExchangeAttribute.class)) {
+            return attributeParser.parse(token.getToken());
+        }
+
+        return token.getToken();
+    }
+
+    private static int precedence(String operator) {
+        if (operator.equals("not")) {
+            return 3;
+        } else if (operator.equals("and")) {
+            return 2;
+        } else if (operator.equals("or")) {
+            return 1;
+        }
+        throw new IllegalStateException();
+    }
+
+
+    private static boolean isOperator(final String op) {
+        return op.equals("and") || op.equals("or") || op.equals("not");
+    }
+
+    private static boolean isSpecialChar(String token) {
+        if (token.length() != 1) {
+            return false;
+        }
+        char c = token.charAt(0);
+        switch (c) {
+            case '(':
+            case ')':
+            case ',':
+            case '=':
+            case '{':
+            case '}':
+            case '[':
+            case ']':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private interface Node {
+
+        Predicate resolve();
+    }
+
+    private static class AndNode implements Node {
+
+        private final Node node1, node2;
+
+        private AndNode(final Node node1, final Node node2) {
+            this.node1 = node1;
+            this.node2 = node2;
+        }
+
+        @Override
+        public Predicate resolve() {
+            return new AndPredicate(node1.resolve(), node2.resolve());
+        }
+    }
+
+
+    private static class OrNode implements Node {
+
+        private final Node node1, node2;
+
+        private OrNode(final Node node1, final Node node2) {
+            this.node1 = node1;
+            this.node2 = node2;
+        }
+
+        @Override
+        public Predicate resolve() {
+            return new OrPredicate(node1.resolve(), node2.resolve());
+        }
+    }
+
+
+    private static class NotNode implements Node {
+
+        private final Node node;
+
+        private NotNode(final Node node) {
+            this.node = node;
+        }
+
+        @Override
+        public Predicate resolve() {
+            return new NotPredicate(node.resolve());
+        }
+    }
+
+    private static class BuilderNode implements Node {
+
+        private final PredicateBuilder builder;
+        private final Map<String, Object> parameters;
+
+        private BuilderNode(final PredicateBuilder builder) {
+            this.builder = builder;
+            this.parameters = Collections.emptyMap();
+        }
+
+        private BuilderNode(final PredicateBuilder builder, final Map<String, Object> parameters) {
+            this.builder = builder;
+            this.parameters = parameters;
+        }
+
+        @Override
+        public Predicate resolve() {
+            return builder.build(parameters);
+        }
+    }
+
+    private static class PredicateNode implements Node {
+
+        private final Predicate predicate;
+
+        private PredicateNode(final Predicate predicate) {
+            this.predicate = predicate;
+        }
+
+        @Override
+        public Predicate resolve() {
+            return predicate;
+        }
+    }
+
+}
+
+<code block>
+
+
+package io.undertow.util;
+
+import io.undertow.UndertowMessages;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+
+public class PredicateTokeniser {
+
+
+    public static Deque<Token> tokenize(final String string) {
+        char currentStringDelim = 0;
+        boolean inVariable = false;
+
+        int pos = 0;
+        StringBuilder current = new StringBuilder();
+        Deque<Token> ret = new ArrayDeque<>();
+        while (pos < string.length()) {
+            char c = string.charAt(pos);
+            if (currentStringDelim != 0) {
+                if (c == currentStringDelim && current.charAt(current.length() - 1) != '\\') {
+                    ret.add(new Token(current.toString(), pos));
+                    current.setLength(0);
+                    currentStringDelim = 0;
+                } else if(c == '\n') {
+                    ret.add(new Token(current.toString(), pos));
+                    current.setLength(0);
+                    currentStringDelim = 0;
+                    ret.add(new Token("\n", pos));
+                } else {
+                    current.append(c);
+                }
+            } else {
+                switch (c) {
+                    case ' ':
+                    case '\t': {
+                        if (current.length() != 0) {
+                            ret.add(new Token(current.toString(), pos));
+                            current.setLength(0);
+                        }
+                        break;
+                    }
+                    case '\n': {
+                        if (current.length() != 0) {
+                            ret.add(new Token(current.toString(), pos));
+                            current.setLength(0);
+                        }
+                        ret.add(new Token("\n", pos));
+                        break;
+                    }
+                    case '(':
+                    case ')':
+                    case ',':
+                    case '=':
+                    case '[':
+                    case ']':
+                    case '{':
+                    case '}': {
+                        if (inVariable) {
+                            current.append(c);
+                            if (c == '}') {
+                                inVariable = false;
+                            }
+                        } else {
+                            if (current.length() != 0) {
+                                ret.add(new Token(current.toString(), pos));
+                                current.setLength(0);
+                            }
+                            ret.add(new Token("" + c, pos));
+                        }
+                        break;
+                    }
+                    case '"':
+                    case '\'': {
+                        if (current.length() != 0) {
+                            throw error(string, pos, "Unexpected token");
+                        }
+                        currentStringDelim = c;
+                        break;
+                    }
+                    case '%':
+                    case '$': {
+                        current.append(c);
+                        if (string.charAt(pos + 1) == '{') {
+                            inVariable = true;
+                        }
+                        break;
+                    }
+                    case '-':
+                        if (inVariable) {
+                            current.append(c);
+                        } else {
+                            if (pos != string.length() && string.charAt(pos + 1) == '>') {
+                                pos++;
+                                if (current.length() != 0) {
+                                    ret.add(new Token(current.toString(), pos));
+                                    current.setLength(0);
+                                }
+                                ret.add(new Token("->", pos));
+                            } else {
+                                current.append(c);
+                            }
+                        }
+                        break;
+                    default:
+                        current.append(c);
+                }
+            }
+            ++pos;
+        }
+        if (current.length() > 0) {
+            ret.add(new Token(current.toString(), string.length()));
+        }
+        return ret;
+    }
+
+    public static final class Token {
+        private final String token;
+        private final int position;
+
+        public Token(final String token, final int position) {
+            this.token = token;
+            this.position = position;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public int getPosition() {
+            return position;
+        }
+
+        @Override
+        public String toString() {
+            return token + " <" + position + ">";
+        }
+    }
+
+
+    public static IllegalStateException error(final String string, int pos, String reason) {
+        StringBuilder b = new StringBuilder();
+        int linePos = 0;
+        for(int i = 0; i < string.length(); ++i) {
+            if(string.charAt(i) == '\n') {
+                if(i >= pos) {
+                    
+                    break;
+                } else {
+                    linePos = 0;
+                }
+            } else if(i < pos) {
+                linePos++;
+            }
+            b.append(string.charAt(i));
+        }
+        b.append('\n');
+        for (int i = 0; i < linePos; ++i) {
+            b.append(' ');
+        }
+        b.append('^');
+        throw UndertowMessages.MESSAGES.errorParsingPredicateString(reason, b.toString());
+    }
+
+}
+
+<code block>
+
+
+package io.undertow.server.handlers;
+
+import io.undertow.Handlers;
+import io.undertow.server.HttpHandler;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.server.handlers.builder.PredicatedHandlersParser;
+import io.undertow.testutils.DefaultServer;
+import io.undertow.testutils.HttpClientUtils;
+import io.undertow.testutils.TestHttpClient;
+import io.undertow.util.StatusCodes;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.junit.Assert;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import java.io.IOException;
+
+
+@RunWith(DefaultServer.class)
+public class PredicatedHandlersTestCase {
+
+    @Test
+    public void testRewrite() throws IOException {
+        DefaultServer.setRootHandler(
+                Handlers.predicates(
+
+                        PredicatedHandlersParser.parse(
+                                        "path(/skipallrules) -> done\n" +
+                                        "method(GET) -> set(attribute='%{o,type}', value=get)\n" +
+                                        "regex('(.*).css') -> rewrite['${1}.xcss'] -> set(attribute='%{o,chained}', value=true)\n" +
+                                        "regex('(.*).redirect$') -> redirect['${1}.redirected']\n" +
+                                        "set[attribute='%{o,someHeader}', value=always]\n" +
+                                        "path-template('/foo/{bar}/{f}') -> set[attribute='%{o,template}', value='${bar}']\n" +
+                                        "path-template('/bar->foo') -> redirect(/)", getClass().getClassLoader()), new HttpHandler() {
+                    @Override
+                    public void handleRequest(HttpServerExchange exchange) throws Exception {
+                        exchange.getResponseSender().send(exchange.getRelativePath());
+                    }
+                }));
+
+        TestHttpClient client = new TestHttpClient();
+        try {
+            HttpGet get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b");
+            HttpResponse result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            String response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("/foo/a/b", response);
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b.css");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("true", result.getHeaders("chained")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("/foo/a/b.xcss", response);
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/foo/a/b.redirect");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals("get", result.getHeaders("type")[0].getValue());
+            Assert.assertEquals("always", result.getHeaders("someHeader")[0].getValue());
+            Assert.assertEquals("a", result.getHeaders("template")[0].getValue());
+            Assert.assertEquals("/foo/a/b.redirected", response);
+
+
+            get = new HttpGet(DefaultServer.getDefaultServerURL() + "/skipallrules");
+            result = client.execute(get);
+            Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
+            response = HttpClientUtils.readResponse(result);
+            Assert.assertEquals(0, result.getHeaders("someHeader").length);
+        } finally {
+            client.getConnectionManager().shutdown();
+        }
+    }
+
+}

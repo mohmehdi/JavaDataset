@@ -1,0 +1,8 @@
+Java_Projects/auto/auto-8967e7c3/curr/value/src/main/java/com/google/auto/value/processor/AutoValueProcessor.java
+Java_Projects/auto/auto-8967e7c3/curr/value/src/main/java/com/google/auto/value/processor/AutoAnnotationProcessor.java
+Java_Projects/auto/auto-8967e7c3/curr/value/src/test/java/com/google/auto/value/processor/AutoAnnotationCompilationTest.java
+Java_Projects/auto/auto-8967e7c3/prev/value/src/main/java/com/google/auto/value/processor/AutoValueProcessor.java
+Java_Projects/auto/auto-8967e7c3/prev/value/src/main/java/com/google/auto/value/processor/AutoAnnotationProcessor.java
+Java_Projects/auto/auto-8967e7c3/prev/value/src/test/java/com/google/auto/value/processor/AutoAnnotationCompilationTest.java
+Java_Projects/auto/auto-8fc60d81/curr/common/src/main/java/com/google/auto/common/BasicAnnotationProcessor.java
+Java_Projects/auto/auto-8fc60d81/prev/common/src/main/java/com/google/auto/common/BasicAnnotationProcessor.java

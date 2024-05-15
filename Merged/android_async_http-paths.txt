@@ -1,0 +1,8 @@
+Java_Projects/android_async_http/android_async_http-af7e9e4b/curr/library/src/main/java/com/loopj/android/http/ResponseHandlerInterface.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/curr/library/src/main/java/com/loopj/android/http/AsyncHttpRequest.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/curr/library/src/main/java/com/loopj/android/http/RequestHandle.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/curr/library/src/main/java/com/loopj/android/http/AsyncHttpResponseHandler.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/prev/library/src/main/java/com/loopj/android/http/ResponseHandlerInterface.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/prev/library/src/main/java/com/loopj/android/http/AsyncHttpRequest.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/prev/library/src/main/java/com/loopj/android/http/RequestHandle.java
+Java_Projects/android_async_http/android_async_http-af7e9e4b/prev/library/src/main/java/com/loopj/android/http/AsyncHttpResponseHandler.java

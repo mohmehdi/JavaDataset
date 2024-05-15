@@ -1,0 +1,4 @@
+Java_Projects/libgdx/libgdx-2bd1557b/curr/tests/gdx-tests/src/com/badlogic/gdx/tests/Scene2dTest.java
+Java_Projects/libgdx/libgdx-2bd1557b/curr/gdx/src/com/badlogic/gdx/scenes/scene2d/ui/CheckBox.java
+Java_Projects/libgdx/libgdx-2bd1557b/prev/tests/gdx-tests/src/com/badlogic/gdx/tests/Scene2dTest.java
+Java_Projects/libgdx/libgdx-2bd1557b/prev/gdx/src/com/badlogic/gdx/scenes/scene2d/ui/CheckBox.java

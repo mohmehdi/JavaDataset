@@ -1,0 +1,10 @@
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/curr/Dart/src/com/jetbrains/lang/dart/resolve/DartResolver.java
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/curr/Dart/src/com/jetbrains/lang/dart/analyzer/DartAnalysisServerService.java
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/curr/Dart/src/com/jetbrains/lang/dart/ide/findUsages/DartServerFindUsagesHandler.java
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/curr/Dart/src/com/jetbrains/lang/dart/ide/findUsages/DartServerFindUsagesHandlerFactory.java
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/prev/Dart/src/com/jetbrains/lang/dart/resolve/DartResolver.java
+Java_Projects/intellij_plugins/intellij_plugins-0df7cb00/prev/Dart/src/com/jetbrains/lang/dart/analyzer/DartAnalysisServerService.java
+Java_Projects/intellij_plugins/intellij_plugins-83b3092c/curr/Dart/src/com/jetbrains/lang/dart/analyzer/DartAnalysisServerService.java
+Java_Projects/intellij_plugins/intellij_plugins-83b3092c/curr/Dart/src/com/jetbrains/lang/dart/ide/actions/AbstractDartFileProcessingAction.java
+Java_Projects/intellij_plugins/intellij_plugins-83b3092c/prev/Dart/src/com/jetbrains/lang/dart/analyzer/DartAnalysisServerService.java
+Java_Projects/intellij_plugins/intellij_plugins-83b3092c/prev/Dart/src/com/jetbrains/lang/dart/ide/actions/AbstractDartFileProcessingAction.java

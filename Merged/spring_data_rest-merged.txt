@@ -1,0 +1,4381 @@
+
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assume.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.List;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Test;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.MediaTypes;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import com.jayway.jsonpath.JsonPath;
+
+
+public abstract class CommonWebTests extends AbstractWebIntegrationTests {
+
+	protected abstract Iterable<String> expectedRootLinkRels();
+
+	
+
+	@Test
+	public void exposesRootResource() throws Exception {
+
+		ResultActions actions = mvc.perform(get("/").accept(TestMvcClient.DEFAULT_MEDIA_TYPE)).andExpect(status().isOk());
+
+		for (String rel : expectedRootLinkRels()) {
+			actions.andExpect(client.hasLinkWithRel(rel));
+		}
+	}
+
+	
+	@Test
+	public void exposesSchemasForResourcesExposed() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			Link link = client.assertHasLinkWithRel(rel, response);
+
+			
+			client.request(link);
+
+			
+			mvc.perform(get(link.expand().getHref() + "/schema").
+					accept(MediaType.parseMediaType("application/schema+json"))).
+					andExpect(status().isOk());
+		}
+	}
+
+	
+	@Test
+	public void servesHalWhenRequested() throws Exception {
+
+		mvc.perform(get("/")). 
+				andExpect(content().contentType(MediaTypes.HAL_JSON)). 
+				andExpect(jsonPath("$._links", notNullValue()));
+	}
+
+	
+	@Test
+	public void servesHalWhenJsonIsRequested() throws Exception {
+
+		mvc.perform(get("/").accept(MediaType.APPLICATION_JSON)). 
+				andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)). 
+				andExpect(jsonPath("$._links", notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesSearchesForRootResources() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			Link link = client.assertHasLinkWithRel(rel, response);
+			String rootResourceRepresentation = client.request(link).getContentAsString();
+			Link searchLink = client.getDiscoverer(response).findLinkWithRel("search", rootResourceRepresentation);
+
+			if (searchLink != null) {
+				client.follow(searchLink).
+						andExpect(client.hasLinkWithRel("self")).
+						andExpect(jsonPath("$.domainType", is(nullValue()))); 
+			}
+		}
+	}
+
+	@Test
+	public void nic() throws Exception {
+
+		Map<String, String> payloads = getPayloadToPost();
+		assumeFalse(payloads.isEmpty());
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			String payload = payloads.get(rel);
+
+			if (payload != null) {
+
+				Link link = client.assertHasLinkWithRel(rel, response);
+				String target = link.expand().getHref();
+
+				MockHttpServletRequestBuilder request = post(target).
+						content(payload).
+						contentType(MediaType.APPLICATION_JSON);
+
+				mvc.perform(request). 
+						andExpect(status().isCreated());
+			}
+		}
+	}
+
+	
+	@Test
+	public void accessLinkedResources() throws Exception {
+
+		MockHttpServletResponse rootResource = client.request("/");
+
+		for (Map.Entry<String, List<String>> linked : getRootAndLinkedResources().entrySet()) {
+
+			Link resourceLink = client.assertHasLinkWithRel(linked.getKey(), rootResource);
+			MockHttpServletResponse resource = client.request(resourceLink);
+
+			for (String linkedRel : linked.getValue()) {
+
+				
+				String jsonPath = String.format("$..%s._links.%s.href", linked.getKey(), linkedRel);
+				String representation = resource.getContentAsString();
+				JSONArray uris = JsonPath.read(representation, jsonPath);
+
+				for (Object href : uris) {
+
+					client.follow(href.toString()). 
+							andExpect(status().isOk());
+				}
+			}
+		}
+	}
+
+	
+	@Test
+	public void exposesDescriptionAsAlpsDocuments() throws Exception {
+
+		MediaType ALPS_MEDIA_TYPE = MediaType.valueOf("application/alps+json");
+
+		MockHttpServletResponse response = client.request("/");
+		Link profileLink = client.assertHasLinkWithRel("profile", response);
+
+		mvc.perform(
+				get(profileLink.expand().getHref()).
+						accept(ALPS_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(content().contentType(ALPS_MEDIA_TYPE));
+	}
+
+	
+	@Test
+	public void returnsNotFoundForUriNotBackedByARepository() throws Exception {
+
+		mvc.perform(get("/index.html")).
+				andExpect(status().isNotFound());
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverer;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.util.Assert;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+
+public class TestMvcClient {
+
+	public static MediaType DEFAULT_MEDIA_TYPE = org.springframework.hateoas.MediaTypes.HAL_JSON;
+
+	private final MockMvc mvc;
+	private final LinkDiscoverers discoverers;
+
+	
+	public TestMvcClient(MockMvc mvc, LinkDiscoverers discoverers) {
+
+		Assert.notNull(mvc, "MockMvc must not be null!");
+		Assert.notNull(discoverers, "LinkDiscoverers must not be null!");
+
+		this.mvc = mvc;
+		this.discoverers = discoverers;
+	}
+
+	
+	public static void initWebTest() {
+
+		MockHttpServletRequest request = new MockHttpServletRequest();
+		ServletRequestAttributes requestAttributes = new ServletRequestAttributes(request);
+		RequestContextHolder.setRequestAttributes(requestAttributes);
+	}
+
+	public static void assertAllowHeaders(HttpEntity<?> response, HttpMethod... methods) {
+
+		HttpHeaders headers = response.getHeaders();
+
+		assertThat(headers.getAllow(), hasSize(methods.length));
+		assertThat(headers.getAllow(), hasItems(methods));
+	}
+
+	
+	public MockHttpServletResponse request(String href, MediaType contentType) throws Exception {
+		return mvc.perform(get(href).accept(contentType)). 
+				andExpect(status().isOk()). 
+				andExpect(content().contentType(contentType)). 
+				andReturn().getResponse();
+	}
+
+	
+	public MockHttpServletResponse request(String href, MediaType contentType, HttpHeaders httpHeaders) throws Exception {
+		return mvc.perform(get(href).accept(contentType).headers(httpHeaders)). 
+				andExpect(status().isOk()). 
+				andExpect(content().contentType(contentType)). 
+				andReturn().getResponse();
+	}
+
+	
+	public MockHttpServletResponse request(Link link) throws Exception {
+		return request(link.expand().getHref());
+	}
+
+	
+	public MockHttpServletResponse request(Link link, MediaType mediaType) throws Exception {
+		return request(link.expand().getHref(), mediaType);
+	}
+
+	
+	public MockHttpServletResponse request(String href) throws Exception {
+		return request(href, DEFAULT_MEDIA_TYPE);
+	}
+
+	
+	public ResultActions follow(Link link) throws Exception {
+		return follow(link.expand().getHref());
+	}
+
+	
+	public ResultActions follow(String href) throws Exception {
+		return mvc.perform(get(href));
+	}
+
+	
+	public List<Link> discover(String rel) throws Exception {
+		return discover(new Link("/"), rel);
+	}
+
+	
+	public Link discoverUnique(String rel) throws Exception {
+
+		List<Link> discover = discover(rel);
+		assertThat(discover, hasSize(1));
+		return discover.get(0);
+	}
+
+	
+	public Link discoverUnique(String... rels) throws Exception {
+
+		Iterator<String> toTraverse = Arrays.asList(rels).iterator();
+		Link lastLink = null;
+
+		while (toTraverse.hasNext()) {
+
+			String rel = toTraverse.next();
+			lastLink = lastLink == null ? discoverUnique(rel) : discoverUnique(lastLink, rel);
+		}
+
+		return lastLink;
+	}
+
+	
+	public List<Link> discover(Link root, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(root.expand().getHref()).accept(DEFAULT_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(hasLinkWithRel(rel)).
+				andReturn().getResponse();
+
+		String s = response.getContentAsString();
+		return getDiscoverer(response).findLinksWithRel(rel, s);
+	}
+
+	
+	public Link discoverUnique(Link root, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(root.expand().getHref()).accept(DEFAULT_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(hasLinkWithRel(rel)).
+				andReturn().getResponse();
+
+		return assertHasLinkWithRel(rel, response);
+	}
+
+	
+	public Link assertHasLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Link link = getDiscoverer(response).findLinkWithRel(rel, content);
+
+		assertThat("Expected to find link with rel " + rel + " but found none in " + content + "!", link,
+				is(notNullValue()));
+
+		return link;
+	}
+
+	
+	public ResultMatcher hasLinkWithRel(final String rel) {
+
+		return new ResultMatcher() {
+
+			@Override
+			public void match(MvcResult result) throws Exception {
+
+				MockHttpServletResponse response = result.getResponse();
+				String s = response.getContentAsString();
+
+				assertThat("Expected to find link with rel " + rel + " but found none in " + s, 
+						getDiscoverer(response).findLinkWithRel(rel, s), notNullValue());
+			}
+		};
+	}
+
+	
+	public LinkDiscoverer getDiscoverer(MockHttpServletResponse response) {
+
+		String contentType = response.getContentType();
+		LinkDiscoverer linkDiscovererFor = discoverers.getLinkDiscovererFor(contentType);
+
+		assertThat("Did not find a LinkDiscoverer for returned media type " + contentType + "!", linkDiscovererFor,
+				is(notNullValue()));
+
+		return linkDiscovererFor;
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Collections;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Before;
+import org.junit.runner.RunWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.webmvc.config.RepositoryRestMvcConfiguration;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
+import org.springframework.web.context.WebApplicationContext;
+
+import com.jayway.jsonpath.InvalidPathException;
+import com.jayway.jsonpath.JsonPath;
+
+
+@RunWith(SpringJUnit4ClassRunner.class)
+@WebAppConfiguration
+@ContextConfiguration(classes = RepositoryRestMvcConfiguration.class)
+public abstract class AbstractWebIntegrationTests {
+
+	private static final String CONTENT_LINK_JSONPATH = "$._embedded.._links.%s.href[0]";
+
+	@Autowired WebApplicationContext context;
+	@Autowired LinkDiscoverers discoverers;
+
+	protected TestMvcClient client;
+	protected MockMvc mvc;
+
+	@Before
+	public void setUp() {
+		setupMockMvc();
+		this.client = new TestMvcClient(mvc, discoverers);
+	}
+
+	protected void setupMockMvc() {
+		this.mvc = MockMvcBuilders.webAppContextSetup(context).
+				defaultRequest(get("/").accept(TestMvcClient.DEFAULT_MEDIA_TYPE)).build();
+	}
+
+	protected MockHttpServletResponse postAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(post(href).content(payload.toString()).contentType(mediaType)).
+				andExpect(status().isCreated()).
+				andExpect(header().string("Location", is(notNullValue()))).
+				andReturn().getResponse();
+
+		String content = response.getContentAsString();
+
+		if (StringUtils.hasText(content)) {
+			return response;
+		}
+
+		return client.request(response.getHeader("Location"));
+	}
+
+	protected MockHttpServletResponse putAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(put(href).content(payload.toString()).contentType(mediaType)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		return StringUtils.hasText(response.getContentAsString()) ? response : client.request(link);
+	}
+
+	protected MockHttpServletResponse patchAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(MockMvcRequestBuilders.request(HttpMethod.PATCH, href).
+				content(payload.toString()).contentType(mediaType)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		return StringUtils.hasText(response.getContentAsString()) ? response : client.request(href);
+	}
+
+	protected void deleteAndVerify(Link link) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		mvc.perform(delete(href)).
+				andExpect(status().isNoContent()).
+				andReturn().getResponse();
+
+		
+		mvc.perform(get(href)).
+				andExpect(status().isNotFound());
+	}
+
+	protected Link assertHasContentLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+		return assertContentLinkWithRel(rel, response, true);
+	}
+
+	protected void assertDoesNotHaveContentLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+		assertContentLinkWithRel(rel, response, false);
+	}
+
+	protected Link assertContentLinkWithRel(String rel, MockHttpServletResponse response, boolean expected)
+			throws Exception {
+
+		String content = response.getContentAsString();
+
+		try {
+
+			String href = JsonPath.read(content, String.format(CONTENT_LINK_JSONPATH, rel)).toString();
+			assertThat("Expected to find a link with rel" + rel + " in the content section of the response!", href,
+					is(expected ? notNullValue() : nullValue()));
+
+			return new Link(href, rel);
+
+		} catch (InvalidPathException o_O) {
+
+			if (expected) {
+				fail("Didn't find any content in the given response!");
+			}
+
+			return null;
+		}
+	}
+
+	protected void assertDoesNotHaveLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Link link = client.getDiscoverer(response).findLinkWithRel(rel, content);
+
+		assertThat("Expected not to find link with rel " + rel + " but found " + link + "!", link, is(nullValue()));
+	}
+
+	@SuppressWarnings("unchecked")
+	protected <T> T assertHasJsonPathValue(String path, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Object jsonPathResult = JsonPath.read(content, path);
+
+		assertThat(String.format("JSONPath lookup for %s did return null in %s.", path, content), jsonPathResult,
+				is(notNullValue()));
+
+		if (jsonPathResult instanceof JSONArray) {
+			JSONArray array = (JSONArray) jsonPathResult;
+			assertThat(array, hasSize(greaterThan(0)));
+		}
+
+		return (T) jsonPathResult;
+	}
+
+	protected void assertJsonPathDoesntExist(String path, MockHttpServletResponse response) throws Exception {
+
+		try {
+
+			Object result = JsonPath.read(response.getContentAsString(), path);
+
+			if (result != null) {
+				fail("Was expecting to find no value for path " + path + " but got " + result.toString());
+			}
+
+		} catch (InvalidPathException e) {}
+	}
+
+	protected String assertJsonPathEquals(String path, String expected, MockHttpServletResponse response)
+			throws Exception {
+
+		Object jsonQueryResults = assertHasJsonPathValue(path, response);
+
+		String jsonString = "";
+
+		if (jsonQueryResults instanceof JSONArray) {
+			jsonString = ((JSONArray) jsonQueryResults).toJSONString();
+		} else {
+			jsonString = jsonQueryResults != null ? jsonQueryResults.toString() : null;
+		}
+
+		assertThat(jsonString, is(expected));
+		return jsonString;
+	}
+
+	protected ResultMatcher doesNotHaveLinkWithRel(final String rel) {
+
+		return new ResultMatcher() {
+
+			@Override
+			public void match(MvcResult result) throws Exception {
+
+				MockHttpServletResponse response = result.getResponse();
+				String s = response.getContentAsString();
+
+				assertThat("Expected not to find link with rel " + rel + " but found one in " + s, 
+						client.getDiscoverer(response).findLinkWithRel(rel, s), nullValue());
+			}
+		};
+	}
+
+	protected Map<String, String> getPayloadToPost() throws Exception {
+		return Collections.emptyMap();
+	}
+
+	protected MultiValueMap<String, String> getRootAndLinkedResources() {
+		return new LinkedMultiValueMap<String, String>(0);
+	}
+}
+<code block>
+
+package org.springframework.data.rest.webmvc.security;
+
+import org.springframework.data.repository.CrudRepository;
+import org.springframework.security.access.prepost.PreAuthorize;
+
+
+
+@PreAuthorize("hasRole('ROLE_USER')") 
+public interface PreAuthorizedOrderRepository extends CrudRepository<Order, Long> {
+
+	@PreAuthorize("hasRole('ROLE_ADMIN')") 
+	@Override
+	void delete(Long aLong);
+
+	@PreAuthorize("hasRole('ROLE_ADMIN')")
+	@Override
+	void delete(Order order);
+
+	@PreAuthorize("hasRole('ROLE_ADMIN')")
+	@Override
+	void delete(Iterable<? extends Order> orders);
+
+	@PreAuthorize("hasRole('ROLE_ADMIN')")
+	@Override
+	void deleteAll();
+}
+
+<code block>
+package org.springframework.data.rest.webmvc.security;
+
+import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.rest.core.annotation.RepositoryRestResource;
+import org.springframework.security.access.annotation.Secured;
+
+
+@Secured("ROLE_USER") 
+@RepositoryRestResource(collectionResourceRel = "people", path = "people")
+public interface SecuredPersonRepository extends CrudRepository<Person, Long> {
+
+	@Secured("ROLE_ADMIN") 
+	@Override
+	void delete(Long aLong);
+
+	@Secured("ROLE_ADMIN")
+	@Override
+	void delete(Person person);
+
+	@Secured("ROLE_ADMIN")
+	@Override
+	void delete(Iterable<? extends Person> persons);
+
+	@Secured("ROLE_ADMIN")
+	@Override
+	void deleteAll();
+}
+
+
+<code block>
+package org.springframework.data.rest.webmvc.security;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+
+
+@Configuration 
+@EnableWebSecurity
+@EnableGlobalMethodSecurity(securedEnabled = true, prePostEnabled = true) 
+public class SecurityConfiguration extends WebSecurityConfigurerAdapter { 
+
+	@Autowired
+	public void configureAuth(AuthenticationManagerBuilder auth) throws Exception {
+
+		auth.inMemoryAuthentication()
+			.withUser("user").password("user").roles("USER").and()
+			.withUser("admin").password("admin").roles("USER", "ADMIN");
+	}
+
+	@Override
+	protected void configure(HttpSecurity http) throws Exception {
+
+		http.
+			authorizeRequests()
+				.antMatchers(HttpMethod.GET, "/").permitAll() 
+				.anyRequest().authenticated()
+				.and()
+			.httpBasic()
+				.and()
+			.csrf().disable(); 
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.security;
+
+import javax.persistence.Entity;
+import javax.persistence.GeneratedValue;
+import javax.persistence.Id;
+import javax.persistence.ManyToMany;
+import javax.persistence.ManyToOne;
+import javax.persistence.PrePersist;
+import javax.validation.constraints.NotNull;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import org.springframework.data.rest.core.annotation.Description;
+
+
+@Entity
+@JsonIgnoreProperties({ "height", "weight" })
+public class Person {
+
+	private Long id;
+	@Description("A person's first name") private String firstName;
+	@Description("A person's last name") private String lastName;
+	@Description("A person's siblings") private List<Person> siblings = Collections.emptyList();
+	private Person father;
+	@Description("Timestamp this person object was created") private Date created;
+	private int age, height, weight;
+
+	public Person() {}
+
+	public Person(String firstName, String lastName) {
+		this.firstName = firstName;
+		this.lastName = lastName;
+	}
+
+	@Id
+	@GeneratedValue
+	public Long getId() {
+		return id;
+	}
+
+	public void setId(Long id) {
+		this.id = id;
+	}
+
+	public String getFirstName() {
+		return firstName;
+	}
+
+	public void setFirstName(String firstName) {
+		this.firstName = firstName;
+	}
+
+	public String getLastName() {
+		return lastName;
+	}
+
+	@NotNull
+	public void setLastName(String lastName) {
+		this.lastName = lastName;
+	}
+
+	public Person addSibling(Person p) {
+		if (siblings == Collections.EMPTY_LIST) {
+			siblings = new ArrayList<Person>();
+		}
+		siblings.add(p);
+		return this;
+	}
+
+	@ManyToMany
+	public List<Person> getSiblings() {
+		return siblings;
+	}
+
+	public void setSiblings(List<Person> siblings) {
+		this.siblings = siblings;
+	}
+
+	@ManyToOne
+	public Person getFather() {
+		return father;
+	}
+
+	public void setFather(Person father) {
+		this.father = father;
+	}
+
+	public Date getCreated() {
+		return created;
+	}
+
+	public void setCreated(Date created) {}
+
+	@PrePersist
+	private void prePersist() {
+		this.created = Calendar.getInstance().getTime();
+	}
+
+	@JsonIgnore
+	public int getAge() {
+		return age;
+	}
+
+	public void setAge(int age) {
+		this.age = age;
+	}
+
+	public int getHeight() {
+		return height;
+	}
+
+	public void setHeight(int height) {
+		this.height = height;
+	}
+
+	public int getWeight() {
+		return weight;
+	}
+
+	public void setWeight(int weight) {
+		this.weight = weight;
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.security;
+
+import javax.sql.DataSource;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
+import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.orm.jpa.vendor.Database;
+import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+
+@Configuration
+@EnableJpaRepositories
+@EnableTransactionManagement
+public class SecureJpaConfiguration {
+
+	@Bean
+	public DataSource dataSource() {
+		EmbeddedDatabaseBuilder builder = new EmbeddedDatabaseBuilder();
+		return builder.setType(EmbeddedDatabaseType.HSQL).build();
+	}
+
+	@Bean
+	public LocalContainerEntityManagerFactoryBean entityManagerFactory() {
+
+		HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();
+		vendorAdapter.setDatabase(Database.HSQL);
+		vendorAdapter.setGenerateDdl(true);
+
+		LocalContainerEntityManagerFactoryBean factory = new LocalContainerEntityManagerFactoryBean();
+		factory.setJpaVendorAdapter(vendorAdapter);
+		factory.setPackagesToScan(getClass().getPackage().getName());
+		factory.setPersistenceUnitName("spring-data-rest-webmvc");
+		factory.setDataSource(dataSource());
+		factory.afterPropertiesSet();
+
+		return factory;
+	}
+
+	@Bean
+	public PlatformTransactionManager transactionManager() {
+		return new JpaTransactionManager();
+	}
+
+}
+
+
+<code block>
+
+package org.springframework.data.rest.webmvc.security;
+
+import javax.persistence.Entity;
+import javax.persistence.FetchType;
+import javax.persistence.GeneratedValue;
+import javax.persistence.Id;
+import javax.persistence.ManyToOne;
+import javax.persistence.Table;
+
+
+@Entity
+@Table(name = "ORDERS")
+public class Order {
+
+	@Id @GeneratedValue
+	private Long id;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	Person creator;
+
+	public Order(Person creator) {
+		this.creator = creator;
+	}
+
+	protected Order() {
+
+	}
+
+	public Long getId() {
+		return id;
+	}
+
+	public Person getCreator() {
+		return creator;
+	}
+
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.security;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Arrays;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.webmvc.AbstractWebIntegrationTests;
+import org.springframework.data.rest.webmvc.TestMvcClient;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.config.EnableHypermediaSupport;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.access.intercept.aopalliance.MethodSecurityInterceptor;
+import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.util.NestedServletException;
+
+
+@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(classes = {SecureJpaConfiguration.class, SecurityConfiguration.class})
+@Transactional
+@EnableHypermediaSupport(type = EnableHypermediaSupport.HypermediaType.HAL)
+public class SecurityIntegrationTests extends AbstractWebIntegrationTests {
+
+	@Autowired WebApplicationContext context;
+	@Autowired MethodSecurityInterceptor methodSecurityInterceptor;
+
+	@Autowired SecuredPersonRepository personRepository;
+	@Autowired PreAuthorizedOrderRepository orderRepository;
+
+	@Before
+	@Override
+	public void setUp() {
+
+		super.setUp();
+
+		SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("user", "user",
+				AuthorityUtils.createAuthorityList("ROLE_USER", "ROLE_ADMIN")));
+
+		personRepository.deleteAll();
+		orderRepository.deleteAll();
+
+		Person frodo = personRepository.save(new Person("Frodo", "Baggins"));
+		orderRepository.save(new Order(frodo));
+
+		SecurityContextHolder.clearContext();
+	}
+
+	
+	@Override
+	protected void setupMockMvc() {
+		this.mvc = MockMvcBuilders.webAppContextSetup(context).
+				defaultRequest(get("/").
+				accept(TestMvcClient.DEFAULT_MEDIA_TYPE)).
+				apply(springSecurity()).
+				build();
+	}
+
+	
+
+	@Test
+	public void deletePersonAccessDeniedForNoCredentials() throws Exception {
+
+		
+		final String people = client.discoverUnique("people").expand().getHref();
+
+		MockHttpServletResponse response = mvc.perform(get(people).
+				with(user("user").roles("USER"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.people[0]._links.self.href", response);
+
+		
+		SecurityContextHolder.clearContext();
+
+		MockHttpServletResponse deleteResponse = mvc.perform(delete(href)).
+				andExpect(status().isUnauthorized()).
+				andReturn().getResponse();
+		assertThat(deleteResponse.getErrorMessage(), is("Full authentication is required to access this resource"));
+	}
+
+	@Test
+	public void deletePersonAccessDeniedForUsers() throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("people").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.people[0]._links.self.href", response);
+
+		
+		SecurityContextHolder.clearContext();
+
+		MockHttpServletResponse deleteResponse = mvc.perform(delete(href).
+				with(user("user").roles("USER"))).
+				andExpect(status().isForbidden()).
+				andReturn().getResponse();
+		assertThat(deleteResponse.getErrorMessage(), is("Access is denied"));
+	}
+
+	@Test
+	public void deletePersonAccessGrantedForAdmins() throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("people").expand().getHref()).
+				with(user("user").roles("USER", "ADMIN"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.people[0]._links.self.href", response);
+
+		
+		SecurityContextHolder.clearContext();
+
+		mvc.perform(delete(href).with(user("user").roles("USER", "ADMIN")))
+			.andExpect(status().is(HttpStatus.NO_CONTENT.value()));
+	}
+
+	
+
+	@Test
+	public void findAllPeopleAccessDeniedForNoCredentials() throws Throwable {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("people").expand().getHref())).
+				andExpect(status().isUnauthorized()).
+				andReturn().getResponse();
+		assertThat(response.getErrorMessage(), is("Full authentication is required to access this resource"));
+	}
+
+	@Test
+	public void findAllPeopleAccessGrantedForUsers() throws Throwable {
+
+		mvc.perform(get(client.discoverUnique("people").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andExpect(status().isOk());
+	}
+
+	@Test
+	public void findAllPeopleAccessGrantedForAdmins() throws Throwable {
+
+		mvc.perform(get(client.discoverUnique("people").expand().getHref()).
+				with(user("user").roles("USER", "ADMIN"))).
+				andExpect(status().isOk());
+	}
+
+	
+
+
+	@Test
+	public void deleteOrderAccessDeniedForNoCredentials() throws Exception {
+
+		
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("orders").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.orders[0]._links.self.href", response);
+
+		
+		SecurityContextHolder.clearContext();
+
+		MockHttpServletResponse deleteResponse = mvc.perform(delete(href)).
+				andExpect(status().isUnauthorized()).
+				andReturn().getResponse();
+		assertThat(deleteResponse.getErrorMessage(), is("Full authentication is required to access this resource"));
+	}
+
+	@Test
+	public void deleteOrderAccessDeniedForUsers() throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("orders").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.orders[0]._links.self.href", response);
+
+		MockHttpServletResponse deleteResponse = mvc.perform(delete(href).with(user("user").roles("USER"))).
+				andExpect(status().isForbidden()).
+				andReturn().getResponse();
+		assertThat(deleteResponse.getErrorMessage(), is("Access is denied"));
+	}
+
+	@Test
+	public void deleteOrderAccessGrantedForAdmins() throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("orders").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andReturn().getResponse();
+		String href = assertHasJsonPathValue("$._embedded.orders[0]._links.self.href", response);
+
+		
+		SecurityContextHolder.clearContext();
+
+		mvc.perform(delete(href).with(user("user").roles("USER", "ADMIN")))
+				.andExpect(status().is(HttpStatus.NO_CONTENT.value()));
+	}
+
+	
+
+	@Test
+	public void findAllOrdersAccessDeniedForNoCredentials() throws Throwable {
+
+		MockHttpServletResponse response = mvc.perform(get(client.discoverUnique("orders").expand().getHref())).
+			andExpect(status().isUnauthorized()).
+			andReturn().getResponse();
+		assertThat(response.getErrorMessage(), is("Full authentication is required to access this resource"));
+	}
+
+	@Test
+	public void findAllOrdersAccessGrantedForUsers() throws Throwable {
+
+		mvc.perform(get(client.discoverUnique("orders").expand().getHref()).
+				with(user("user").roles("USER"))).
+				andExpect(status().isOk());
+	}
+
+	@Test
+	public void findAllOrdersAccessGrantedForAdmins() throws Throwable {
+
+		mvc.perform(get(client.discoverUnique("orders").expand().getHref()).
+				with(user("user").roles("USER", "ADMIN"))).
+				andExpect(status().isOk());
+	}
+
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.neo4j;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+
+import java.util.Arrays;
+
+import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Test;
+import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.factory.GraphDatabaseFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.neo4j.config.EnableNeo4jRepositories;
+import org.springframework.data.neo4j.config.Neo4jConfiguration;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.hateoas.Link;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+
+@ContextConfiguration
+@Ignore
+public class Neo4jWebTests extends CommonWebTests {
+
+	@Configuration
+	@ComponentScan
+	@EnableNeo4jRepositories
+	@EnableTransactionManagement
+	static class TestConfig extends Neo4jConfiguration {
+
+		public TestConfig() {
+			setBasePackage(Neo4jWebTests.class.getPackage().getName());
+		}
+
+		@Bean(destroyMethod = "shutdown")
+		public GraphDatabaseService graphDatabaseService() {
+			return new GraphDatabaseFactory().newEmbeddedDatabase("target/graphdb");
+		}
+
+	}
+
+	@Autowired TestDataPopulator populator;
+
+	@Before
+	@Override
+	public void setUp() {
+		this.populator.populate();
+		super.setUp();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("customers");
+	}
+
+	
+	@Test
+	public void deletesCustomer() throws Exception {
+
+		
+		Link customers = client.discoverUnique("customers");
+		Link customerLink = assertHasContentLinkWithRel("self", client.request(customers));
+
+		
+		mvc.perform(delete(customerLink.getHref()));
+
+		
+		assertDoesNotHaveContentLinkWithRel("self", client.request(customers));
+	}
+}
+<code block>
+
+package org.springframework.data.rest.webmvc.alps;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.rest.webmvc.AbstractControllerIntegrationTests;
+import org.springframework.data.rest.webmvc.jpa.JpaRepositoryConfig;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverer;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.hateoas.core.JsonPathLinkDiscoverer;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+
+
+@WebAppConfiguration
+@ContextConfiguration(classes = { JpaRepositoryConfig.class, AlpsControllerIntegrationTests.Config.class })
+public class AlpsControllerIntegrationTests extends AbstractControllerIntegrationTests {
+
+	@Autowired WebApplicationContext context;
+	@Autowired LinkDiscoverers discoverers;
+
+	@Configuration
+	static class Config {
+
+		@Bean
+		public LinkDiscoverer alpsLinkDiscoverer() {
+			return new JsonPathLinkDiscoverer("$.descriptors[?(@.name == '%s')].href",
+					MediaType.valueOf("application/alps+json"));
+		}
+	}
+
+	protected MockMvc mvc;
+
+	@Before
+	public void setUp() {
+		mvc = MockMvcBuilders.webAppContextSetup(context).build();
+	}
+
+	
+	@Test
+	public void exposesProfileLink() throws Exception {
+
+		mvc.perform(get("/")).
+				andExpect(status().is2xxSuccessful()).
+				andExpect(jsonPath("$._links.profile.href", endsWith(AlpsController.ALPS_ROOT_MAPPING)));
+	}
+
+	
+	@Test
+	public void alpsResourceExposesResourcePerCollectionResource() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+
+		assertThat(discoverUnique(profileLink.getHref(), "orders"), is(notNullValue()));
+		assertThat(discoverUnique(profileLink.getHref(), "people"), is(notNullValue()));
+		assertThat(discoverUnique(profileLink.getHref(), "items"), is(notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesAlpsCollectionResources() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link peopleLink = discoverUnique(profileLink.getHref(), "people");
+
+		mvc.perform(get(peopleLink.getHref())).
+				andExpect(jsonPath("$.version").value("1.0")).
+				andExpect(jsonPath("$.descriptors[*].name", hasItems("people", "person")));
+	}
+
+	
+	@Test
+	public void verifyThatAttributesIgnoredDontAppearInAlps() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "users");
+		Link itemsLink = discoverUnique(profileLink.getHref(), "items");
+
+		assertThat(usersLink, is(nullValue()));
+
+		mvc.perform(get(itemsLink.getHref()))
+				.andExpect(jsonPath("$.descriptors[*].descriptors[*].name", hasItems("id", "name")))
+				.andExpect(
+						jsonPath("$.descriptors[*].descriptors[*].name", everyItem(not(isIn(new String[] { "owner", "manager",
+								"curator" })))));
+	}
+
+	
+	@Test
+	public void linksToJsonSchemaFromRepresentationDescriptor() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "items");
+
+		assertThat(usersLink, is(notNullValue()));
+
+		mvc.perform(get(usersLink.getHref())).
+				andExpect(jsonPath("$.descriptors[?(@.id == 'item-representation')].href", is(notNullValue())));
+	}
+
+	
+	@Test
+	public void referenceToAssociatedEntityDesciptorPointsToRepresentationDescriptor() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "people");
+
+		String jsonPath = "$."; 
+		jsonPath += "descriptors[?(@.id == 'person-representation')]."; 
+		jsonPath += "descriptors[?(@.name == 'father')][0]."; 
+		jsonPath += "rt"; 
+
+		mvc.perform(get(usersLink.getHref())).andExpect(
+				jsonPath(jsonPath, allOf(containsString("alps"), endsWith("-representation"))));
+	}
+
+	private Link discoverUnique(String href, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(href)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		LinkDiscoverer discoverer = discoverers.getLinkDiscovererFor(MediaType.valueOf(response.getContentType()));
+		return discoverer.findLinkWithRel(rel, response.getContentAsString());
+	}
+}
+<code block>
+
+package org.springframework.data.rest.webmvc.support;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import org.junit.Test;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.data.rest.webmvc.AbstractWebIntegrationTests;
+import org.springframework.data.rest.webmvc.jpa.JpaRepositoryConfig;
+import org.springframework.hateoas.Link;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+
+
+@ContextConfiguration
+public class ExceptionHandlingCustomizationIntegrationTests extends AbstractWebIntegrationTests {
+
+	@Configuration
+	@Import(JpaRepositoryConfig.class)
+	static class ControllerAdviceConfig {
+
+		@ControllerAdvice
+		@Order(Ordered.HIGHEST_PRECEDENCE)
+		static class CustomGlobalConfiguration {
+
+			@ExceptionHandler
+			ResponseEntity<Void> handle(HttpRequestMethodNotSupportedException o_O) {
+
+				HttpHeaders headers = new HttpHeaders();
+				headers.setAllow(o_O.getSupportedHttpMethods());
+
+				return new ResponseEntity<Void>(headers, HttpStatus.INTERNAL_SERVER_ERROR);
+			}
+		}
+	}
+
+	@Test
+	public void httpRequestMethodNotSupportedExceptionShouldNowReturnHttpStatus500Over405() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(get(link.getHref())).
+				andExpect(status().isInternalServerError());
+	}
+
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.mongodb;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.http.HttpHeaders.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.Collections;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.data.rest.webmvc.RestMediaTypes;
+import org.springframework.hateoas.Link;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+
+
+@ContextConfiguration(classes = MongoDbRepositoryConfig.class)
+public class MongoWebTests extends CommonWebTests {
+
+	@Autowired ProfileRepository repository;
+	@Autowired UserRepository userRepository;
+
+	ObjectMapper mapper = new ObjectMapper();
+
+	@Before
+	public void populateProfiles() {
+
+		mapper.setSerializationInclusion(Include.NON_NULL);
+
+		Profile twitter = new Profile();
+		twitter.setPerson(1L);
+		twitter.setType("Twitter");
+
+		Profile linkedIn = new Profile();
+		linkedIn.setPerson(1L);
+		linkedIn.setType("LinkedIn");
+
+		repository.save(Arrays.asList(twitter, linkedIn));
+
+		Address address = new Address();
+		address.street = "ETagDoesntMatchExceptionUnitTests";
+		address.zipCode = "Bar";
+
+		User thomas = new User();
+		thomas.firstname = "Thomas";
+		thomas.lastname = "Darimont";
+		thomas.address = address;
+
+		userRepository.save(thomas);
+
+		User oliver = new User();
+		oliver.firstname = "Oliver";
+		oliver.lastname = "Gierke";
+		oliver.address = address;
+		oliver.colleagues = Arrays.asList(thomas);
+		userRepository.save(oliver);
+
+		thomas.colleagues = Arrays.asList(oliver);
+		userRepository.save(thomas);
+	}
+
+	@After
+	public void cleanUp() {
+		repository.deleteAll();
+		userRepository.deleteAll();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("profiles", "users");
+	}
+
+	@Test
+	public void foo() throws Exception {
+
+		Link profileLink = client.discoverUnique("profiles");
+		client.follow(profileLink).
+				andExpect(jsonPath("$._embedded.profiles").value(hasSize(2)));
+	}
+
+	@Test
+	public void rendersEmbeddedDocuments() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		client.follow(userLink).
+				andExpect(jsonPath("$.address.zipCode").value(is(notNullValue())));
+	}
+
+	
+	@Test
+	public void executeQueryMethodWithPrimitiveReturnType() throws Exception {
+
+		Link profiles = client.discoverUnique("profiles");
+		Link profileSearches = client.discoverUnique(profiles, "search");
+		Link countByTypeLink = client.discoverUnique(profileSearches, "countByType");
+
+		assertThat(countByTypeLink.isTemplated(), is(true));
+		assertThat(countByTypeLink.getVariableNames(), hasItem("type"));
+
+		MockHttpServletResponse response = client.request(countByTypeLink.expand("Twitter"));
+		assertThat(response.getContentAsString(), is("1"));
+	}
+
+	@Test
+	public void testname() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+
+		MockHttpServletResponse response = patchAndGet(userLink,
+				"{\"lastname\" : null, \"address\" : { \"zipCode\" : \"ZIP\"}}", MediaType.APPLICATION_JSON);
+
+		assertThat(JsonPath.read(response.getContentAsString(), "$.lastname"), is(nullValue()));
+		assertThat(JsonPath.read(response.getContentAsString(), "$.address.zipCode"), is((Object) "ZIP"));
+	}
+
+	@Test
+	public void testname2() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+
+		MockHttpServletResponse response = patchAndGet(userLink,
+				"[{ \"op\": \"replace\", \"path\": \"/address/zipCode\", \"value\": \"ZIP\" },"
+						
+						+ "{ \"op\": \"remove\", \"path\": \"/lastname\" }]", 
+				RestMediaTypes.JSON_PATCH_JSON);
+
+		assertThat(JsonPath.read(response.getContentAsString(), "$.lastname"), is(nullValue()));
+		assertThat(JsonPath.read(response.getContentAsString(), "$.address.zipCode"), is((Object) "ZIP"));
+	}
+
+	
+	@Test
+	public void returnConflictWhenConcurrentlyEditingVersionedEntity() throws Exception {
+
+		Link receiptLink = client.discoverUnique("receipts");
+
+		Receipt receipt = new Receipt();
+		receipt.amount = new BigDecimal(50);
+		receipt.saleItem = "Springy Tacos";
+
+		String stringReceipt = mapper.writeValueAsString(receipt);
+
+		MockHttpServletResponse createdReceipt = postAndGet(receiptLink, stringReceipt, MediaType.APPLICATION_JSON);
+		Link tacosLink = client.assertHasLinkWithRel("self", createdReceipt);
+		assertJsonPathEquals("$.saleItem", "Springy Tacos", createdReceipt);
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(tacosLink.getHref());
+		String concurrencyTag = createdReceipt.getHeader("ETag");
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyBurritos\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().is2xxSuccessful());
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyTequila\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().isPreconditionFailed());
+	}
+
+	
+	@Test
+	public void auditableResourceHasLastModifiedHeaderSet() throws Exception {
+
+		Profile profile = repository.findAll().iterator().next();
+
+		String header = mvc.perform(get("/profiles/{id}", profile.getId())).
+				andReturn().getResponse().getHeader("Last-Modified");
+
+		assertThat(header, not(isEmptyOrNullString()));
+	}
+
+	
+	@Test
+	public void putDoesNotRemoveAssociations() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		Link colleaguesLink = client.assertHasLinkWithRel("colleagues", client.request(userLink));
+
+		
+		client.follow(colleaguesLink).
+				andExpect(jsonPath("$._embedded.users").exists());
+
+		User oliver = new User();
+		oliver.firstname = "Oliver";
+		oliver.lastname = "Gierke";
+
+		putAndGet(userLink, mapper.writeValueAsString(oliver), MediaType.APPLICATION_JSON);
+
+		
+		client.follow(colleaguesLink).
+				andExpect(jsonPath("$._embedded.users").exists()).
+				andExpect(jsonPath("$.embedded.users[0].address").doesNotExist());
+	}
+
+	
+	@Test
+	public void emptiesAssociationForEmptyUriList() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		Link colleaguesLink = client.assertHasLinkWithRel("colleagues", client.request(userLink));
+
+		putAndGet(colleaguesLink, "", MediaType.parseMediaType("text/uri-list"));
+
+		client.follow(colleaguesLink).
+				andExpect(status().isOk()).
+				andExpect(jsonPath("$").exists());
+	}
+
+	
+	@Test
+	public void updatesMapPropertyCorrectly() throws Exception {
+
+		Link profilesLink = client.discoverUnique("profiles");
+		Link profileLink = assertHasContentLinkWithRel("self", client.request(profilesLink));
+
+		Profile profile = new Profile();
+		profile.setMetadata(Collections.singletonMap("Key", "Value"));
+
+		putAndGet(profileLink, mapper.writeValueAsString(profile), MediaType.APPLICATION_JSON);
+
+		client.follow(profileLink).andExpect(jsonPath("$.metadata.Key").value("Value"));
+	}
+
+	
+	@Test
+	public void supportsConditionalGetsOnItemResource() throws Exception {
+
+		Receipt receipt = new Receipt();
+		receipt.amount = new BigDecimal(50);
+		receipt.saleItem = "Springy Tacos";
+
+		Link receiptsLink = client.discoverUnique("receipts");
+
+		MockHttpServletResponse response = postAndGet(receiptsLink, mapper.writeValueAsString(receipt),
+				MediaType.APPLICATION_JSON);
+
+		Link receiptLink = client.getDiscoverer(response).findLinkWithRel("self", response.getContentAsString());
+
+		mvc.perform(get(receiptLink.getHref()).header(IF_MODIFIED_SINCE, response.getHeader(LAST_MODIFIED))).
+				andExpect(status().isNotModified()).
+				andExpect(header().string(ETAG, is(notNullValue())));
+
+		mvc.perform(get(receiptLink.getHref()).header(IF_NONE_MATCH, response.getHeader(ETAG))).
+				andExpect(status().isNotModified()).
+				andExpect(header().string(ETAG, is(notNullValue())));
+	}
+
+	
+	@Test
+	public void invokesQueryResourceReturningAnOptional() throws Exception {
+
+		Profile profile = repository.findAll().iterator().next();
+
+		Link link = client.discoverUnique("profiles", "search", "findById");
+
+		mvc.perform(get(link.expand(profile.getId()).getHref())).
+				andExpect(status().isOk());
+	}
+
+	
+	@Test
+	public void returnsNotFoundIfQueryExecutionDoesNotReturnResult() throws Exception {
+
+		Link link = client.discoverUnique("profiles", "search", "findById");
+
+		mvc.perform(get(link.expand("").getHref())).
+				andExpect(status().isNotFound());
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.jpa;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.data.rest.webmvc.util.TestUtils.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.core.mapping.ResourceMappings;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.RelProvider;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriTemplate;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+
+
+@Transactional
+@ContextConfiguration(classes = JpaRepositoryConfig.class)
+public class JpaWebTests extends CommonWebTests {
+
+	private static final MediaType TEXT_URI_LIST = MediaType.valueOf("text/uri-list");
+	static final String LINK_TO_SIBLINGS_OF = "$._embedded..[?(@.firstName == '%s')]._links.siblings.href[0]";
+
+	@Autowired TestDataPopulator loader;
+	@Autowired ResourceMappings mappings;
+	@Autowired RelProvider relProvider;
+
+	ObjectMapper mapper = new ObjectMapper();
+
+	
+	@Override
+	@Before
+	public void setUp() {
+		loader.populateRepositories();
+		super.setUp();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("people", "authors", "books");
+	}
+
+	
+	@Override
+	protected Map<String, String> getPayloadToPost() throws Exception {
+		return Collections.singletonMap("people", readFileFromClasspath("person.json"));
+	}
+
+	
+	@Override
+	protected MultiValueMap<String, String> getRootAndLinkedResources() {
+
+		MultiValueMap<String, String> map = new LinkedMultiValueMap<String, String>();
+		map.add("authors", "books");
+		map.add("books", "authors");
+
+		return map;
+	}
+
+	
+	@Test
+	public void doesNotExposeCreditCardRepository() throws Exception {
+
+		mvc.perform(get("/")). 
+				andExpect(status().isOk()). 
+				andExpect(doesNotHaveLinkWithRel(mappings.getMetadataFor(CreditCard.class).getRel()));
+	}
+
+	@Test
+	public void accessPersons() throws Exception {
+
+		MockHttpServletResponse response = client.request("/people?page=0&size=1");
+
+		Link nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_PREVIOUS, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_NEXT, response);
+	}
+
+	
+	@Test
+	public void exposesLinkForRelatedResource() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+		Link ordersLink = client.assertHasLinkWithRel("orders", response);
+
+		MockHttpServletResponse orders = client.request(ordersLink);
+		Link creatorLink = assertHasContentLinkWithRel("creator", orders);
+
+		assertThat(client.request(creatorLink), is(notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesInlinedEntities() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+		Link ordersLink = client.assertHasLinkWithRel("orders", response);
+
+		MockHttpServletResponse orders = client.request(ordersLink);
+		assertHasJsonPathValue("$..lineItems", orders);
+	}
+
+	
+	@Test
+	public void createsOrderUsingPut() throws Exception {
+
+		mvc.perform(
+				put("/orders/{id}", 4711).
+						content(readFileFromClasspath("order.json")).contentType(MediaType.APPLICATION_JSON)
+		).andExpect(status().isCreated());
+	}
+
+	
+	@Test
+	public void createPersonThenVerifyIgnoredAttributesDontExist() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		ObjectMapper mapper = new ObjectMapper();
+		Person frodo = new Person("Frodo", "Baggins");
+		frodo.setAge(77);
+		frodo.setHeight(42);
+		frodo.setWeight(75);
+		String frodoString = mapper.writeValueAsString(frodo);
+
+		MockHttpServletResponse response = postAndGet(peopleLink, frodoString, MediaType.APPLICATION_JSON);
+
+		assertJsonPathEquals("$.firstName", "Frodo", response);
+		assertJsonPathEquals("$.lastName", "Baggins", response);
+		assertJsonPathDoesntExist("$.age", response);
+		assertJsonPathDoesntExist("$.height", response);
+		assertJsonPathDoesntExist("$.weight", response);
+	}
+
+	
+	@Test
+	public void createThenPatch() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		MockHttpServletResponse bilbo = postAndGet(peopleLink, "{ \"firstName\" : \"Bilbo\", \"lastName\" : \"Baggins\" }",
+				MediaType.APPLICATION_JSON);
+
+		Link bilboLink = client.assertHasLinkWithRel("self", bilbo);
+
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.firstName"), is("Bilbo"));
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.lastName"), is("Baggins"));
+
+		MockHttpServletResponse frodo = patchAndGet(bilboLink, "{ \"firstName\" : \"Frodo\" }", MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), is("Frodo"));
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.lastName"), is("Baggins"));
+
+		frodo = patchAndGet(bilboLink, "{ \"firstName\" : null }", MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), is(nullValue()));
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.lastName"), is("Baggins"));
+	}
+
+	
+	@Test
+	public void createThenPut() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		MockHttpServletResponse bilbo = postAndGet(peopleLink,
+				"{ \"firstName\" : \"Bilbo\", \"lastName\" : \"Baggins\" }",
+				MediaType.APPLICATION_JSON);
+
+		Link bilboLink = client.assertHasLinkWithRel("self", bilbo);
+
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.firstName"), equalTo("Bilbo"));
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.lastName"), equalTo("Baggins"));
+
+		MockHttpServletResponse frodo = putAndGet(bilboLink,
+				"{ \"firstName\" : \"Frodo\" }",
+				MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), equalTo("Frodo"));
+		assertNull(JsonPath.read(frodo.getContentAsString(), "$.lastName"));
+	}
+
+	@Test
+	public void listsSiblingsWithContentCorrectly() throws Exception {
+		assertPersonWithNameAndSiblingLink("John");
+	}
+
+	@Test
+	public void listsEmptySiblingsCorrectly() throws Exception {
+		assertPersonWithNameAndSiblingLink("Billy Bob");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithMultiplePosts() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingLink = links.get(0);
+
+		patchAndGet(frodosSiblingLink, links.get(1).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingLink, links.get(2).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingLink, links.get(3).getHref(), TEXT_URI_LIST);
+
+		assertSiblingNames(frodosSiblingLink, "Bilbo", "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithSinglePost() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingLink = links.get(0);
+
+		patchAndGet(frodosSiblingLink, toUriList(links.get(1), links.get(2), links.get(3)), TEXT_URI_LIST);
+
+		assertSiblingNames(frodosSiblingLink, "Bilbo", "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithMultiplePuts() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0);
+
+		putAndGet(frodosSiblingsLink, links.get(1).expand().getHref(), TEXT_URI_LIST);
+		putAndGet(frodosSiblingsLink, links.get(2).expand().getHref(), TEXT_URI_LIST);
+		putAndGet(frodosSiblingsLink, links.get(3).expand().getHref(), TEXT_URI_LIST);
+		assertSiblingNames(frodosSiblingsLink, "Pippin");
+
+		patchAndGet(frodosSiblingsLink, links.get(2).getHref(), TEXT_URI_LIST);
+		assertSiblingNames(frodosSiblingsLink, "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithSinglePut() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodoSiblingLink = links.get(0);
+
+		putAndGet(frodoSiblingLink, toUriList(links.get(1), links.get(2), links.get(3)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Bilbo", "Merry", "Pippin");
+
+		putAndGet(frodoSiblingLink, toUriList(links.get(3)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Pippin");
+
+		patchAndGet(frodoSiblingLink, toUriList(links.get(2)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithDelete() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0);
+
+		patchAndGet(frodosSiblingsLink, links.get(1).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingsLink, links.get(2).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingsLink, links.get(3).getHref(), TEXT_URI_LIST);
+
+		String pippinId = new UriTemplate("/people/{id}").match(links.get(3).getHref()).get("id");
+		deleteAndVerify(new Link(frodosSiblingsLink.getHref() + "/" + pippinId));
+
+		assertSiblingNames(frodosSiblingsLink, "Bilbo", "Merry");
+	}
+
+	
+	@Test
+	public void propertiesCanHaveNulls() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		Person frodo = new Person();
+		frodo.setFirstName("Frodo");
+		frodo.setLastName(null);
+
+		MockHttpServletResponse response = postAndGet(peopleLink, mapper.writeValueAsString(frodo),
+				MediaType.APPLICATION_JSON);
+		String responseBody = response.getContentAsString();
+
+		assertEquals(JsonPath.read(responseBody, "$.firstName"), "Frodo");
+		assertNull(JsonPath.read(responseBody, "$.lastName"));
+	}
+
+	
+	@Test
+	public void putShouldWorkDespiteExistingLinks() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		Person frodo = new Person("Frodo", "Baggins");
+		String frodoString = mapper.writeValueAsString(frodo);
+
+		MockHttpServletResponse createdPerson = postAndGet(peopleLink, frodoString, MediaType.APPLICATION_JSON);
+
+		Link frodoLink = client.assertHasLinkWithRel("self", createdPerson);
+		assertJsonPathEquals("$.firstName", "Frodo", createdPerson);
+
+		String bilboWithFrodosLinks = createdPerson.getContentAsString().replace("Frodo", "Bilbo");
+
+		MockHttpServletResponse overwrittenResponse = putAndGet(frodoLink, bilboWithFrodosLinks, MediaType.APPLICATION_JSON);
+
+		client.assertHasLinkWithRel("self", overwrittenResponse);
+		assertJsonPathEquals("$.firstName", "Bilbo", overwrittenResponse);
+	}
+
+	
+	@Test
+	public void doesNotAllowGetToCollectionResourceIfFindAllIsNotExported() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(get(link.getHref())).
+				andExpect(status().isMethodNotAllowed());
+	}
+
+	
+	@Test
+	public void doesNotAllowPostToCollectionResourceIfSaveIsNotExported() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(post(link.getHref()).content("{}").contentType(MediaType.APPLICATION_JSON)).
+				andExpect(status().isMethodNotAllowed());
+	}
+
+	
+	@Test
+	public void returnsProjectionIfRequested() throws Exception {
+
+		Link orders = client.discoverUnique("orders");
+
+		MockHttpServletResponse response = client.request(orders);
+		Link orderLink = assertContentLinkWithRel("self", response, true).expand();
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(orderLink.getHref());
+		String uri = builder.queryParam("projection", "summary").build().toUriString();
+
+		response = mvc.perform(get(uri)). 
+				andExpect(status().isOk()). 
+				andExpect(jsonPath("$.price", is(2.5))).
+				andReturn().getResponse();
+
+		assertJsonPathDoesntExist("$.lineItems", response);
+	}
+
+	
+	@Test
+	public void relProviderDetectsCustomizedMapping() {
+		assertThat(relProvider.getCollectionResourceRelFor(Person.class), is("people"));
+	}
+
+	
+	@Test
+	public void onlyLinksShouldAppearWhenExecuteSearchCompact() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		Person daenerys = new Person("Daenerys", "Targaryen");
+		String daenerysString = mapper.writeValueAsString(daenerys);
+
+		MockHttpServletResponse createdPerson = postAndGet(peopleLink, daenerysString, MediaType.APPLICATION_JSON);
+		Link daenerysLink = client.assertHasLinkWithRel("self", createdPerson);
+		assertJsonPathEquals("$.firstName", "Daenerys", createdPerson);
+
+		Link searchLink = client.discoverUnique(peopleLink, "search");
+		Link byFirstNameLink = client.discoverUnique(searchLink, "findFirstPersonByFirstName");
+
+		MockHttpServletResponse response = client.request(byFirstNameLink.expand("Daenerys"),
+				MediaType.parseMediaType("application/x-spring-data-compact+json"));
+
+		String responseBody = response.getContentAsString();
+
+		JSONArray personLinks = JsonPath.<JSONArray> read(responseBody, "$.links[?(@.rel=='person')].href");
+
+		assertThat(personLinks, hasSize(1));
+		assertThat(personLinks.get(0), is((Object) daenerysLink.getHref()));
+		assertThat(JsonPath.<JSONArray> read(responseBody, "$.content"), hasSize(0));
+	}
+
+	
+	@Test
+	public void rendersExcerptProjectionsCorrectly() throws Exception {
+
+		Link authorsLink = client.discoverUnique("authors");
+
+		MockHttpServletResponse response = client.request(authorsLink);
+		String firstAuthorPath = "$._embedded.authors[0]";
+
+		
+		assertHasJsonPathValue(firstAuthorPath.concat(".name"), response);
+
+		
+		assertHasJsonPathValue(firstAuthorPath.concat("._embedded.books[0].title"), response);
+		assertHasJsonPathValue(firstAuthorPath.concat("._embedded.books[0]._links.self"), response);
+		assertHasJsonPathValue(firstAuthorPath.concat("._links.books"), response);
+
+		
+		String content = response.getContentAsString();
+		String href = JsonPath.read(content, firstAuthorPath.concat("._links.self.href"));
+
+		client.follow(new Link(href)).andExpect(client.hasLinkWithRel("books"));
+	}
+
+	
+	@Test
+	public void returns404WhenTryingToDeleteANonExistingResource() throws Exception {
+
+		Link receiptsLink = client.discoverUnique("receipts");
+
+		mvc.perform(delete(receiptsLink.getHref().concat("/{id}"), 4711)).
+				andExpect(status().isNotFound());
+	}
+
+	
+	@Test
+	public void execturesSearchThatTakesASort() throws Exception {
+
+		Link booksLink = client.discoverUnique("books");
+		Link searchLink = client.discoverUnique(booksLink, "search");
+		Link findBySortedLink = client.discoverUnique(searchLink, "find-by-sorted");
+
+		
+		assertThat(findBySortedLink.isTemplated(), is(true));
+		assertThat(findBySortedLink.getVariableNames(), hasItems("sort", "projection"));
+
+		
+		client.follow(findBySortedLink.expand("title,desc")).
+				andExpect(jsonPath("$._embedded.books[0].title").value("Spring Data (Second Edition)")).
+				andExpect(jsonPath("$._embedded.books[1].title").value("Spring Data")).
+				andExpect(client.hasLinkWithRel("self"));
+
+		client.follow(findBySortedLink.expand("title,asc")).
+				andExpect(jsonPath("$._embedded.books[0].title").value("Spring Data")).
+				andExpect(jsonPath("$._embedded.books[1].title").value("Spring Data (Second Edition)")).
+				andExpect(client.hasLinkWithRel("self"));
+	}
+
+	
+	@Test
+	public void returnConflictWhenConcurrentlyEditingVersionedEntity() throws Exception {
+
+		Link receiptLink = client.discoverUnique("receipts");
+
+		Receipt receipt = new Receipt();
+		receipt.setAmount(new BigDecimal(50));
+		receipt.setSaleItem("Springy Tacos");
+
+		String stringReceipt = mapper.writeValueAsString(receipt);
+
+		MockHttpServletResponse createdReceipt = postAndGet(receiptLink, stringReceipt, MediaType.APPLICATION_JSON);
+		Link tacosLink = client.assertHasLinkWithRel("self", createdReceipt);
+		assertJsonPathEquals("$.saleItem", "Springy Tacos", createdReceipt);
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(tacosLink.getHref());
+		String concurrencyTag = createdReceipt.getHeader("ETag");
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyBurritos\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().is2xxSuccessful());
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyTequila\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", "\"falseETag\"")).andExpect(
+				status().isPreconditionFailed());
+	}
+
+	
+	@Test
+	public void invokesCustomControllerAndBindsDomainObjectCorrectly() throws Exception {
+
+		MockHttpServletResponse authorsResponse = client.request(client.discoverUnique("authors"));
+
+		String authorUri = JsonPath.read(authorsResponse.getContentAsString(), "$._embedded.authors[0]._links.self.href");
+
+		mvc.perform(delete(authorUri)).
+				andExpect(status().isIAmATeapot());
+	}
+
+	
+	@Test
+	public void augmentsCollectionAssociationUsingPost() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0).expand();
+		Link bilboLink = links.get(1);
+
+		for (int i = 1; i <= 2; i++) {
+
+			mvc.perform(post(frodosSiblingsLink.getHref()).
+					content(bilboLink.getHref()).
+					contentType(TEXT_URI_LIST)).
+					andExpect(status().isNoContent());
+
+			mvc.perform(get(frodosSiblingsLink.getHref())).
+					andExpect(jsonPath("$._embedded.people", hasSize(i)));
+		}
+	}
+
+	private List<Link> preparePersonResources(Person primary, Person... persons) throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		List<Link> links = new ArrayList<Link>();
+
+		MockHttpServletResponse primaryResponse = postAndGet(peopleLink, mapper.writeValueAsString(primary),
+				MediaType.APPLICATION_JSON);
+		links.add(client.assertHasLinkWithRel("siblings", primaryResponse));
+
+		for (Person person : persons) {
+
+			String payload = mapper.writeValueAsString(person);
+			MockHttpServletResponse response = postAndGet(peopleLink, payload, MediaType.APPLICATION_JSON);
+
+			links.add(client.assertHasLinkWithRel(Link.REL_SELF, response));
+		}
+
+		return links;
+	}
+
+	
+	private void assertSiblingNames(Link link, String... siblingNames) throws Exception {
+
+		String responseBody = client.request(link).getContentAsString();
+		List<String> persons = JsonPath.read(responseBody, "$._embedded.people[*].firstName");
+
+		assertThat(persons, hasSize(siblingNames.length));
+		assertThat(persons, hasItems(siblingNames));
+	}
+
+	private void assertPersonWithNameAndSiblingLink(String name) throws Exception {
+
+		MockHttpServletResponse response = client.request(client.discoverUnique("people"));
+
+		String jsonPath = String.format("$._embedded.people[?(@.firstName == '%s')][0]", name);
+
+		
+		Object john = JsonPath.read(response.getContentAsString(), jsonPath);
+		assertThat(john, is(notNullValue()));
+		assertThat(JsonPath.read(john, "$.firstName"), is(notNullValue()));
+
+		
+		Link selfLink = new Link(JsonPath.<String> read(john, "$._links.self.href"));
+		client.follow(selfLink).
+				andExpect(status().isOk()).
+				andExpect(jsonPath("$._links.siblings", is(notNullValue())));
+	}
+
+	private static String toUriList(Link... links) {
+
+		List<String> uris = new ArrayList<String>(links.length);
+
+		for (Link link : links) {
+			uris.add(link.expand().getHref());
+		}
+
+		return StringUtils.collectionToDelimitedString(uris, "\n");
+	}
+}
+<code block>
+
+package org.springframework.data.rest.webmvc.solr;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Arrays;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.ClassRule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.rest.webmvc.AbstractWebIntegrationTests;
+import org.springframework.data.solr.repository.config.EnableSolrRepositories;
+import org.springframework.hateoas.Link;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+
+@ContextConfiguration(classes = { SolrWebTests.MyConf.class })
+public class SolrWebTests extends AbstractWebIntegrationTests {
+
+	public static @ClassRule TemporaryFolder TEMP_FOLDER = new TemporaryFolder();
+
+	private static final Product PLAYSTATION = new Product("1", "playstation", "electronic", "game", "media");
+	private static final Product GAMEBOY = new Product("2", "gameboy", "electronic");
+	private static final Product AMIGA500 = new Product("3", "amiga500", "ancient");
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+
+	@Configuration
+	@EnableSolrRepositories
+	@Import(value = { SolrInfrastructureConfig.class })
+	static class MyConf {
+
+		@Bean
+		String solrHomeDir() {
+			return TEMP_FOLDER.getRoot().getAbsolutePath();
+		}
+	}
+
+	@Autowired ProductRepository repo;
+
+	@Before
+	public void setUp() {
+
+		super.setUp();
+		repo.save(Arrays.asList(PLAYSTATION, GAMEBOY, AMIGA500));
+	}
+
+	@After
+	public void tearDown() {
+		repo.deleteAll();
+	}
+
+	
+	@Test
+	public void allowsPaginationThroughData() throws Exception {
+
+		MockHttpServletResponse response = client.request("/products?page=0&size=1");
+
+		Link nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_PREVIOUS, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_NEXT, response);
+	}
+
+	
+	@Test
+	public void allowsRetrievingDataById() throws Exception {
+		requestAndCompare(PLAYSTATION);
+	}
+
+	
+	@Test
+	public void createsEntitesCorrectly() throws Exception {
+
+		Product product = new Product("4", "iWatch", "trends", "scary");
+
+		mvc.perform(
+				put("/products/{id}", 4).content(MAPPER.writeValueAsString(product)).contentType(MediaType.APPLICATION_JSON))
+				.andExpect(status().isCreated()).andReturn().getResponse();
+
+		assertJsonDocumentMatches(product);
+	}
+
+	
+	@Test
+	public void deletesEntitiesCorrectly() throws Exception {
+		deleteAndVerify(new Link("/products/1"));
+	}
+
+	private void assertJsonDocumentMatches(Product reference) throws Exception {
+		requestAndCompare(reference);
+	}
+
+	private MockHttpServletResponse requestAndCompare(Product reference) throws Exception {
+
+		MockHttpServletResponse response = client.request("/products/" + reference.getId());
+
+		assertJsonPathEquals("name", reference.getName(), response);
+		assertJsonPathEquals("categories", MAPPER.writeValueAsString(reference.getCategories()), response);
+
+		return response;
+	}
+}
+
+<code block>
+
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assume.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.List;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Test;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.MediaTypes;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import com.jayway.jsonpath.JsonPath;
+
+
+public abstract class CommonWebTests extends AbstractWebIntegrationTests {
+
+	
+
+	@Test
+	public void exposesRootResource() throws Exception {
+
+		ResultActions actions = mvc.perform(get("/").accept(TestMvcClient.DEFAULT_MEDIA_TYPE)).andExpect(status().isOk());
+
+		for (String rel : expectedRootLinkRels()) {
+			actions.andExpect(client.hasLinkWithRel(rel));
+		}
+	}
+
+	
+	@Test
+	public void exposesSchemasForResourcesExposed() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			Link link = client.assertHasLinkWithRel(rel, response);
+
+			
+			client.request(link);
+
+			
+			mvc.perform(get(link.expand().getHref() + "/schema").
+					accept(MediaType.parseMediaType("application/schema+json"))).
+					andExpect(status().isOk());
+		}
+	}
+
+	
+	@Test
+	public void servesHalWhenRequested() throws Exception {
+
+		mvc.perform(get("/")). 
+				andExpect(content().contentType(MediaTypes.HAL_JSON)). 
+				andExpect(jsonPath("$._links", notNullValue()));
+	}
+
+	
+	@Test
+	public void servesHalWhenJsonIsRequested() throws Exception {
+
+		mvc.perform(get("/").accept(MediaType.APPLICATION_JSON)). 
+				andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)). 
+				andExpect(jsonPath("$._links", notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesSearchesForRootResources() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			Link link = client.assertHasLinkWithRel(rel, response);
+			String rootResourceRepresentation = client.request(link).getContentAsString();
+			Link searchLink = client.getDiscoverer(response).findLinkWithRel("search", rootResourceRepresentation);
+
+			if (searchLink != null) {
+				client.follow(searchLink).
+						andExpect(client.hasLinkWithRel("self")).
+						andExpect(jsonPath("$.domainType", is(nullValue()))); 
+			}
+		}
+	}
+
+	@Test
+	public void nic() throws Exception {
+
+		Map<String, String> payloads = getPayloadToPost();
+		assumeFalse(payloads.isEmpty());
+
+		MockHttpServletResponse response = client.request("/");
+
+		for (String rel : expectedRootLinkRels()) {
+
+			String payload = payloads.get(rel);
+
+			if (payload != null) {
+
+				Link link = client.assertHasLinkWithRel(rel, response);
+				String target = link.expand().getHref();
+
+				MockHttpServletRequestBuilder request = post(target).
+						content(payload).
+						contentType(MediaType.APPLICATION_JSON);
+
+				mvc.perform(request). 
+						andExpect(status().isCreated());
+			}
+		}
+	}
+
+	
+	@Test
+	public void accessLinkedResources() throws Exception {
+
+		MockHttpServletResponse rootResource = client.request("/");
+
+		for (Map.Entry<String, List<String>> linked : getRootAndLinkedResources().entrySet()) {
+
+			Link resourceLink = client.assertHasLinkWithRel(linked.getKey(), rootResource);
+			MockHttpServletResponse resource = client.request(resourceLink);
+
+			for (String linkedRel : linked.getValue()) {
+
+				
+				String jsonPath = String.format("$..%s._links.%s.href", linked.getKey(), linkedRel);
+				String representation = resource.getContentAsString();
+				JSONArray uris = JsonPath.read(representation, jsonPath);
+
+				for (Object href : uris) {
+
+					client.follow(href.toString()). 
+							andExpect(status().isOk());
+				}
+			}
+		}
+	}
+
+	
+	@Test
+	public void exposesDescriptionAsAlpsDocuments() throws Exception {
+
+		MediaType ALPS_MEDIA_TYPE = MediaType.valueOf("application/alps+json");
+
+		MockHttpServletResponse response = client.request("/");
+		Link profileLink = client.assertHasLinkWithRel("profile", response);
+
+		mvc.perform(
+				get(profileLink.expand().getHref()).
+						accept(ALPS_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(content().contentType(ALPS_MEDIA_TYPE));
+	}
+
+	
+	@Test
+	public void returnsNotFoundForUriNotBackedByARepository() throws Exception {
+
+		mvc.perform(get("/index.html")).
+				andExpect(status().isNotFound());
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverer;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.util.Assert;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+
+public class TestMvcClient {
+
+	public static MediaType DEFAULT_MEDIA_TYPE = org.springframework.hateoas.MediaTypes.HAL_JSON;
+
+	private final MockMvc mvc;
+	private final LinkDiscoverers discoverers;
+
+	
+	public TestMvcClient(MockMvc mvc, LinkDiscoverers discoverers) {
+
+		Assert.notNull(mvc, "MockMvc must not be null!");
+		Assert.notNull(discoverers, "LinkDiscoverers must not be null!");
+
+		this.mvc = mvc;
+		this.discoverers = discoverers;
+	}
+
+	
+	public static void initWebTest() {
+
+		MockHttpServletRequest request = new MockHttpServletRequest();
+		ServletRequestAttributes requestAttributes = new ServletRequestAttributes(request);
+		RequestContextHolder.setRequestAttributes(requestAttributes);
+	}
+
+	public static void assertAllowHeaders(HttpEntity<?> response, HttpMethod... methods) {
+
+		HttpHeaders headers = response.getHeaders();
+
+		assertThat(headers.getAllow(), hasSize(methods.length));
+		assertThat(headers.getAllow(), hasItems(methods));
+	}
+
+	
+	public MockHttpServletResponse request(String href, MediaType contentType) throws Exception {
+		return mvc.perform(get(href).accept(contentType)). 
+				andExpect(status().isOk()). 
+				andExpect(content().contentType(contentType)). 
+				andReturn().getResponse();
+	}
+
+	
+	public MockHttpServletResponse request(Link link) throws Exception {
+		return request(link.expand().getHref());
+	}
+
+	
+	public MockHttpServletResponse request(Link link, MediaType mediaType) throws Exception {
+		return request(link.expand().getHref(), mediaType);
+	}
+
+	
+	public MockHttpServletResponse request(String href) throws Exception {
+		return request(href, DEFAULT_MEDIA_TYPE);
+	}
+
+	
+	public ResultActions follow(Link link) throws Exception {
+		return follow(link.expand().getHref());
+	}
+
+	
+	public ResultActions follow(String href) throws Exception {
+		return mvc.perform(get(href));
+	}
+
+	
+	public List<Link> discover(String rel) throws Exception {
+		return discover(new Link("/"), rel);
+	}
+
+	
+	public Link discoverUnique(String rel) throws Exception {
+
+		List<Link> discover = discover(rel);
+		assertThat(discover, hasSize(1));
+		return discover.get(0);
+	}
+
+	
+	public Link discoverUnique(String... rels) throws Exception {
+
+		Iterator<String> toTraverse = Arrays.asList(rels).iterator();
+		Link lastLink = null;
+
+		while (toTraverse.hasNext()) {
+
+			String rel = toTraverse.next();
+			lastLink = lastLink == null ? discoverUnique(rel) : discoverUnique(lastLink, rel);
+		}
+
+		return lastLink;
+	}
+
+	
+	public List<Link> discover(Link root, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(root.expand().getHref()).accept(DEFAULT_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(hasLinkWithRel(rel)).
+				andReturn().getResponse();
+
+		String s = response.getContentAsString();
+		return getDiscoverer(response).findLinksWithRel(rel, s);
+	}
+
+	
+	public Link discoverUnique(Link root, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(root.expand().getHref()).accept(DEFAULT_MEDIA_TYPE)).
+				andExpect(status().isOk()).
+				andExpect(hasLinkWithRel(rel)).
+				andReturn().getResponse();
+
+		return assertHasLinkWithRel(rel, response);
+	}
+
+	
+	public Link assertHasLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Link link = getDiscoverer(response).findLinkWithRel(rel, content);
+
+		assertThat("Expected to find link with rel " + rel + " but found none in " + content + "!", link,
+				is(notNullValue()));
+
+		return link;
+	}
+
+	
+	public ResultMatcher hasLinkWithRel(final String rel) {
+
+		return new ResultMatcher() {
+
+			@Override
+			public void match(MvcResult result) throws Exception {
+
+				MockHttpServletResponse response = result.getResponse();
+				String s = response.getContentAsString();
+
+				assertThat("Expected to find link with rel " + rel + " but found none in " + s, 
+						getDiscoverer(response).findLinkWithRel(rel, s), notNullValue());
+			}
+		};
+	}
+
+	
+	public LinkDiscoverer getDiscoverer(MockHttpServletResponse response) {
+
+		String contentType = response.getContentType();
+		LinkDiscoverer linkDiscovererFor = discoverers.getLinkDiscovererFor(contentType);
+
+		assertThat("Did not find a LinkDiscoverer for returned media type " + contentType + "!", linkDiscovererFor,
+				is(notNullValue()));
+
+		return linkDiscovererFor;
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Collections;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Before;
+import org.junit.runner.RunWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.webmvc.config.RepositoryRestMvcConfiguration;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
+import org.springframework.web.context.WebApplicationContext;
+
+import com.jayway.jsonpath.InvalidPathException;
+import com.jayway.jsonpath.JsonPath;
+
+
+@RunWith(SpringJUnit4ClassRunner.class)
+@WebAppConfiguration
+@ContextConfiguration(classes = RepositoryRestMvcConfiguration.class)
+public abstract class AbstractWebIntegrationTests {
+
+	private static final String CONTENT_LINK_JSONPATH = "$._embedded.._links.%s.href[0]";
+
+	@Autowired WebApplicationContext context;
+	@Autowired LinkDiscoverers discoverers;
+
+	protected TestMvcClient client;
+	protected MockMvc mvc;
+
+	@Before
+	public void setUp() {
+
+		this.mvc = MockMvcBuilders.webAppContextSetup(context).
+				defaultRequest(get("/").accept(TestMvcClient.DEFAULT_MEDIA_TYPE)).build();
+		this.client = new TestMvcClient(mvc, discoverers);
+	}
+
+	protected MockHttpServletResponse postAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(post(href).content(payload.toString()).contentType(mediaType)).
+				andExpect(status().isCreated()).
+				andExpect(header().string("Location", is(notNullValue()))).
+				andReturn().getResponse();
+
+		String content = response.getContentAsString();
+
+		if (StringUtils.hasText(content)) {
+			return response;
+		}
+
+		return client.request(response.getHeader("Location"));
+	}
+
+	protected MockHttpServletResponse putAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(put(href).content(payload.toString()).contentType(mediaType)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		return StringUtils.hasText(response.getContentAsString()) ? response : client.request(link);
+	}
+
+	protected MockHttpServletResponse patchAndGet(Link link, Object payload, MediaType mediaType) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		MockHttpServletResponse response = mvc.perform(MockMvcRequestBuilders.request(HttpMethod.PATCH, href).
+				content(payload.toString()).contentType(mediaType)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		return StringUtils.hasText(response.getContentAsString()) ? response : client.request(href);
+	}
+
+	protected void deleteAndVerify(Link link) throws Exception {
+
+		String href = link.isTemplated() ? link.expand().getHref() : link.getHref();
+
+		mvc.perform(delete(href)).
+				andExpect(status().isNoContent()).
+				andReturn().getResponse();
+
+		
+		mvc.perform(get(href)).
+				andExpect(status().isNotFound());
+	}
+
+	protected Link assertHasContentLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+		return assertContentLinkWithRel(rel, response, true);
+	}
+
+	protected void assertDoesNotHaveContentLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+		assertContentLinkWithRel(rel, response, false);
+	}
+
+	protected Link assertContentLinkWithRel(String rel, MockHttpServletResponse response, boolean expected)
+			throws Exception {
+
+		String content = response.getContentAsString();
+
+		try {
+
+			String href = JsonPath.read(content, String.format(CONTENT_LINK_JSONPATH, rel)).toString();
+			assertThat("Expected to find a link with rel" + rel + " in the content section of the response!", href,
+					is(expected ? notNullValue() : nullValue()));
+
+			return new Link(href, rel);
+
+		} catch (InvalidPathException o_O) {
+
+			if (expected) {
+				fail("Didn't find any content in the given response!");
+			}
+
+			return null;
+		}
+	}
+
+	protected void assertDoesNotHaveLinkWithRel(String rel, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Link link = client.getDiscoverer(response).findLinkWithRel(rel, content);
+
+		assertThat("Expected not to find link with rel " + rel + " but found " + link + "!", link, is(nullValue()));
+	}
+
+	@SuppressWarnings("unchecked")
+	protected <T> T assertHasJsonPathValue(String path, MockHttpServletResponse response) throws Exception {
+
+		String content = response.getContentAsString();
+		Object jsonPathResult = JsonPath.read(content, path);
+
+		assertThat(String.format("JSONPath lookup for %s did return null in %s.", path, content), jsonPathResult,
+				is(notNullValue()));
+
+		if (jsonPathResult instanceof JSONArray) {
+			JSONArray array = (JSONArray) jsonPathResult;
+			assertThat(array, hasSize(greaterThan(0)));
+		}
+
+		return (T) jsonPathResult;
+	}
+
+	protected void assertJsonPathDoesntExist(String path, MockHttpServletResponse response) throws Exception {
+
+		try {
+
+			Object result = JsonPath.read(response.getContentAsString(), path);
+
+			if (result != null) {
+				fail("Was expecting to find no value for path " + path + " but got " + result.toString());
+			}
+
+		} catch (InvalidPathException e) {}
+	}
+
+	protected String assertJsonPathEquals(String path, String expected, MockHttpServletResponse response)
+			throws Exception {
+
+		Object jsonQueryResults = assertHasJsonPathValue(path, response);
+
+		String jsonString = "";
+
+		if (jsonQueryResults instanceof JSONArray) {
+			jsonString = ((JSONArray) jsonQueryResults).toJSONString();
+		} else {
+			jsonString = jsonQueryResults != null ? jsonQueryResults.toString() : null;
+		}
+
+		assertThat(jsonString, is(expected));
+		return jsonString;
+	}
+
+	protected ResultMatcher doesNotHaveLinkWithRel(final String rel) {
+
+		return new ResultMatcher() {
+
+			@Override
+			public void match(MvcResult result) throws Exception {
+
+				MockHttpServletResponse response = result.getResponse();
+				String s = response.getContentAsString();
+
+				assertThat("Expected not to find link with rel " + rel + " but found one in " + s, 
+						client.getDiscoverer(response).findLinkWithRel(rel, s), nullValue());
+			}
+		};
+	}
+
+	protected abstract Iterable<String> expectedRootLinkRels();
+
+	protected Map<String, String> getPayloadToPost() throws Exception {
+		return Collections.emptyMap();
+	}
+
+	protected MultiValueMap<String, String> getRootAndLinkedResources() {
+		return new LinkedMultiValueMap<String, String>(0);
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.neo4j;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+
+import java.util.Arrays;
+
+import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Test;
+import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.factory.GraphDatabaseFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.neo4j.config.EnableNeo4jRepositories;
+import org.springframework.data.neo4j.config.Neo4jConfiguration;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.hateoas.Link;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+
+@ContextConfiguration
+@Ignore
+public class Neo4jWebTests extends CommonWebTests {
+
+	@Configuration
+	@ComponentScan
+	@EnableNeo4jRepositories
+	@EnableTransactionManagement
+	static class TestConfig extends Neo4jConfiguration {
+
+		public TestConfig() {
+			setBasePackage(Neo4jWebTests.class.getPackage().getName());
+		}
+
+		@Bean(destroyMethod = "shutdown")
+		public GraphDatabaseService graphDatabaseService() {
+			return new GraphDatabaseFactory().newEmbeddedDatabase("target/graphdb");
+		}
+
+	}
+
+	@Autowired TestDataPopulator populator;
+
+	@Before
+	@Override
+	public void setUp() {
+		this.populator.populate();
+		super.setUp();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("customers");
+	}
+
+	
+	@Test
+	public void deletesCustomer() throws Exception {
+
+		
+		Link customers = client.discoverUnique("customers");
+		Link customerLink = assertHasContentLinkWithRel("self", client.request(customers));
+
+		
+		mvc.perform(delete(customerLink.getHref()));
+
+		
+		assertDoesNotHaveContentLinkWithRel("self", client.request(customers));
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.alps;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.rest.webmvc.AbstractControllerIntegrationTests;
+import org.springframework.data.rest.webmvc.jpa.JpaRepositoryConfig;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.LinkDiscoverer;
+import org.springframework.hateoas.LinkDiscoverers;
+import org.springframework.hateoas.core.JsonPathLinkDiscoverer;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+
+
+@WebAppConfiguration
+@ContextConfiguration(classes = { JpaRepositoryConfig.class, AlpsControllerIntegrationTests.Config.class })
+public class AlpsControllerIntegrationTests extends AbstractControllerIntegrationTests {
+
+	@Autowired WebApplicationContext context;
+	@Autowired LinkDiscoverers discoverers;
+
+	@Configuration
+	static class Config {
+
+		@Bean
+		public LinkDiscoverer alpsLinkDiscoverer() {
+			return new JsonPathLinkDiscoverer("$.descriptors[?(@.name == '%s')].href",
+					MediaType.valueOf("application/alps+json"));
+		}
+	}
+
+	protected MockMvc mvc;
+
+	@Before
+	public void setUp() {
+		mvc = MockMvcBuilders.webAppContextSetup(context).build();
+	}
+
+	
+	@Test
+	public void exposesProfileLink() throws Exception {
+
+		mvc.perform(get("/")).
+				andExpect(status().is2xxSuccessful()).
+				andExpect(jsonPath("$._links.profile.href", endsWith(AlpsController.ALPS_ROOT_MAPPING)));
+	}
+
+	
+	@Test
+	public void alpsResourceExposesResourcePerCollectionResource() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+
+		assertThat(discoverUnique(profileLink.getHref(), "orders"), is(notNullValue()));
+		assertThat(discoverUnique(profileLink.getHref(), "people"), is(notNullValue()));
+		assertThat(discoverUnique(profileLink.getHref(), "items"), is(notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesAlpsCollectionResources() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link peopleLink = discoverUnique(profileLink.getHref(), "people");
+
+		mvc.perform(get(peopleLink.getHref())).
+				andExpect(jsonPath("$.version").value("1.0")).
+				andExpect(jsonPath("$.descriptors[*].name", hasItems("people", "person")));
+	}
+
+	
+	@Test
+	public void verifyThatAttributesIgnoredDontAppearInAlps() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "users");
+		Link itemsLink = discoverUnique(profileLink.getHref(), "items");
+
+		assertThat(usersLink, is(nullValue()));
+
+		mvc.perform(get(itemsLink.getHref()))
+				.andExpect(jsonPath("$.descriptors[*].descriptors[*].name", hasItems("id", "name")))
+				.andExpect(
+						jsonPath("$.descriptors[*].descriptors[*].name", everyItem(not(isIn(new String[] { "owner", "manager",
+								"curator" })))));
+	}
+
+	
+	@Test
+	public void linksToJsonSchemaFromRepresentationDescriptor() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "items");
+
+		assertThat(usersLink, is(notNullValue()));
+
+		mvc.perform(get(usersLink.getHref())).
+				andExpect(jsonPath("$.descriptors[?(@.id == 'item-representation')].href", is(notNullValue())));
+	}
+
+	
+	@Test
+	public void referenceToAssociatedEntityDesciptorPointsToRepresentationDescriptor() throws Exception {
+
+		Link profileLink = discoverUnique("/", "profile");
+		Link usersLink = discoverUnique(profileLink.getHref(), "people");
+
+		String jsonPath = "$."; 
+		jsonPath += "descriptors[?(@.id == 'person-representation')]."; 
+		jsonPath += "descriptors[?(@.name == 'father')][0]."; 
+		jsonPath += "rt"; 
+
+		mvc.perform(get(usersLink.getHref())).andExpect(
+				jsonPath(jsonPath, allOf(containsString("alps"), endsWith("-representation"))));
+	}
+
+	private Link discoverUnique(String href, String rel) throws Exception {
+
+		MockHttpServletResponse response = mvc.perform(get(href)).
+				andExpect(status().is2xxSuccessful()).
+				andReturn().getResponse();
+
+		LinkDiscoverer discoverer = discoverers.getLinkDiscovererFor(MediaType.valueOf(response.getContentType()));
+		return discoverer.findLinkWithRel(rel, response.getContentAsString());
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.support;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Collections;
+
+import org.junit.Test;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.data.rest.webmvc.AbstractWebIntegrationTests;
+import org.springframework.data.rest.webmvc.jpa.JpaRepositoryConfig;
+import org.springframework.hateoas.Link;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+
+
+@ContextConfiguration
+public class ExceptionHandlingCustomizationIntegrationTests extends AbstractWebIntegrationTests {
+
+	@Configuration
+	@Import(JpaRepositoryConfig.class)
+	static class ControllerAdviceConfig {
+
+		@ControllerAdvice
+		@Order(Ordered.HIGHEST_PRECEDENCE)
+		static class CustomGlobalConfiguration {
+
+			@ExceptionHandler
+			ResponseEntity<Void> handle(HttpRequestMethodNotSupportedException o_O) {
+
+				HttpHeaders headers = new HttpHeaders();
+				headers.setAllow(o_O.getSupportedHttpMethods());
+
+				return new ResponseEntity<Void>(headers, HttpStatus.INTERNAL_SERVER_ERROR);
+			}
+		}
+	}
+
+	@Test
+	public void httpRequestMethodNotSupportedExceptionShouldNowReturnHttpStatus500Over405() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(get(link.getHref())).
+				andExpect(status().isInternalServerError());
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Collections.emptySet();
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.mongodb;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.http.HttpHeaders.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.Collections;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.data.rest.webmvc.RestMediaTypes;
+import org.springframework.hateoas.Link;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+
+
+@ContextConfiguration(classes = MongoDbRepositoryConfig.class)
+public class MongoWebTests extends CommonWebTests {
+
+	@Autowired ProfileRepository repository;
+	@Autowired UserRepository userRepository;
+
+	ObjectMapper mapper = new ObjectMapper();
+
+	@Before
+	public void populateProfiles() {
+
+		mapper.setSerializationInclusion(Include.NON_NULL);
+
+		Profile twitter = new Profile();
+		twitter.setPerson(1L);
+		twitter.setType("Twitter");
+
+		Profile linkedIn = new Profile();
+		linkedIn.setPerson(1L);
+		linkedIn.setType("LinkedIn");
+
+		repository.save(Arrays.asList(twitter, linkedIn));
+
+		Address address = new Address();
+		address.street = "ETagDoesntMatchExceptionUnitTests";
+		address.zipCode = "Bar";
+
+		User thomas = new User();
+		thomas.firstname = "Thomas";
+		thomas.lastname = "Darimont";
+		thomas.address = address;
+
+		userRepository.save(thomas);
+
+		User oliver = new User();
+		oliver.firstname = "Oliver";
+		oliver.lastname = "Gierke";
+		oliver.address = address;
+		oliver.colleagues = Arrays.asList(thomas);
+		userRepository.save(oliver);
+
+		thomas.colleagues = Arrays.asList(oliver);
+		userRepository.save(thomas);
+	}
+
+	@After
+	public void cleanUp() {
+		repository.deleteAll();
+		userRepository.deleteAll();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("profiles", "users");
+	}
+
+	@Test
+	public void foo() throws Exception {
+
+		Link profileLink = client.discoverUnique("profiles");
+		client.follow(profileLink).
+				andExpect(jsonPath("$._embedded.profiles").value(hasSize(2)));
+	}
+
+	@Test
+	public void rendersEmbeddedDocuments() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		client.follow(userLink).
+				andExpect(jsonPath("$.address.zipCode").value(is(notNullValue())));
+	}
+
+	
+	@Test
+	public void executeQueryMethodWithPrimitiveReturnType() throws Exception {
+
+		Link profiles = client.discoverUnique("profiles");
+		Link profileSearches = client.discoverUnique(profiles, "search");
+		Link countByTypeLink = client.discoverUnique(profileSearches, "countByType");
+
+		assertThat(countByTypeLink.isTemplated(), is(true));
+		assertThat(countByTypeLink.getVariableNames(), hasItem("type"));
+
+		MockHttpServletResponse response = client.request(countByTypeLink.expand("Twitter"));
+		assertThat(response.getContentAsString(), is("1"));
+	}
+
+	@Test
+	public void testname() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+
+		MockHttpServletResponse response = patchAndGet(userLink,
+				"{\"lastname\" : null, \"address\" : { \"zipCode\" : \"ZIP\"}}", MediaType.APPLICATION_JSON);
+
+		assertThat(JsonPath.read(response.getContentAsString(), "$.lastname"), is(nullValue()));
+		assertThat(JsonPath.read(response.getContentAsString(), "$.address.zipCode"), is((Object) "ZIP"));
+	}
+
+	@Test
+	public void testname2() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+
+		MockHttpServletResponse response = patchAndGet(userLink,
+				"[{ \"op\": \"replace\", \"path\": \"/address/zipCode\", \"value\": \"ZIP\" },"
+				
+						+ "{ \"op\": \"remove\", \"path\": \"/lastname\" }]", 
+				RestMediaTypes.JSON_PATCH_JSON);
+
+		assertThat(JsonPath.read(response.getContentAsString(), "$.lastname"), is(nullValue()));
+		assertThat(JsonPath.read(response.getContentAsString(), "$.address.zipCode"), is((Object) "ZIP"));
+	}
+
+	
+	@Test
+	public void returnConflictWhenConcurrentlyEditingVersionedEntity() throws Exception {
+
+		Link receiptLink = client.discoverUnique("receipts");
+
+		Receipt receipt = new Receipt();
+		receipt.amount = new BigDecimal(50);
+		receipt.saleItem = "Springy Tacos";
+
+		String stringReceipt = mapper.writeValueAsString(receipt);
+
+		MockHttpServletResponse createdReceipt = postAndGet(receiptLink, stringReceipt, MediaType.APPLICATION_JSON);
+		Link tacosLink = client.assertHasLinkWithRel("self", createdReceipt);
+		assertJsonPathEquals("$.saleItem", "Springy Tacos", createdReceipt);
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(tacosLink.getHref());
+		String concurrencyTag = createdReceipt.getHeader("ETag");
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyBurritos\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().is2xxSuccessful());
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyTequila\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().isPreconditionFailed());
+	}
+
+	
+	@Test
+	public void auditableResourceHasLastModifiedHeaderSet() throws Exception {
+
+		Profile profile = repository.findAll().iterator().next();
+
+		String header = mvc.perform(get("/profiles/{id}", profile.getId())).
+				andReturn().getResponse().getHeader("Last-Modified");
+
+		assertThat(header, not(isEmptyOrNullString()));
+	}
+
+	
+	@Test
+	public void putDoesNotRemoveAssociations() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		Link colleaguesLink = client.assertHasLinkWithRel("colleagues", client.request(userLink));
+
+		
+		client.follow(colleaguesLink).
+				andExpect(jsonPath("$._embedded.users").exists());
+
+		User oliver = new User();
+		oliver.firstname = "Oliver";
+		oliver.lastname = "Gierke";
+
+		putAndGet(userLink, mapper.writeValueAsString(oliver), MediaType.APPLICATION_JSON);
+
+		
+		client.follow(colleaguesLink).
+				andExpect(jsonPath("$._embedded.users").exists()).
+				andExpect(jsonPath("$.embedded.users[0].address").doesNotExist());
+	}
+
+	
+	@Test
+	public void emptiesAssociationForEmptyUriList() throws Exception {
+
+		Link usersLink = client.discoverUnique("users");
+		Link userLink = assertHasContentLinkWithRel("self", client.request(usersLink));
+		Link colleaguesLink = client.assertHasLinkWithRel("colleagues", client.request(userLink));
+
+		putAndGet(colleaguesLink, "", MediaType.parseMediaType("text/uri-list"));
+
+		client.follow(colleaguesLink).
+				andExpect(status().isOk()).
+				andExpect(jsonPath("$").exists());
+	}
+
+	
+	@Test
+	public void updatesMapPropertyCorrectly() throws Exception {
+
+		Link profilesLink = client.discoverUnique("profiles");
+		Link profileLink = assertHasContentLinkWithRel("self", client.request(profilesLink));
+
+		Profile profile = new Profile();
+		profile.setMetadata(Collections.singletonMap("Key", "Value"));
+
+		putAndGet(profileLink, mapper.writeValueAsString(profile), MediaType.APPLICATION_JSON);
+
+		client.follow(profileLink).andExpect(jsonPath("$.metadata.Key").value("Value"));
+	}
+
+	
+	@Test
+	public void supportsConditionalGetsOnItemResource() throws Exception {
+
+		Receipt receipt = new Receipt();
+		receipt.amount = new BigDecimal(50);
+		receipt.saleItem = "Springy Tacos";
+
+		Link receiptsLink = client.discoverUnique("receipts");
+
+		MockHttpServletResponse response = postAndGet(receiptsLink, mapper.writeValueAsString(receipt),
+				MediaType.APPLICATION_JSON);
+
+		Link receiptLink = client.getDiscoverer(response).findLinkWithRel("self", response.getContentAsString());
+
+		mvc.perform(get(receiptLink.getHref()).header(IF_MODIFIED_SINCE, response.getHeader(LAST_MODIFIED))).
+				andExpect(status().isNotModified()).
+				andExpect(header().string(ETAG, is(notNullValue())));
+
+		mvc.perform(get(receiptLink.getHref()).header(IF_NONE_MATCH, response.getHeader(ETAG))).
+				andExpect(status().isNotModified()).
+				andExpect(header().string(ETAG, is(notNullValue())));
+	}
+
+	
+	@Test
+	public void invokesQueryResourceReturningAnOptional() throws Exception {
+
+		Profile profile = repository.findAll().iterator().next();
+
+		Link link = client.discoverUnique("profiles", "search", "findById");
+
+		mvc.perform(get(link.expand(profile.getId()).getHref())).
+				andExpect(status().isOk());
+	}
+
+	
+	@Test
+	public void returnsNotFoundIfQueryExecutionDoesNotReturnResult() throws Exception {
+
+		Link link = client.discoverUnique("profiles", "search", "findById");
+
+		mvc.perform(get(link.expand("").getHref())).
+				andExpect(status().isNotFound());
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.jpa;
+
+import static org.hamcrest.Matchers.*;
+import static org.junit.Assert.*;
+import static org.springframework.data.rest.webmvc.util.TestUtils.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+import net.minidev.json.JSONArray;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.rest.core.mapping.ResourceMappings;
+import org.springframework.data.rest.webmvc.CommonWebTests;
+import org.springframework.hateoas.Link;
+import org.springframework.hateoas.RelProvider;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriTemplate;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+
+
+@Transactional
+@ContextConfiguration(classes = JpaRepositoryConfig.class)
+public class JpaWebTests extends CommonWebTests {
+
+	private static final MediaType TEXT_URI_LIST = MediaType.valueOf("text/uri-list");
+	static final String LINK_TO_SIBLINGS_OF = "$._embedded..[?(@.firstName == '%s')]._links.siblings.href[0]";
+
+	@Autowired TestDataPopulator loader;
+	@Autowired ResourceMappings mappings;
+	@Autowired RelProvider relProvider;
+
+	ObjectMapper mapper = new ObjectMapper();
+
+	
+	@Override
+	@Before
+	public void setUp() {
+		loader.populateRepositories();
+		super.setUp();
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("people", "authors", "books");
+	}
+
+	
+	@Override
+	protected Map<String, String> getPayloadToPost() throws Exception {
+		return Collections.singletonMap("people", readFileFromClasspath("person.json"));
+	}
+
+	
+	@Override
+	protected MultiValueMap<String, String> getRootAndLinkedResources() {
+
+		MultiValueMap<String, String> map = new LinkedMultiValueMap<String, String>();
+		map.add("authors", "books");
+		map.add("books", "authors");
+
+		return map;
+	}
+
+	
+	@Test
+	public void doesNotExposeCreditCardRepository() throws Exception {
+
+		mvc.perform(get("/")). 
+				andExpect(status().isOk()). 
+				andExpect(doesNotHaveLinkWithRel(mappings.getMetadataFor(CreditCard.class).getRel()));
+	}
+
+	@Test
+	public void accessPersons() throws Exception {
+
+		MockHttpServletResponse response = client.request("/people?page=0&size=1");
+
+		Link nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_PREVIOUS, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_NEXT, response);
+	}
+
+	
+	@Test
+	public void exposesLinkForRelatedResource() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+		Link ordersLink = client.assertHasLinkWithRel("orders", response);
+
+		MockHttpServletResponse orders = client.request(ordersLink);
+		Link creatorLink = assertHasContentLinkWithRel("creator", orders);
+
+		assertThat(client.request(creatorLink), is(notNullValue()));
+	}
+
+	
+	@Test
+	public void exposesInlinedEntities() throws Exception {
+
+		MockHttpServletResponse response = client.request("/");
+		Link ordersLink = client.assertHasLinkWithRel("orders", response);
+
+		MockHttpServletResponse orders = client.request(ordersLink);
+		assertHasJsonPathValue("$..lineItems", orders);
+	}
+
+	
+	@Test
+	public void createsOrderUsingPut() throws Exception {
+
+		mvc.perform(
+				put("/orders/{id}", 4711).
+						content(readFileFromClasspath("order.json")).contentType(MediaType.APPLICATION_JSON)
+		).andExpect(status().isCreated());
+	}
+
+	
+	@Test
+	public void createPersonThenVerifyIgnoredAttributesDontExist() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		ObjectMapper mapper = new ObjectMapper();
+		Person frodo = new Person("Frodo", "Baggins");
+		frodo.setAge(77);
+		frodo.setHeight(42);
+		frodo.setWeight(75);
+		String frodoString = mapper.writeValueAsString(frodo);
+
+		MockHttpServletResponse response = postAndGet(peopleLink, frodoString, MediaType.APPLICATION_JSON);
+
+		assertJsonPathEquals("$.firstName", "Frodo", response);
+		assertJsonPathEquals("$.lastName", "Baggins", response);
+		assertJsonPathDoesntExist("$.age", response);
+		assertJsonPathDoesntExist("$.height", response);
+		assertJsonPathDoesntExist("$.weight", response);
+	}
+
+	
+	@Test
+	public void createThenPatch() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		MockHttpServletResponse bilbo = postAndGet(peopleLink, "{ \"firstName\" : \"Bilbo\", \"lastName\" : \"Baggins\" }",
+				MediaType.APPLICATION_JSON);
+
+		Link bilboLink = client.assertHasLinkWithRel("self", bilbo);
+
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.firstName"), is("Bilbo"));
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.lastName"), is("Baggins"));
+
+		MockHttpServletResponse frodo = patchAndGet(bilboLink, "{ \"firstName\" : \"Frodo\" }", MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), is("Frodo"));
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.lastName"), is("Baggins"));
+
+		frodo = patchAndGet(bilboLink, "{ \"firstName\" : null }", MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), is(nullValue()));
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.lastName"), is("Baggins"));
+	}
+
+	
+	@Test
+	public void createThenPut() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		MockHttpServletResponse bilbo = postAndGet(peopleLink,
+				"{ \"firstName\" : \"Bilbo\", \"lastName\" : \"Baggins\" }",
+				MediaType.APPLICATION_JSON);
+
+		Link bilboLink = client.assertHasLinkWithRel("self", bilbo);
+
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.firstName"), equalTo("Bilbo"));
+		assertThat((String) JsonPath.read(bilbo.getContentAsString(), "$.lastName"), equalTo("Baggins"));
+
+		MockHttpServletResponse frodo = putAndGet(bilboLink,
+				"{ \"firstName\" : \"Frodo\" }",
+				MediaType.APPLICATION_JSON);
+
+		assertThat((String) JsonPath.read(frodo.getContentAsString(), "$.firstName"), equalTo("Frodo"));
+		assertNull(JsonPath.read(frodo.getContentAsString(), "$.lastName"));
+	}
+
+	@Test
+	public void listsSiblingsWithContentCorrectly() throws Exception {
+		assertPersonWithNameAndSiblingLink("John");
+	}
+
+	@Test
+	public void listsEmptySiblingsCorrectly() throws Exception {
+		assertPersonWithNameAndSiblingLink("Billy Bob");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithMultiplePosts() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingLink = links.get(0);
+
+		patchAndGet(frodosSiblingLink, links.get(1).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingLink, links.get(2).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingLink, links.get(3).getHref(), TEXT_URI_LIST);
+
+		assertSiblingNames(frodosSiblingLink, "Bilbo", "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithSinglePost() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingLink = links.get(0);
+
+		patchAndGet(frodosSiblingLink, toUriList(links.get(1), links.get(2), links.get(3)), TEXT_URI_LIST);
+
+		assertSiblingNames(frodosSiblingLink, "Bilbo", "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithMultiplePuts() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0);
+
+		putAndGet(frodosSiblingsLink, links.get(1).expand().getHref(), TEXT_URI_LIST);
+		putAndGet(frodosSiblingsLink, links.get(2).expand().getHref(), TEXT_URI_LIST);
+		putAndGet(frodosSiblingsLink, links.get(3).expand().getHref(), TEXT_URI_LIST);
+		assertSiblingNames(frodosSiblingsLink, "Pippin");
+
+		patchAndGet(frodosSiblingsLink, links.get(2).getHref(), TEXT_URI_LIST);
+		assertSiblingNames(frodosSiblingsLink, "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithSinglePut() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodoSiblingLink = links.get(0);
+
+		putAndGet(frodoSiblingLink, toUriList(links.get(1), links.get(2), links.get(3)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Bilbo", "Merry", "Pippin");
+
+		putAndGet(frodoSiblingLink, toUriList(links.get(3)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Pippin");
+
+		patchAndGet(frodoSiblingLink, toUriList(links.get(2)), TEXT_URI_LIST);
+		assertSiblingNames(frodoSiblingLink, "Merry", "Pippin");
+	}
+
+	
+	@Test
+	public void manipulatePropertyCollectionRestfullyWithDelete() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"), 
+				new Person("Merry", "Baggins"), 
+				new Person("Pippin", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0);
+
+		patchAndGet(frodosSiblingsLink, links.get(1).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingsLink, links.get(2).getHref(), TEXT_URI_LIST);
+		patchAndGet(frodosSiblingsLink, links.get(3).getHref(), TEXT_URI_LIST);
+
+		String pippinId = new UriTemplate("/people/{id}").match(links.get(3).getHref()).get("id");
+		deleteAndVerify(new Link(frodosSiblingsLink.getHref() + "/" + pippinId));
+
+		assertSiblingNames(frodosSiblingsLink, "Bilbo", "Merry");
+	}
+
+	
+	@Test
+	public void propertiesCanHaveNulls() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		Person frodo = new Person();
+		frodo.setFirstName("Frodo");
+		frodo.setLastName(null);
+
+		MockHttpServletResponse response = postAndGet(peopleLink, mapper.writeValueAsString(frodo),
+				MediaType.APPLICATION_JSON);
+		String responseBody = response.getContentAsString();
+
+		assertEquals(JsonPath.read(responseBody, "$.firstName"), "Frodo");
+		assertNull(JsonPath.read(responseBody, "$.lastName"));
+	}
+
+	
+	@Test
+	public void putShouldWorkDespiteExistingLinks() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+
+		Person frodo = new Person("Frodo", "Baggins");
+		String frodoString = mapper.writeValueAsString(frodo);
+
+		MockHttpServletResponse createdPerson = postAndGet(peopleLink, frodoString, MediaType.APPLICATION_JSON);
+
+		Link frodoLink = client.assertHasLinkWithRel("self", createdPerson);
+		assertJsonPathEquals("$.firstName", "Frodo", createdPerson);
+
+		String bilboWithFrodosLinks = createdPerson.getContentAsString().replace("Frodo", "Bilbo");
+
+		MockHttpServletResponse overwrittenResponse = putAndGet(frodoLink, bilboWithFrodosLinks, MediaType.APPLICATION_JSON);
+
+		client.assertHasLinkWithRel("self", overwrittenResponse);
+		assertJsonPathEquals("$.firstName", "Bilbo", overwrittenResponse);
+	}
+
+	
+	@Test
+	public void doesNotAllowGetToCollectionResourceIfFindAllIsNotExported() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(get(link.getHref())).
+				andExpect(status().isMethodNotAllowed());
+	}
+
+	
+	@Test
+	public void doesNotAllowPostToCollectionResourceIfSaveIsNotExported() throws Exception {
+
+		Link link = client.discoverUnique("addresses");
+
+		mvc.perform(post(link.getHref()).content("{}").contentType(MediaType.APPLICATION_JSON)).
+				andExpect(status().isMethodNotAllowed());
+	}
+
+	
+	@Test
+	public void returnsProjectionIfRequested() throws Exception {
+
+		Link orders = client.discoverUnique("orders");
+
+		MockHttpServletResponse response = client.request(orders);
+		Link orderLink = assertContentLinkWithRel("self", response, true).expand();
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(orderLink.getHref());
+		String uri = builder.queryParam("projection", "summary").build().toUriString();
+
+		response = mvc.perform(get(uri)). 
+				andExpect(status().isOk()). 
+				andExpect(jsonPath("$.price", is(2.5))).
+				andReturn().getResponse();
+
+		assertJsonPathDoesntExist("$.lineItems", response);
+	}
+
+	
+	@Test
+	public void relProviderDetectsCustomizedMapping() {
+		assertThat(relProvider.getCollectionResourceRelFor(Person.class), is("people"));
+	}
+
+	
+	@Test
+	public void onlyLinksShouldAppearWhenExecuteSearchCompact() throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		Person daenerys = new Person("Daenerys", "Targaryen");
+		String daenerysString = mapper.writeValueAsString(daenerys);
+
+		MockHttpServletResponse createdPerson = postAndGet(peopleLink, daenerysString, MediaType.APPLICATION_JSON);
+		Link daenerysLink = client.assertHasLinkWithRel("self", createdPerson);
+		assertJsonPathEquals("$.firstName", "Daenerys", createdPerson);
+
+		Link searchLink = client.discoverUnique(peopleLink, "search");
+		Link byFirstNameLink = client.discoverUnique(searchLink, "findFirstPersonByFirstName");
+
+		MockHttpServletResponse response = client.request(byFirstNameLink.expand("Daenerys"),
+				MediaType.parseMediaType("application/x-spring-data-compact+json"));
+
+		String responseBody = response.getContentAsString();
+
+		JSONArray personLinks = JsonPath.<JSONArray> read(responseBody, "$.links[?(@.rel=='person')].href");
+
+		assertThat(personLinks, hasSize(1));
+		assertThat(personLinks.get(0), is((Object) daenerysLink.getHref()));
+		assertThat(JsonPath.<JSONArray> read(responseBody, "$.content"), hasSize(0));
+	}
+
+	
+	@Test
+	public void rendersExcerptProjectionsCorrectly() throws Exception {
+
+		Link authorsLink = client.discoverUnique("authors");
+
+		MockHttpServletResponse response = client.request(authorsLink);
+		String firstAuthorPath = "$._embedded.authors[0]";
+
+		
+		assertHasJsonPathValue(firstAuthorPath.concat(".name"), response);
+
+		
+		assertHasJsonPathValue(firstAuthorPath.concat("._embedded.books[0].title"), response);
+		assertHasJsonPathValue(firstAuthorPath.concat("._embedded.books[0]._links.self"), response);
+		assertHasJsonPathValue(firstAuthorPath.concat("._links.books"), response);
+
+		
+		String content = response.getContentAsString();
+		String href = JsonPath.read(content, firstAuthorPath.concat("._links.self.href"));
+
+		client.follow(new Link(href)).andExpect(client.hasLinkWithRel("books"));
+	}
+
+	
+	@Test
+	public void returns404WhenTryingToDeleteANonExistingResource() throws Exception {
+
+		Link receiptsLink = client.discoverUnique("receipts");
+
+		mvc.perform(delete(receiptsLink.getHref().concat("/{id}"), 4711)).
+				andExpect(status().isNotFound());
+	}
+
+	
+	@Test
+	public void execturesSearchThatTakesASort() throws Exception {
+
+		Link booksLink = client.discoverUnique("books");
+		Link searchLink = client.discoverUnique(booksLink, "search");
+		Link findBySortedLink = client.discoverUnique(searchLink, "find-by-sorted");
+
+		
+		assertThat(findBySortedLink.isTemplated(), is(true));
+		assertThat(findBySortedLink.getVariableNames(), hasItems("sort", "projection"));
+
+		
+		client.follow(findBySortedLink.expand("title,desc")).
+				andExpect(jsonPath("$._embedded.books[0].title").value("Spring Data (Second Edition)")).
+				andExpect(jsonPath("$._embedded.books[1].title").value("Spring Data")).
+				andExpect(client.hasLinkWithRel("self"));
+
+		client.follow(findBySortedLink.expand("title,asc")).
+				andExpect(jsonPath("$._embedded.books[0].title").value("Spring Data")).
+				andExpect(jsonPath("$._embedded.books[1].title").value("Spring Data (Second Edition)")).
+				andExpect(client.hasLinkWithRel("self"));
+	}
+
+	
+	@Test
+	public void returnConflictWhenConcurrentlyEditingVersionedEntity() throws Exception {
+
+		Link receiptLink = client.discoverUnique("receipts");
+
+		Receipt receipt = new Receipt();
+		receipt.setAmount(new BigDecimal(50));
+		receipt.setSaleItem("Springy Tacos");
+
+		String stringReceipt = mapper.writeValueAsString(receipt);
+
+		MockHttpServletResponse createdReceipt = postAndGet(receiptLink, stringReceipt, MediaType.APPLICATION_JSON);
+		Link tacosLink = client.assertHasLinkWithRel("self", createdReceipt);
+		assertJsonPathEquals("$.saleItem", "Springy Tacos", createdReceipt);
+
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(tacosLink.getHref());
+		String concurrencyTag = createdReceipt.getHeader("ETag");
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyBurritos\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", concurrencyTag)).andExpect(
+				status().is2xxSuccessful());
+
+		mvc.perform(
+				patch(builder.build().toUriString()).content("{ \"saleItem\" : \"SpringyTequila\" }")
+						.contentType(MediaType.APPLICATION_JSON).header("If-Match", "\"falseETag\"")).andExpect(
+				status().isPreconditionFailed());
+	}
+
+	
+	@Test
+	public void invokesCustomControllerAndBindsDomainObjectCorrectly() throws Exception {
+
+		MockHttpServletResponse authorsResponse = client.request(client.discoverUnique("authors"));
+
+		String authorUri = JsonPath.read(authorsResponse.getContentAsString(), "$._embedded.authors[0]._links.self.href");
+
+		mvc.perform(delete(authorUri)).
+				andExpect(status().isIAmATeapot());
+	}
+
+	
+	@Test
+	public void augmentsCollectionAssociationUsingPost() throws Exception {
+
+		List<Link> links = preparePersonResources(new Person("Frodo", "Baggins"), 
+				new Person("Bilbo", "Baggins"));
+
+		Link frodosSiblingsLink = links.get(0).expand();
+		Link bilboLink = links.get(1);
+
+		for (int i = 1; i <= 2; i++) {
+
+			mvc.perform(post(frodosSiblingsLink.getHref()).
+					content(bilboLink.getHref()).
+					contentType(TEXT_URI_LIST)).
+					andExpect(status().isNoContent());
+
+			mvc.perform(get(frodosSiblingsLink.getHref())).
+					andExpect(jsonPath("$._embedded.people", hasSize(i)));
+		}
+	}
+
+	private List<Link> preparePersonResources(Person primary, Person... persons) throws Exception {
+
+		Link peopleLink = client.discoverUnique("people");
+		List<Link> links = new ArrayList<Link>();
+
+		MockHttpServletResponse primaryResponse = postAndGet(peopleLink, mapper.writeValueAsString(primary),
+				MediaType.APPLICATION_JSON);
+		links.add(client.assertHasLinkWithRel("siblings", primaryResponse));
+
+		for (Person person : persons) {
+
+			String payload = mapper.writeValueAsString(person);
+			MockHttpServletResponse response = postAndGet(peopleLink, payload, MediaType.APPLICATION_JSON);
+
+			links.add(client.assertHasLinkWithRel(Link.REL_SELF, response));
+		}
+
+		return links;
+	}
+
+	
+	private void assertSiblingNames(Link link, String... siblingNames) throws Exception {
+
+		String responseBody = client.request(link).getContentAsString();
+		List<String> persons = JsonPath.read(responseBody, "$._embedded.people[*].firstName");
+
+		assertThat(persons, hasSize(siblingNames.length));
+		assertThat(persons, hasItems(siblingNames));
+	}
+
+	private void assertPersonWithNameAndSiblingLink(String name) throws Exception {
+
+		MockHttpServletResponse response = client.request(client.discoverUnique("people"));
+
+		String jsonPath = String.format("$._embedded.people[?(@.firstName == '%s')][0]", name);
+
+		
+		Object john = JsonPath.read(response.getContentAsString(), jsonPath);
+		assertThat(john, is(notNullValue()));
+		assertThat(JsonPath.read(john, "$.firstName"), is(notNullValue()));
+
+		
+		Link selfLink = new Link(JsonPath.<String> read(john, "$._links.self.href"));
+		client.follow(selfLink).
+				andExpect(status().isOk()).
+				andExpect(jsonPath("$._links.siblings", is(notNullValue())));
+	}
+
+	private static String toUriList(Link... links) {
+
+		List<String> uris = new ArrayList<String>(links.length);
+
+		for (Link link : links) {
+			uris.add(link.expand().getHref());
+		}
+
+		return StringUtils.collectionToDelimitedString(uris, "\n");
+	}
+}
+
+<code block>
+
+package org.springframework.data.rest.webmvc.solr;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+import java.util.Arrays;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.ClassRule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.rest.webmvc.AbstractWebIntegrationTests;
+import org.springframework.data.solr.repository.config.EnableSolrRepositories;
+import org.springframework.hateoas.Link;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+
+@ContextConfiguration(classes = { SolrWebTests.MyConf.class })
+public class SolrWebTests extends AbstractWebIntegrationTests {
+
+	public static @ClassRule TemporaryFolder TEMP_FOLDER = new TemporaryFolder();
+
+	private static final Product PLAYSTATION = new Product("1", "playstation", "electronic", "game", "media");
+	private static final Product GAMEBOY = new Product("2", "gameboy", "electronic");
+	private static final Product AMIGA500 = new Product("3", "amiga500", "ancient");
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+
+	@Configuration
+	@EnableSolrRepositories
+	@Import(value = { SolrInfrastructureConfig.class })
+	static class MyConf {
+
+		@Bean
+		String solrHomeDir() {
+			return TEMP_FOLDER.getRoot().getAbsolutePath();
+		}
+	}
+
+	@Autowired ProductRepository repo;
+
+	@Before
+	public void setUp() {
+
+		super.setUp();
+		repo.save(Arrays.asList(PLAYSTATION, GAMEBOY, AMIGA500));
+	}
+
+	@After
+	public void tearDown() {
+		repo.deleteAll();
+	}
+
+	
+	@Test
+	public void allowsPaginationThroughData() throws Exception {
+
+		MockHttpServletResponse response = client.request("/products?page=0&size=1");
+
+		Link nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_PREVIOUS, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		nextLink = client.assertHasLinkWithRel(Link.REL_NEXT, response);
+
+		response = client.request(nextLink);
+		client.assertHasLinkWithRel(Link.REL_PREVIOUS, response);
+		assertDoesNotHaveLinkWithRel(Link.REL_NEXT, response);
+	}
+
+	
+	@Test
+	public void allowsRetrievingDataById() throws Exception {
+		requestAndCompare(PLAYSTATION);
+	}
+
+	
+	@Test
+	public void createsEntitesCorrectly() throws Exception {
+
+		Product product = new Product("4", "iWatch", "trends", "scary");
+
+		mvc.perform(
+				put("/products/{id}", 4).content(MAPPER.writeValueAsString(product)).contentType(MediaType.APPLICATION_JSON))
+				.andExpect(status().isCreated()).andReturn().getResponse();
+
+		assertJsonDocumentMatches(product);
+	}
+
+	
+	@Test
+	public void deletesEntitiesCorrectly() throws Exception {
+		deleteAndVerify(new Link("/products/1"));
+	}
+
+	
+	@Override
+	protected Iterable<String> expectedRootLinkRels() {
+		return Arrays.asList("products");
+	}
+
+	private void assertJsonDocumentMatches(Product reference) throws Exception {
+		requestAndCompare(reference);
+	}
+
+	private MockHttpServletResponse requestAndCompare(Product reference) throws Exception {
+
+		MockHttpServletResponse response = client.request("/products/" + reference.getId());
+
+		assertJsonPathEquals("name", reference.getName(), response);
+		assertJsonPathEquals("categories", MAPPER.writeValueAsString(reference.getCategories()), response);
+
+		return response;
+	}
+}

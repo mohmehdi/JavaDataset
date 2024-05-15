@@ -1,0 +1,8 @@
+Java_Projects/jOOQ/jOOQ-227254cf/curr/jOOQ/src/main/java/org/jooq/Result.java
+Java_Projects/jOOQ/jOOQ-227254cf/curr/jOOQ/src/main/java/org/jooq/impl/ResultImpl.java
+Java_Projects/jOOQ/jOOQ-227254cf/prev/jOOQ/src/main/java/org/jooq/Result.java
+Java_Projects/jOOQ/jOOQ-227254cf/prev/jOOQ/src/main/java/org/jooq/impl/ResultImpl.java
+Java_Projects/jOOQ/jOOQ-58a4e74d/curr/jOOQ/src/main/java/org/jooq/tools/Convert.java
+Java_Projects/jOOQ/jOOQ-58a4e74d/curr/jOOQ/src/test/java/org/jooq/test/ConvertAllTest.java
+Java_Projects/jOOQ/jOOQ-58a4e74d/prev/jOOQ/src/main/java/org/jooq/tools/Convert.java
+Java_Projects/jOOQ/jOOQ-58a4e74d/prev/jOOQ/src/test/java/org/jooq/test/ConvertAllTest.java

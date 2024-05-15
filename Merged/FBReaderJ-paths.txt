@@ -1,0 +1,8 @@
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/curr/src/org/geometerplus/android/fbreader/FBReader.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/curr/src/org/geometerplus/android/fbreader/MenuData.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/curr/src/org/geometerplus/android/fbreader/preferences/PreferenceActivity.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/curr/src/org/geometerplus/android/fbreader/preferences/ZLCheckBoxPreference.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/prev/src/org/geometerplus/android/fbreader/FBReader.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/prev/src/org/geometerplus/android/fbreader/MenuData.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/prev/src/org/geometerplus/android/fbreader/preferences/PreferenceActivity.java
+Java_Projects/FBReaderJ/FBReaderJ-42e0649f/prev/src/org/geometerplus/android/fbreader/preferences/ZLCheckBoxPreference.java

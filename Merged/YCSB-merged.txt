@@ -1,0 +1,2756 @@
+
+
+package com.yahoo.ycsb;
+
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Enumeration;
+import java.util.Properties;
+import java.util.Vector;
+
+import com.yahoo.ycsb.measurements.Measurements;
+import com.yahoo.ycsb.measurements.exporter.MeasurementsExporter;
+import com.yahoo.ycsb.measurements.exporter.TextMeasurementsExporter;
+
+
+
+
+class StatusThread extends Thread
+{
+	Vector<Thread> _threads;
+	String _label;
+	boolean _standardstatus;
+	
+	
+	public static final long sleeptime=10000;
+
+	public StatusThread(Vector<Thread> threads, String label, boolean standardstatus)
+	{
+		_threads=threads;
+		_label=label;
+		_standardstatus=standardstatus;
+	}
+
+	
+	public void run()
+	{
+		long st=System.currentTimeMillis();
+
+		long lasten=st;
+		long lasttotalops=0;
+		
+		boolean alldone;
+		SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS");
+		
+		do 
+		{
+			alldone=true;
+
+			int totalops=0;
+
+			
+			for (Thread t : _threads)
+			{
+				if (t.getState()!=Thread.State.TERMINATED)
+				{
+					alldone=false;
+				}
+
+				ClientThread ct=(ClientThread)t;
+				totalops+=ct.getOpsDone();
+			}
+
+			long en=System.currentTimeMillis();
+
+			long interval=en-st;
+			
+
+			double curthroughput=1000.0*(((double)(totalops-lasttotalops))/((double)(en-lasten)));
+			
+			lasttotalops=totalops;
+			lasten=en;
+			
+			DecimalFormat d = new DecimalFormat("#.##");
+			String label = _label + format.format(new Date());
+
+			StringBuilder msg = new StringBuilder(label).append(" ").append(interval/1000).append(" sec: ");
+			msg.append(totalops).append(" operations; ");
+
+			if (totalops != 0) {
+				msg.append(d.format(curthroughput)).append(" current ops/sec; ");
+			}
+
+			msg.append(Measurements.getMeasurements().getSummary());
+
+			System.err.println(msg);
+
+			if (_standardstatus) {
+				System.out.println(msg);
+			}
+
+			try
+			{
+				sleep(sleeptime);
+			}
+			catch (InterruptedException e)
+			{
+				
+			}
+
+		}
+		while (!alldone);
+	}
+}
+
+
+class ClientThread extends Thread
+{
+	DB _db;
+	boolean _dotransactions;
+	Workload _workload;
+	int _opcount;
+	double _target;
+
+	int _opsdone;
+	int _threadid;
+	int _threadcount;
+	Object _workloadstate;
+	Properties _props;
+
+
+	
+	public ClientThread(DB db, boolean dotransactions, Workload workload, int threadid, int threadcount, Properties props, int opcount, double targetperthreadperms)
+	{
+		
+		_db=db;
+		_dotransactions=dotransactions;
+		_workload=workload;
+		_opcount=opcount;
+		_opsdone=0;
+		_target=targetperthreadperms;
+		_threadid=threadid;
+		_threadcount=threadcount;
+		_props=props;
+		
+	}
+
+	public int getOpsDone()
+	{
+		return _opsdone;
+	}
+
+	public void run()
+	{
+		try
+		{
+			_db.init();
+		}
+		catch (DBException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+
+		try
+		{
+			_workloadstate=_workload.initThread(_props,_threadid,_threadcount);
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+
+		
+		try
+		{
+		   
+		   
+		   if ( (_target>0) && (_target<=1.0) ) 
+		   {
+		      sleep(Utils.random().nextInt((int)(1.0/_target)));
+		   }
+		}
+		catch (InterruptedException e)
+		{
+		  
+		}
+		
+		try
+		{
+			if (_dotransactions)
+			{
+				long st=System.currentTimeMillis();
+
+				while (((_opcount == 0) || (_opsdone < _opcount)) && !_workload.isStopRequested())
+				{
+
+					if (!_workload.doTransaction(_db,_workloadstate))
+					{
+						break;
+					}
+
+					_opsdone++;
+
+					throttle(st);
+				}
+			}
+			else
+			{
+				long st=System.currentTimeMillis();
+
+				while (((_opcount == 0) || (_opsdone < _opcount)) && !_workload.isStopRequested())
+				{
+
+					if (!_workload.doInsert(_db,_workloadstate))
+					{
+						break;
+					}
+
+					_opsdone++;
+
+					throttle(st);
+				}
+			}
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			_db.cleanup();
+		}
+		catch (DBException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+	}
+
+    private void throttle(long currTimeMillis) {
+        
+        if (_target>0)
+        {
+        	
+        	
+        	
+        	
+        	while (System.currentTimeMillis()-currTimeMillis<((double)_opsdone)/_target)
+        	{
+        		try
+        		{
+        			sleep(1);
+        		}
+        		catch (InterruptedException e)
+        		{
+        		  
+        		}
+
+        	}
+        }
+    }
+}
+
+
+public class Client
+{
+
+	public static final String DEFAULT_RECORD_COUNT = "0";
+
+    
+	public static final String OPERATION_COUNT_PROPERTY="operationcount";
+
+    
+	public static final String RECORD_COUNT_PROPERTY="recordcount";
+
+    
+	public static final String WORKLOAD_PROPERTY="workload";
+	
+	
+    public static final String DB_PROPERTY="db";
+
+    
+    public static final String EXPORTER_PROPERTY="exporter";
+
+    
+    public static final String EXPORT_FILE_PROPERTY="exportfile";
+
+    
+    public static final String THREAD_COUNT_PROPERTY="threadcount";
+
+	
+	public static final String INSERT_COUNT_PROPERTY="insertcount";
+	
+	
+    public static final String TARGET_PROPERTY="target";
+
+    
+  public static final String MAX_EXECUTION_TIME = "maxexecutiontime";
+
+	public static void usageMessage()
+	{
+		System.out.println("Usage: java com.yahoo.ycsb.Client [options]");
+		System.out.println("Options:");
+		System.out.println("  -threads n: execute using n threads (default: 1) - can also be specified as the \n" +
+				"              \"threadcount\" property using -p");
+		System.out.println("  -target n: attempt to do n operations per second (default: unlimited) - can also\n" +
+				"             be specified as the \"target\" property using -p");
+		System.out.println("  -load:  run the loading phase of the workload");
+		System.out.println("  -t:  run the transactions phase of the workload (default)");
+		System.out.println("  -db dbname: specify the name of the DB to use (default: com.yahoo.ycsb.BasicDB) - \n" +
+				"              can also be specified as the \"db\" property using -p");
+		System.out.println("  -P propertyfile: load properties from the given file. Multiple files can");
+		System.out.println("                   be specified, and will be processed in the order specified");
+		System.out.println("  -p name=value:  specify a property to be passed to the DB and workloads;");
+		System.out.println("                  multiple properties can be specified, and override any");
+		System.out.println("                  values in the propertyfile");
+		System.out.println("  -s:  show status during run (default: no status)");
+		System.out.println("  -l label:  use label for status (e.g. to label one experiment out of a whole batch)");
+		System.out.println("");
+		System.out.println("Required properties:");
+		System.out.println("  "+WORKLOAD_PROPERTY+": the name of the workload class to use (e.g. com.yahoo.ycsb.workloads.CoreWorkload)");
+		System.out.println("");
+		System.out.println("To run the transaction phase from multiple servers, start a separate client on each.");
+		System.out.println("To run the load phase from multiple servers, start a separate client on each; additionally,");
+		System.out.println("use the \"insertcount\" and \"insertstart\" properties to divide up the records to be inserted");
+	}
+
+	public static boolean checkRequiredProperties(Properties props)
+	{
+		if (props.getProperty(WORKLOAD_PROPERTY)==null)
+		{
+			System.out.println("Missing property: "+WORKLOAD_PROPERTY);
+			return false;
+		}
+
+		return true;
+	}
+
+
+	
+	private static void exportMeasurements(Properties props, int opcount, long runtime)
+			throws IOException
+	{
+		MeasurementsExporter exporter = null;
+		try
+		{
+			
+			OutputStream out;
+			String exportFile = props.getProperty(EXPORT_FILE_PROPERTY);
+			if (exportFile == null)
+			{
+				out = System.out;
+			} else
+			{
+				out = new FileOutputStream(exportFile);
+			}
+
+			
+			String exporterStr = props.getProperty(EXPORTER_PROPERTY, "com.yahoo.ycsb.measurements.exporter.TextMeasurementsExporter");
+			try
+			{
+				exporter = (MeasurementsExporter) Class.forName(exporterStr).getConstructor(OutputStream.class).newInstance(out);
+			} catch (Exception e)
+			{
+				System.err.println("Could not find exporter " + exporterStr
+						+ ", will use default text reporter.");
+				e.printStackTrace();
+				exporter = new TextMeasurementsExporter(out);
+			}
+
+			exporter.write("OVERALL", "RunTime(ms)", runtime);
+			double throughput = 1000.0 * ((double) opcount) / ((double) runtime);
+			exporter.write("OVERALL", "Throughput(ops/sec)", throughput);
+
+			Measurements.getMeasurements().exportMeasurements(exporter);
+		} finally
+		{
+			if (exporter != null)
+			{
+				exporter.close();
+			}
+		}
+	}
+	
+	@SuppressWarnings("unchecked")
+	public static void main(String[] args)
+	{
+		String dbname;
+		Properties props=new Properties();
+		Properties fileprops=new Properties();
+		boolean dotransactions=true;
+		int threadcount=1;
+		int target=0;
+		boolean status=false;
+		String label="";
+
+		
+		int argindex=0;
+
+		if (args.length==0)
+		{
+			usageMessage();
+			System.exit(0);
+		}
+
+		while (args[argindex].startsWith("-"))
+		{
+			if (args[argindex].compareTo("-threads")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int tcount=Integer.parseInt(args[argindex]);
+				props.setProperty(THREAD_COUNT_PROPERTY, tcount+"");
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-target")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int ttarget=Integer.parseInt(args[argindex]);
+				props.setProperty(TARGET_PROPERTY, ttarget+"");
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-load")==0)
+			{
+				dotransactions=false;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-t")==0)
+			{
+				dotransactions=true;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-s")==0)
+			{
+				status=true;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-db")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				props.setProperty(DB_PROPERTY,args[argindex]);
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-l")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				label=args[argindex];
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-P")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				String propfile=args[argindex];
+				argindex++;
+
+				Properties myfileprops=new Properties();
+				try
+				{
+					myfileprops.load(new FileInputStream(propfile));
+				}
+				catch (IOException e)
+				{
+					System.out.println(e.getMessage());
+					System.exit(0);
+				}
+
+				
+				for (Enumeration e=myfileprops.propertyNames(); e.hasMoreElements(); )
+				{
+				   String prop=(String)e.nextElement();
+				   
+				   fileprops.setProperty(prop,myfileprops.getProperty(prop));
+				}
+
+			}
+			else if (args[argindex].compareTo("-p")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int eq=args[argindex].indexOf('=');
+				if (eq<0)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+
+				String name=args[argindex].substring(0,eq);
+				String value=args[argindex].substring(eq+1);
+				props.put(name,value);
+				
+				argindex++;
+			}
+			else
+			{
+				System.out.println("Unknown option "+args[argindex]);
+				usageMessage();
+				System.exit(0);
+			}
+
+			if (argindex>=args.length)
+			{
+				break;
+			}
+		}
+
+		if (argindex!=args.length)
+		{
+			usageMessage();
+			System.exit(0);
+		}
+
+		
+		
+
+		
+
+		
+		for (Enumeration e=props.propertyNames(); e.hasMoreElements(); )
+		{
+		   String prop=(String)e.nextElement();
+		   
+		   fileprops.setProperty(prop,props.getProperty(prop));
+		}
+
+		props=fileprops;
+
+		if (!checkRequiredProperties(props))
+		{
+			System.exit(0);
+		}
+		
+		long maxExecutionTime = Integer.parseInt(props.getProperty(MAX_EXECUTION_TIME, "0"));
+
+		
+		threadcount=Integer.parseInt(props.getProperty(THREAD_COUNT_PROPERTY,"1"));
+		dbname=props.getProperty(DB_PROPERTY,"com.yahoo.ycsb.BasicDB");
+		target=Integer.parseInt(props.getProperty(TARGET_PROPERTY,"0"));
+		
+		
+		double targetperthreadperms=-1;
+		if (target>0)
+		{
+			double targetperthread=((double)target)/((double)threadcount);
+			targetperthreadperms=targetperthread/1000.0;
+		}	 
+
+		System.out.println("YCSB Client 0.1");
+		System.out.print("Command line:");
+		for (int i=0; i<args.length; i++)
+		{
+			System.out.print(" "+args[i]);
+		}
+		System.out.println();
+		System.err.println("Loading workload...");
+		
+		
+		
+		
+		Thread warningthread=new Thread() 
+		{
+			public void run()
+			{
+				try
+				{
+					sleep(2000);
+				}
+				catch (InterruptedException e)
+				{
+					return;
+				}
+				System.err.println(" (might take a few minutes for large data sets)");
+			}
+		};
+
+		warningthread.start();
+		
+		
+		Measurements.setProperties(props);
+		
+		
+		ClassLoader classLoader = Client.class.getClassLoader();
+
+		Workload workload=null;
+
+		try 
+		{
+			Class workloadclass = classLoader.loadClass(props.getProperty(WORKLOAD_PROPERTY));
+
+			workload=(Workload)workloadclass.newInstance();
+		}
+		catch (Exception e) 
+		{  
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			workload.init(props);
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+		
+		warningthread.interrupt();
+
+		
+
+		System.err.println("Starting test.");
+
+		int opcount;
+		if (dotransactions)
+		{
+			opcount=Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY,"0"));
+		}
+		else
+		{
+			if (props.containsKey(INSERT_COUNT_PROPERTY))
+			{
+				opcount=Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY,"0"));
+			}
+			else
+			{
+				opcount=Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
+			}
+		}
+
+		Vector<Thread> threads=new Vector<Thread>();
+
+		for (int threadid=0; threadid<threadcount; threadid++)
+		{
+			DB db=null;
+			try
+			{
+				db=DBFactory.newDB(dbname,props);
+			}
+			catch (UnknownDBException e)
+			{
+				System.out.println("Unknown DB "+dbname);
+				System.exit(0);
+			}
+
+			Thread t=new ClientThread(db,dotransactions,workload,threadid,threadcount,props,opcount/threadcount,targetperthreadperms);
+
+			threads.add(t);
+			
+		}
+
+		StatusThread statusthread=null;
+
+		if (status)
+		{
+			boolean standardstatus=false;
+			if (props.getProperty(Measurements.MEASUREMENT_TYPE_PROPERTY,"").compareTo("timeseries")==0)
+			{
+				standardstatus=true;
+			}	
+			statusthread=new StatusThread(threads,label,standardstatus);
+			statusthread.start();
+		}
+
+		long st=System.currentTimeMillis();
+
+		for (Thread t : threads)
+		{
+			t.start();
+		}
+		
+    Thread terminator = null;
+    
+    if (maxExecutionTime > 0) {
+      terminator = new TerminatorThread(maxExecutionTime, threads, workload);
+      terminator.start();
+    }
+    
+    int opsDone = 0;
+
+		for (Thread t : threads)
+		{
+			try
+			{
+				t.join();
+				opsDone += ((ClientThread)t).getOpsDone();
+			}
+			catch (InterruptedException e)
+			{
+			}
+		}
+
+		long en=System.currentTimeMillis();
+		
+		if (terminator != null && !terminator.isInterrupted()) {
+      terminator.interrupt();
+    }
+
+		if (status)
+		{
+			statusthread.interrupt();
+		}
+
+		try
+		{
+			workload.cleanup();
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			exportMeasurements(props, opsDone, en - st);
+		} catch (IOException e)
+		{
+			System.err.println("Could not export measurements, error: " + e.getMessage());
+			e.printStackTrace();
+			System.exit(-1);
+		}
+
+		System.exit(0);
+	}
+}
+
+<code block>
+
+
+package com.yahoo.ycsb.workloads;
+
+import java.util.Properties;
+import com.yahoo.ycsb.*;
+import com.yahoo.ycsb.generator.CounterGenerator;
+import com.yahoo.ycsb.generator.DiscreteGenerator;
+import com.yahoo.ycsb.generator.ExponentialGenerator;
+import com.yahoo.ycsb.generator.Generator;
+import com.yahoo.ycsb.generator.ConstantIntegerGenerator;
+import com.yahoo.ycsb.generator.HotspotIntegerGenerator;
+import com.yahoo.ycsb.generator.HistogramGenerator;
+import com.yahoo.ycsb.generator.IntegerGenerator;
+import com.yahoo.ycsb.generator.ScrambledZipfianGenerator;
+import com.yahoo.ycsb.generator.SkewedLatestGenerator;
+import com.yahoo.ycsb.generator.UniformIntegerGenerator;
+import com.yahoo.ycsb.generator.ZipfianGenerator;
+import com.yahoo.ycsb.measurements.Measurements;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Vector;
+import java.util.List;
+import java.util.Map;
+import java.util.ArrayList;
+
+
+public class CoreWorkload extends Workload
+{
+
+	
+	public static final String TABLENAME_PROPERTY="table";
+
+	
+	public static final String TABLENAME_PROPERTY_DEFAULT="usertable";
+
+	public static String table;
+
+
+	
+	public static final String FIELD_COUNT_PROPERTY="fieldcount";
+	
+	
+	public static final String FIELD_COUNT_PROPERTY_DEFAULT="10";
+
+	int fieldcount;
+
+	private List<String> fieldnames;
+
+	
+	public static final String FIELD_LENGTH_DISTRIBUTION_PROPERTY="fieldlengthdistribution";
+	
+	public static final String FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT = "constant";
+
+	
+	public static final String FIELD_LENGTH_PROPERTY="fieldlength";
+	
+	public static final String FIELD_LENGTH_PROPERTY_DEFAULT="100";
+
+	
+	public static final String FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY = "fieldlengthhistogram";
+	
+	public static final String FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY_DEFAULT = "hist.txt";
+
+	
+	IntegerGenerator fieldlengthgenerator;
+	
+	
+	public static final String READ_ALL_FIELDS_PROPERTY="readallfields";
+	
+	
+	public static final String READ_ALL_FIELDS_PROPERTY_DEFAULT="true";
+
+	boolean readallfields;
+
+	
+	public static final String WRITE_ALL_FIELDS_PROPERTY="writeallfields";
+	
+	
+	public static final String WRITE_ALL_FIELDS_PROPERTY_DEFAULT="false";
+
+	boolean writeallfields;
+
+
+  
+  public static final String DATA_INTEGRITY_PROPERTY = "dataintegrity";
+  
+  
+  public static final String DATA_INTEGRITY_PROPERTY_DEFAULT = "false";
+
+  
+  private boolean dataintegrity;
+
+  
+  private final int DATA_INT_MATCH = 0;
+  private final int DATA_INT_DEVIATE = 1000;
+  private final int DATA_INT_UNEXPECTED_NULL = 2000;
+
+
+	
+	public static final String READ_PROPORTION_PROPERTY="readproportion";
+	
+	
+	public static final String READ_PROPORTION_PROPERTY_DEFAULT="0.95";
+
+	
+	public static final String UPDATE_PROPORTION_PROPERTY="updateproportion";
+	
+	
+	public static final String UPDATE_PROPORTION_PROPERTY_DEFAULT="0.05";
+
+	
+	public static final String INSERT_PROPORTION_PROPERTY="insertproportion";
+	
+	
+	public static final String INSERT_PROPORTION_PROPERTY_DEFAULT="0.0";
+
+	
+	public static final String SCAN_PROPORTION_PROPERTY="scanproportion";
+	
+	
+	public static final String SCAN_PROPORTION_PROPERTY_DEFAULT="0.0";
+	
+	
+	public static final String READMODIFYWRITE_PROPORTION_PROPERTY="readmodifywriteproportion";
+	
+	
+	public static final String READMODIFYWRITE_PROPORTION_PROPERTY_DEFAULT="0.0";
+	
+	
+	public static final String REQUEST_DISTRIBUTION_PROPERTY="requestdistribution";
+	
+	
+	public static final String REQUEST_DISTRIBUTION_PROPERTY_DEFAULT="uniform";
+
+	
+	public static final String MAX_SCAN_LENGTH_PROPERTY="maxscanlength";
+	
+	
+	public static final String MAX_SCAN_LENGTH_PROPERTY_DEFAULT="1000";
+	
+	
+	public static final String SCAN_LENGTH_DISTRIBUTION_PROPERTY="scanlengthdistribution";
+	
+	
+	public static final String SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT="uniform";
+	
+	
+	public static final String INSERT_ORDER_PROPERTY="insertorder";
+	
+	
+	public static final String INSERT_ORDER_PROPERTY_DEFAULT="hashed";
+	
+	
+  public static final String HOTSPOT_DATA_FRACTION = "hotspotdatafraction";
+  
+  
+  public static final String HOTSPOT_DATA_FRACTION_DEFAULT = "0.2";
+  
+  
+  public static final String HOTSPOT_OPN_FRACTION = "hotspotopnfraction";
+  
+  
+  public static final String HOTSPOT_OPN_FRACTION_DEFAULT = "0.8";
+	
+	IntegerGenerator keysequence;
+
+	DiscreteGenerator operationchooser;
+
+	IntegerGenerator keychooser;
+
+	Generator fieldchooser;
+
+	CounterGenerator transactioninsertkeysequence;
+	
+	IntegerGenerator scanlength;
+	
+	boolean orderedinserts;
+
+	int recordcount;
+	
+	protected static IntegerGenerator getFieldLengthGenerator(Properties p) throws WorkloadException{
+		IntegerGenerator fieldlengthgenerator;
+		String fieldlengthdistribution = p.getProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY, FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
+		int fieldlength=Integer.parseInt(p.getProperty(FIELD_LENGTH_PROPERTY,FIELD_LENGTH_PROPERTY_DEFAULT));
+		String fieldlengthhistogram = p.getProperty(FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY, FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY_DEFAULT);
+		if(fieldlengthdistribution.compareTo("constant") == 0) {
+			fieldlengthgenerator = new ConstantIntegerGenerator(fieldlength);
+		} else if(fieldlengthdistribution.compareTo("uniform") == 0) {
+			fieldlengthgenerator = new UniformIntegerGenerator(1, fieldlength);
+		} else if(fieldlengthdistribution.compareTo("zipfian") == 0) {
+			fieldlengthgenerator = new ZipfianGenerator(1, fieldlength);
+		} else if(fieldlengthdistribution.compareTo("histogram") == 0) {
+			try {
+				fieldlengthgenerator = new HistogramGenerator(fieldlengthhistogram);
+			} catch(IOException e) {
+				throw new WorkloadException("Couldn't read field length histogram file: "+fieldlengthhistogram, e);
+			}
+		} else {
+			throw new WorkloadException("Unknown field length distribution \""+fieldlengthdistribution+"\"");
+		}
+		return fieldlengthgenerator;
+	}
+	
+	
+	public void init(Properties p) throws WorkloadException
+	{
+		table = p.getProperty(TABLENAME_PROPERTY,TABLENAME_PROPERTY_DEFAULT);
+		
+		fieldcount=Integer.parseInt(p.getProperty(FIELD_COUNT_PROPERTY,FIELD_COUNT_PROPERTY_DEFAULT));
+    fieldnames = new ArrayList<String>();
+    for (int i = 0; i < fieldcount; i++) {
+        fieldnames.add("field" + i);
+    }
+		fieldlengthgenerator = CoreWorkload.getFieldLengthGenerator(p);
+		
+		double readproportion=Double.parseDouble(p.getProperty(READ_PROPORTION_PROPERTY,READ_PROPORTION_PROPERTY_DEFAULT));
+		double updateproportion=Double.parseDouble(p.getProperty(UPDATE_PROPORTION_PROPERTY,UPDATE_PROPORTION_PROPERTY_DEFAULT));
+		double insertproportion=Double.parseDouble(p.getProperty(INSERT_PROPORTION_PROPERTY,INSERT_PROPORTION_PROPERTY_DEFAULT));
+		double scanproportion=Double.parseDouble(p.getProperty(SCAN_PROPORTION_PROPERTY,SCAN_PROPORTION_PROPERTY_DEFAULT));
+		double readmodifywriteproportion=Double.parseDouble(p.getProperty(READMODIFYWRITE_PROPORTION_PROPERTY,READMODIFYWRITE_PROPORTION_PROPERTY_DEFAULT));
+		recordcount=Integer.parseInt(p.getProperty(Client.RECORD_COUNT_PROPERTY, Client.DEFAULT_RECORD_COUNT));
+		String requestdistrib=p.getProperty(REQUEST_DISTRIBUTION_PROPERTY,REQUEST_DISTRIBUTION_PROPERTY_DEFAULT);
+		int maxscanlength=Integer.parseInt(p.getProperty(MAX_SCAN_LENGTH_PROPERTY,MAX_SCAN_LENGTH_PROPERTY_DEFAULT));
+		String scanlengthdistrib=p.getProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY,SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
+		
+		int insertstart=Integer.parseInt(p.getProperty(INSERT_START_PROPERTY,INSERT_START_PROPERTY_DEFAULT));
+		
+		readallfields=Boolean.parseBoolean(p.getProperty(READ_ALL_FIELDS_PROPERTY,READ_ALL_FIELDS_PROPERTY_DEFAULT));
+		writeallfields=Boolean.parseBoolean(p.getProperty(WRITE_ALL_FIELDS_PROPERTY,WRITE_ALL_FIELDS_PROPERTY_DEFAULT));
+		
+    dataintegrity = Boolean.parseBoolean(p.getProperty(DATA_INTEGRITY_PROPERTY, DATA_INTEGRITY_PROPERTY_DEFAULT));
+    
+    
+    if (dataintegrity && !(p.getProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY, FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT)).equals("constant"))
+    {
+      System.err.println("Must have constant field size to check data integrity.");
+      System.exit(-1);
+    }
+
+		if (p.getProperty(INSERT_ORDER_PROPERTY,INSERT_ORDER_PROPERTY_DEFAULT).compareTo("hashed")==0)
+		{
+			orderedinserts=false;
+		}
+		else if (requestdistrib.compareTo("exponential")==0)
+		{
+                    double percentile = Double.parseDouble(p.getProperty(ExponentialGenerator.EXPONENTIAL_PERCENTILE_PROPERTY,
+                                                                         ExponentialGenerator.EXPONENTIAL_PERCENTILE_DEFAULT));
+                    double frac       = Double.parseDouble(p.getProperty(ExponentialGenerator.EXPONENTIAL_FRAC_PROPERTY,
+                                                                         ExponentialGenerator.EXPONENTIAL_FRAC_DEFAULT));
+                    keychooser = new ExponentialGenerator(percentile, recordcount*frac);
+		}
+		else
+		{
+			orderedinserts=true;
+		}
+
+		keysequence=new CounterGenerator(insertstart);
+		operationchooser=new DiscreteGenerator();
+		if (readproportion>0)
+		{
+			operationchooser.addValue(readproportion,"READ");
+		}
+
+		if (updateproportion>0)
+		{
+			operationchooser.addValue(updateproportion,"UPDATE");
+		}
+
+		if (insertproportion>0)
+		{
+			operationchooser.addValue(insertproportion,"INSERT");
+		}
+		
+		if (scanproportion>0)
+		{
+			operationchooser.addValue(scanproportion,"SCAN");
+		}
+		
+		if (readmodifywriteproportion>0)
+		{
+			operationchooser.addValue(readmodifywriteproportion,"READMODIFYWRITE");
+		}
+
+		transactioninsertkeysequence=new CounterGenerator(recordcount);
+		if (requestdistrib.compareTo("uniform")==0)
+		{
+			keychooser=new UniformIntegerGenerator(0,recordcount-1);
+		}
+		else if (requestdistrib.compareTo("zipfian")==0)
+		{
+			
+			
+			
+			
+			
+			
+			
+			int opcount=Integer.parseInt(p.getProperty(Client.OPERATION_COUNT_PROPERTY));
+			int expectednewkeys=(int)(((double)opcount)*insertproportion*2.0); 
+			
+			keychooser=new ScrambledZipfianGenerator(recordcount+expectednewkeys);
+		}
+		else if (requestdistrib.compareTo("latest")==0)
+		{
+			keychooser=new SkewedLatestGenerator(transactioninsertkeysequence);
+		}
+		else if (requestdistrib.equals("hotspot")) 
+		{
+      double hotsetfraction = Double.parseDouble(p.getProperty(
+          HOTSPOT_DATA_FRACTION, HOTSPOT_DATA_FRACTION_DEFAULT));
+      double hotopnfraction = Double.parseDouble(p.getProperty(
+          HOTSPOT_OPN_FRACTION, HOTSPOT_OPN_FRACTION_DEFAULT));
+      keychooser = new HotspotIntegerGenerator(0, recordcount - 1, 
+          hotsetfraction, hotopnfraction);
+    }
+		else
+		{
+			throw new WorkloadException("Unknown request distribution \""+requestdistrib+"\"");
+		}
+
+		fieldchooser=new UniformIntegerGenerator(0,fieldcount-1);
+		
+		if (scanlengthdistrib.compareTo("uniform")==0)
+		{
+			scanlength=new UniformIntegerGenerator(1,maxscanlength);
+		}
+		else if (scanlengthdistrib.compareTo("zipfian")==0)
+		{
+			scanlength=new ZipfianGenerator(1,maxscanlength);
+		}
+		else
+		{
+			throw new WorkloadException("Distribution \""+scanlengthdistrib+"\" not allowed for scan length");
+		}
+	}
+
+	public String buildKeyName(long keynum) {
+ 		if (!orderedinserts)
+ 		{
+ 			keynum=Utils.hash(keynum);
+ 		}
+		return "user"+keynum;
+	}
+	
+  
+  private HashMap<String, ByteIterator> buildSingleValue(String key) {
+    HashMap<String,ByteIterator> value = new HashMap<String,ByteIterator>();
+
+    String fieldkey = fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+    ByteIterator data;
+    if (dataintegrity) {
+      data = new StringByteIterator(buildDeterministicValue(key, fieldkey));
+    } else {
+      
+      data = new RandomByteIterator(fieldlengthgenerator.nextInt());
+    }
+    value.put(fieldkey,data);
+
+    return value;    
+  }
+
+  
+  private HashMap<String, ByteIterator> buildValues(String key) {        
+    HashMap<String,ByteIterator> values = new HashMap<String,ByteIterator>();
+
+    for (String fieldkey : fieldnames) {
+      ByteIterator data;
+      if (dataintegrity) {
+        data = new StringByteIterator(buildDeterministicValue(key, fieldkey));
+      } else {
+        
+        data = new RandomByteIterator(fieldlengthgenerator.nextInt());
+      }
+      values.put(fieldkey,data);
+    }
+    return values;
+  }
+
+  
+  private String buildDeterministicValue(String key, String fieldkey) {
+    int size = fieldlengthgenerator.nextInt();
+    StringBuilder sb = new StringBuilder(size);
+    sb.append(key);
+    sb.append(':');
+    sb.append(fieldkey);
+    while (sb.length() < size) {
+      sb.append(':');
+      sb.append(sb.toString().hashCode());
+    }
+    sb.setLength(size);
+
+    return sb.toString();
+  }
+
+	
+	public boolean doInsert(DB db, Object threadstate)
+	{
+		int keynum=keysequence.nextInt();
+		String dbkey = buildKeyName(keynum);
+		HashMap<String, ByteIterator> values = buildValues(dbkey);
+		if (db.insert(table,dbkey,values) == 0)
+			return true;
+		else
+			return false;
+	}
+
+	
+	public boolean doTransaction(DB db, Object threadstate)
+	{
+		String op=operationchooser.nextString();
+
+		if (op.compareTo("READ")==0)
+		{
+			doTransactionRead(db);
+		}
+		else if (op.compareTo("UPDATE")==0)
+		{
+			doTransactionUpdate(db);
+		}
+		else if (op.compareTo("INSERT")==0)
+		{
+			doTransactionInsert(db);
+		}
+		else if (op.compareTo("SCAN")==0)
+		{
+			doTransactionScan(db);
+		}
+		else
+		{
+			doTransactionReadModifyWrite(db);
+		}
+		
+		return true;
+	}
+
+  
+  protected void verifyRow(String key, HashMap<String,ByteIterator> cells) {
+    int matchType = DATA_INT_MATCH;
+    if (!cells.isEmpty()) {
+      for (Map.Entry<String, ByteIterator> entry : cells.entrySet()) {
+        if (!entry.getValue().toString().equals(
+            buildDeterministicValue(key, entry.getKey()))) {
+          matchType = DATA_INT_DEVIATE;
+          break;
+        }
+      }
+    } else {
+      
+      matchType = DATA_INT_UNEXPECTED_NULL;
+    }
+    Measurements.getMeasurements().measure("VERIFY", matchType);
+  }
+
+    int nextKeynum() {
+        int keynum;
+        if(keychooser instanceof ExponentialGenerator) {
+            do
+                {
+                    keynum=transactioninsertkeysequence.lastInt() - keychooser.nextInt();
+                }
+            while(keynum < 0);
+        } else {
+            do
+                {
+                    keynum=keychooser.nextInt();
+                }
+            while (keynum > transactioninsertkeysequence.lastInt());
+        }
+        return keynum;
+    }
+
+	public void doTransactionRead(DB db)
+	{
+		
+		int keynum = nextKeynum();
+		
+		String keyname = buildKeyName(keynum);
+		
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+
+    HashMap<String,ByteIterator> cells =
+        new HashMap<String,ByteIterator>();
+		db.read(table,keyname,fields,cells);
+
+    if (dataintegrity) {
+      verifyRow(keyname, cells);
+    }
+	}
+	
+	public void doTransactionReadModifyWrite(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String keyname = buildKeyName(keynum);
+
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+		
+		HashMap<String,ByteIterator> values;
+
+		if (writeallfields)
+		{
+		   
+		   values = buildValues(keyname);
+		}
+		else
+		{
+		   
+		   values = buildSingleValue(keyname);
+		}
+
+		
+
+		HashMap<String,ByteIterator> cells =
+		    new HashMap<String,ByteIterator>();
+
+		long st=System.nanoTime();
+
+		db.read(table,keyname,fields,cells);
+		
+		db.update(table,keyname,values);
+
+		long en=System.nanoTime();
+
+    if (dataintegrity) {
+      verifyRow(keyname, cells);
+    }
+
+		Measurements.getMeasurements().measure("READ-MODIFY-WRITE", (int)((en-st)/1000));
+	}
+	
+	public void doTransactionScan(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String startkeyname = buildKeyName(keynum);
+		
+		
+		int len=scanlength.nextInt();
+
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+
+		db.scan(table,startkeyname,len,fields,new Vector<HashMap<String,ByteIterator>>());
+	}
+
+	public void doTransactionUpdate(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String keyname=buildKeyName(keynum);
+
+		HashMap<String,ByteIterator> values;
+
+		if (writeallfields)
+		{
+		   
+		   values = buildValues(keyname);
+		}
+		else
+		{
+		   
+		   values = buildSingleValue(keyname);
+		}
+
+		db.update(table,keyname,values);
+	}
+
+	public void doTransactionInsert(DB db)
+	{
+		
+		int keynum=transactioninsertkeysequence.nextInt();
+
+		String dbkey = buildKeyName(keynum);
+
+		HashMap<String, ByteIterator> values = buildValues(dbkey);
+		db.insert(table,dbkey,values);
+	}
+}
+
+<code block>
+
+
+package com.yahoo.ycsb;
+
+
+import com.yahoo.ycsb.measurements.Measurements;
+import com.yahoo.ycsb.measurements.exporter.MeasurementsExporter;
+import com.yahoo.ycsb.measurements.exporter.TextMeasurementsExporter;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Enumeration;
+import java.util.Properties;
+import java.util.Vector;
+
+
+
+
+class StatusThread extends Thread
+{
+	Vector<Thread> _threads;
+	String _label;
+	boolean _standardstatus;
+	
+	
+	public static final long sleeptime=10000;
+
+	public StatusThread(Vector<Thread> threads, String label, boolean standardstatus)
+	{
+		_threads=threads;
+		_label=label;
+		_standardstatus=standardstatus;
+	}
+
+	
+	public void run()
+	{
+		long st=System.currentTimeMillis();
+
+		long lasten=st;
+		long lasttotalops=0;
+		
+		boolean alldone;
+		SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS");
+		
+		do 
+		{
+			alldone=true;
+
+			int totalops=0;
+
+			
+			for (Thread t : _threads)
+			{
+				if (t.getState()!=Thread.State.TERMINATED)
+				{
+					alldone=false;
+				}
+
+				ClientThread ct=(ClientThread)t;
+				totalops+=ct.getOpsDone();
+			}
+
+			long en=System.currentTimeMillis();
+
+			long interval=en-st;
+			
+
+			double curthroughput=1000.0*(((double)(totalops-lasttotalops))/((double)(en-lasten)));
+			
+			lasttotalops=totalops;
+			lasten=en;
+			
+			DecimalFormat d = new DecimalFormat("#.##");
+			String label = _label + format.format(new Date());
+
+			StringBuilder msg = new StringBuilder(label).append(" ").append(interval/1000).append(" sec: ");
+			msg.append(totalops).append(" operations; ");
+
+			if (totalops != 0) {
+				msg.append(d.format(curthroughput)).append(" current ops/sec; ");
+			}
+
+			msg.append(Measurements.getMeasurements().getSummary());
+
+			System.err.println(msg);
+
+			if (_standardstatus) {
+				System.out.println(msg);
+			}
+
+			try
+			{
+				sleep(sleeptime);
+			}
+			catch (InterruptedException e)
+			{
+				
+			}
+
+		}
+		while (!alldone);
+	}
+}
+
+
+class ClientThread extends Thread
+{
+	DB _db;
+	boolean _dotransactions;
+	Workload _workload;
+	int _opcount;
+	double _target;
+
+	int _opsdone;
+	int _threadid;
+	int _threadcount;
+	Object _workloadstate;
+	Properties _props;
+
+
+	
+	public ClientThread(DB db, boolean dotransactions, Workload workload, int threadid, int threadcount, Properties props, int opcount, double targetperthreadperms)
+	{
+		
+		_db=db;
+		_dotransactions=dotransactions;
+		_workload=workload;
+		_opcount=opcount;
+		_opsdone=0;
+		_target=targetperthreadperms;
+		_threadid=threadid;
+		_threadcount=threadcount;
+		_props=props;
+		
+	}
+
+	public int getOpsDone()
+	{
+		return _opsdone;
+	}
+
+	public void run()
+	{
+		try
+		{
+			_db.init();
+		}
+		catch (DBException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+
+		try
+		{
+			_workloadstate=_workload.initThread(_props,_threadid,_threadcount);
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+
+		
+		try
+		{
+		   
+		   
+		   if ( (_target>0) && (_target<=1.0) ) 
+		   {
+		      sleep(Utils.random().nextInt((int)(1.0/_target)));
+		   }
+		}
+		catch (InterruptedException e)
+		{
+		  
+		}
+		
+		try
+		{
+			if (_dotransactions)
+			{
+				long st=System.currentTimeMillis();
+
+				while (((_opcount == 0) || (_opsdone < _opcount)) && !_workload.isStopRequested())
+				{
+
+					if (!_workload.doTransaction(_db,_workloadstate))
+					{
+						break;
+					}
+
+					_opsdone++;
+
+					
+					if (_target>0)
+					{
+						
+						
+						
+						
+						while (System.currentTimeMillis()-st<((double)_opsdone)/_target)
+						{
+							try
+							{
+								sleep(1);
+							}
+							catch (InterruptedException e)
+							{
+							  
+							}
+
+						}
+					}
+				}
+			}
+			else
+			{
+				long st=System.currentTimeMillis();
+
+				while (((_opcount == 0) || (_opsdone < _opcount)) && !_workload.isStopRequested())
+				{
+
+					if (!_workload.doInsert(_db,_workloadstate))
+					{
+						break;
+					}
+
+					_opsdone++;
+
+					
+					if (_target>0)
+					{
+						
+						
+						
+						
+						while (System.currentTimeMillis()-st<((double)_opsdone)/_target)
+						{
+							try 
+							{
+								sleep(1);
+							}
+							catch (InterruptedException e)
+							{
+							  
+							}
+						}
+					}
+				}
+			}
+		}
+		catch (Exception e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			_db.cleanup();
+		}
+		catch (DBException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			return;
+		}
+	}
+}
+
+
+public class Client
+{
+
+    
+	public static final String OPERATION_COUNT_PROPERTY="operationcount";
+
+    
+	public static final String RECORD_COUNT_PROPERTY="recordcount";
+
+    
+	public static final String WORKLOAD_PROPERTY="workload";
+	
+	
+    public static final String DB_PROPERTY="db";
+
+    
+    public static final String EXPORTER_PROPERTY="exporter";
+
+    
+    public static final String EXPORT_FILE_PROPERTY="exportfile";
+
+    
+    public static final String THREAD_COUNT_PROPERTY="threadcount";
+
+	
+	public static final String INSERT_COUNT_PROPERTY="insertcount";
+	
+	
+    public static final String TARGET_PROPERTY="target";
+
+    
+  public static final String MAX_EXECUTION_TIME = "maxexecutiontime";
+
+	public static void usageMessage()
+	{
+		System.out.println("Usage: java com.yahoo.ycsb.Client [options]");
+		System.out.println("Options:");
+		System.out.println("  -threads n: execute using n threads (default: 1) - can also be specified as the \n" +
+				"              \"threadcount\" property using -p");
+		System.out.println("  -target n: attempt to do n operations per second (default: unlimited) - can also\n" +
+				"             be specified as the \"target\" property using -p");
+		System.out.println("  -load:  run the loading phase of the workload");
+		System.out.println("  -t:  run the transactions phase of the workload (default)");
+		System.out.println("  -db dbname: specify the name of the DB to use (default: com.yahoo.ycsb.BasicDB) - \n" +
+				"              can also be specified as the \"db\" property using -p");
+		System.out.println("  -P propertyfile: load properties from the given file. Multiple files can");
+		System.out.println("                   be specified, and will be processed in the order specified");
+		System.out.println("  -p name=value:  specify a property to be passed to the DB and workloads;");
+		System.out.println("                  multiple properties can be specified, and override any");
+		System.out.println("                  values in the propertyfile");
+		System.out.println("  -s:  show status during run (default: no status)");
+		System.out.println("  -l label:  use label for status (e.g. to label one experiment out of a whole batch)");
+		System.out.println("");
+		System.out.println("Required properties:");
+		System.out.println("  "+WORKLOAD_PROPERTY+": the name of the workload class to use (e.g. com.yahoo.ycsb.workloads.CoreWorkload)");
+		System.out.println("");
+		System.out.println("To run the transaction phase from multiple servers, start a separate client on each.");
+		System.out.println("To run the load phase from multiple servers, start a separate client on each; additionally,");
+		System.out.println("use the \"insertcount\" and \"insertstart\" properties to divide up the records to be inserted");
+	}
+
+	public static boolean checkRequiredProperties(Properties props)
+	{
+		if (props.getProperty(WORKLOAD_PROPERTY)==null)
+		{
+			System.out.println("Missing property: "+WORKLOAD_PROPERTY);
+			return false;
+		}
+
+		return true;
+	}
+
+
+	
+	private static void exportMeasurements(Properties props, int opcount, long runtime)
+			throws IOException
+	{
+		MeasurementsExporter exporter = null;
+		try
+		{
+			
+			OutputStream out;
+			String exportFile = props.getProperty(EXPORT_FILE_PROPERTY);
+			if (exportFile == null)
+			{
+				out = System.out;
+			} else
+			{
+				out = new FileOutputStream(exportFile);
+			}
+
+			
+			String exporterStr = props.getProperty(EXPORTER_PROPERTY, "com.yahoo.ycsb.measurements.exporter.TextMeasurementsExporter");
+			try
+			{
+				exporter = (MeasurementsExporter) Class.forName(exporterStr).getConstructor(OutputStream.class).newInstance(out);
+			} catch (Exception e)
+			{
+				System.err.println("Could not find exporter " + exporterStr
+						+ ", will use default text reporter.");
+				e.printStackTrace();
+				exporter = new TextMeasurementsExporter(out);
+			}
+
+			exporter.write("OVERALL", "RunTime(ms)", runtime);
+			double throughput = 1000.0 * ((double) opcount) / ((double) runtime);
+			exporter.write("OVERALL", "Throughput(ops/sec)", throughput);
+
+			Measurements.getMeasurements().exportMeasurements(exporter);
+		} finally
+		{
+			if (exporter != null)
+			{
+				exporter.close();
+			}
+		}
+	}
+	
+	@SuppressWarnings("unchecked")
+	public static void main(String[] args)
+	{
+		String dbname;
+		Properties props=new Properties();
+		Properties fileprops=new Properties();
+		boolean dotransactions=true;
+		int threadcount=1;
+		int target=0;
+		boolean status=false;
+		String label="";
+
+		
+		int argindex=0;
+
+		if (args.length==0)
+		{
+			usageMessage();
+			System.exit(0);
+		}
+
+		while (args[argindex].startsWith("-"))
+		{
+			if (args[argindex].compareTo("-threads")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int tcount=Integer.parseInt(args[argindex]);
+				props.setProperty(THREAD_COUNT_PROPERTY, tcount+"");
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-target")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int ttarget=Integer.parseInt(args[argindex]);
+				props.setProperty(TARGET_PROPERTY, ttarget+"");
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-load")==0)
+			{
+				dotransactions=false;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-t")==0)
+			{
+				dotransactions=true;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-s")==0)
+			{
+				status=true;
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-db")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				props.setProperty(DB_PROPERTY,args[argindex]);
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-l")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				label=args[argindex];
+				argindex++;
+			}
+			else if (args[argindex].compareTo("-P")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				String propfile=args[argindex];
+				argindex++;
+
+				Properties myfileprops=new Properties();
+				try
+				{
+					myfileprops.load(new FileInputStream(propfile));
+				}
+				catch (IOException e)
+				{
+					System.out.println(e.getMessage());
+					System.exit(0);
+				}
+
+				
+				for (Enumeration e=myfileprops.propertyNames(); e.hasMoreElements(); )
+				{
+				   String prop=(String)e.nextElement();
+				   
+				   fileprops.setProperty(prop,myfileprops.getProperty(prop));
+				}
+
+			}
+			else if (args[argindex].compareTo("-p")==0)
+			{
+				argindex++;
+				if (argindex>=args.length)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+				int eq=args[argindex].indexOf('=');
+				if (eq<0)
+				{
+					usageMessage();
+					System.exit(0);
+				}
+
+				String name=args[argindex].substring(0,eq);
+				String value=args[argindex].substring(eq+1);
+				props.put(name,value);
+				
+				argindex++;
+			}
+			else
+			{
+				System.out.println("Unknown option "+args[argindex]);
+				usageMessage();
+				System.exit(0);
+			}
+
+			if (argindex>=args.length)
+			{
+				break;
+			}
+		}
+
+		if (argindex!=args.length)
+		{
+			usageMessage();
+			System.exit(0);
+		}
+
+		
+		
+
+		
+
+		
+		for (Enumeration e=props.propertyNames(); e.hasMoreElements(); )
+		{
+		   String prop=(String)e.nextElement();
+		   
+		   fileprops.setProperty(prop,props.getProperty(prop));
+		}
+
+		props=fileprops;
+
+		if (!checkRequiredProperties(props))
+		{
+			System.exit(0);
+		}
+		
+		long maxExecutionTime = Integer.parseInt(props.getProperty(MAX_EXECUTION_TIME, "0"));
+
+		
+		threadcount=Integer.parseInt(props.getProperty(THREAD_COUNT_PROPERTY,"1"));
+		dbname=props.getProperty(DB_PROPERTY,"com.yahoo.ycsb.BasicDB");
+		target=Integer.parseInt(props.getProperty(TARGET_PROPERTY,"0"));
+		
+		
+		double targetperthreadperms=-1;
+		if (target>0)
+		{
+			double targetperthread=((double)target)/((double)threadcount);
+			targetperthreadperms=targetperthread/1000.0;
+		}	 
+
+		System.out.println("YCSB Client 0.1");
+		System.out.print("Command line:");
+		for (int i=0; i<args.length; i++)
+		{
+			System.out.print(" "+args[i]);
+		}
+		System.out.println();
+		System.err.println("Loading workload...");
+		
+		
+		
+		
+		Thread warningthread=new Thread() 
+		{
+			public void run()
+			{
+				try
+				{
+					sleep(2000);
+				}
+				catch (InterruptedException e)
+				{
+					return;
+				}
+				System.err.println(" (might take a few minutes for large data sets)");
+			}
+		};
+
+		warningthread.start();
+		
+		
+		Measurements.setProperties(props);
+		
+		
+		ClassLoader classLoader = Client.class.getClassLoader();
+
+		Workload workload=null;
+
+		try 
+		{
+			Class workloadclass = classLoader.loadClass(props.getProperty(WORKLOAD_PROPERTY));
+
+			workload=(Workload)workloadclass.newInstance();
+		}
+		catch (Exception e) 
+		{  
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			workload.init(props);
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+		
+		warningthread.interrupt();
+
+		
+
+		System.err.println("Starting test.");
+
+		int opcount;
+		if (dotransactions)
+		{
+			opcount=Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY,"0"));
+		}
+		else
+		{
+			if (props.containsKey(INSERT_COUNT_PROPERTY))
+			{
+				opcount=Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY,"0"));
+			}
+			else
+			{
+				opcount=Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY,"0"));
+			}
+		}
+
+		Vector<Thread> threads=new Vector<Thread>();
+
+		for (int threadid=0; threadid<threadcount; threadid++)
+		{
+			DB db=null;
+			try
+			{
+				db=DBFactory.newDB(dbname,props);
+			}
+			catch (UnknownDBException e)
+			{
+				System.out.println("Unknown DB "+dbname);
+				System.exit(0);
+			}
+
+			Thread t=new ClientThread(db,dotransactions,workload,threadid,threadcount,props,opcount/threadcount,targetperthreadperms);
+
+			threads.add(t);
+			
+		}
+
+		StatusThread statusthread=null;
+
+		if (status)
+		{
+			boolean standardstatus=false;
+			if (props.getProperty(Measurements.MEASUREMENT_TYPE_PROPERTY,"").compareTo("timeseries")==0)
+			{
+				standardstatus=true;
+			}	
+			statusthread=new StatusThread(threads,label,standardstatus);
+			statusthread.start();
+		}
+
+		long st=System.currentTimeMillis();
+
+		for (Thread t : threads)
+		{
+			t.start();
+		}
+		
+    Thread terminator = null;
+    
+    if (maxExecutionTime > 0) {
+      terminator = new TerminatorThread(maxExecutionTime, threads, workload);
+      terminator.start();
+    }
+    
+    int opsDone = 0;
+
+		for (Thread t : threads)
+		{
+			try
+			{
+				t.join();
+				opsDone += ((ClientThread)t).getOpsDone();
+			}
+			catch (InterruptedException e)
+			{
+			}
+		}
+
+		long en=System.currentTimeMillis();
+		
+		if (terminator != null && !terminator.isInterrupted()) {
+      terminator.interrupt();
+    }
+
+		if (status)
+		{
+			statusthread.interrupt();
+		}
+
+		try
+		{
+			workload.cleanup();
+		}
+		catch (WorkloadException e)
+		{
+			e.printStackTrace();
+			e.printStackTrace(System.out);
+			System.exit(0);
+		}
+
+		try
+		{
+			exportMeasurements(props, opsDone, en - st);
+		} catch (IOException e)
+		{
+			System.err.println("Could not export measurements, error: " + e.getMessage());
+			e.printStackTrace();
+			System.exit(-1);
+		}
+
+		System.exit(0);
+	}
+}
+
+<code block>
+
+
+package com.yahoo.ycsb.workloads;
+
+import java.util.Properties;
+import com.yahoo.ycsb.*;
+import com.yahoo.ycsb.generator.CounterGenerator;
+import com.yahoo.ycsb.generator.DiscreteGenerator;
+import com.yahoo.ycsb.generator.ExponentialGenerator;
+import com.yahoo.ycsb.generator.Generator;
+import com.yahoo.ycsb.generator.ConstantIntegerGenerator;
+import com.yahoo.ycsb.generator.HotspotIntegerGenerator;
+import com.yahoo.ycsb.generator.HistogramGenerator;
+import com.yahoo.ycsb.generator.IntegerGenerator;
+import com.yahoo.ycsb.generator.ScrambledZipfianGenerator;
+import com.yahoo.ycsb.generator.SkewedLatestGenerator;
+import com.yahoo.ycsb.generator.UniformIntegerGenerator;
+import com.yahoo.ycsb.generator.ZipfianGenerator;
+import com.yahoo.ycsb.measurements.Measurements;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Vector;
+import java.util.List;
+import java.util.Map;
+import java.util.ArrayList;
+
+
+public class CoreWorkload extends Workload
+{
+
+	
+	public static final String TABLENAME_PROPERTY="table";
+
+	
+	public static final String TABLENAME_PROPERTY_DEFAULT="usertable";
+
+	public static String table;
+
+
+	
+	public static final String FIELD_COUNT_PROPERTY="fieldcount";
+	
+	
+	public static final String FIELD_COUNT_PROPERTY_DEFAULT="10";
+
+	int fieldcount;
+
+	private List<String> fieldnames;
+
+	
+	public static final String FIELD_LENGTH_DISTRIBUTION_PROPERTY="fieldlengthdistribution";
+	
+	public static final String FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT = "constant";
+
+	
+	public static final String FIELD_LENGTH_PROPERTY="fieldlength";
+	
+	public static final String FIELD_LENGTH_PROPERTY_DEFAULT="100";
+
+	
+	public static final String FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY = "fieldlengthhistogram";
+	
+	public static final String FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY_DEFAULT = "hist.txt";
+
+	
+	IntegerGenerator fieldlengthgenerator;
+	
+	
+	public static final String READ_ALL_FIELDS_PROPERTY="readallfields";
+	
+	
+	public static final String READ_ALL_FIELDS_PROPERTY_DEFAULT="true";
+
+	boolean readallfields;
+
+	
+	public static final String WRITE_ALL_FIELDS_PROPERTY="writeallfields";
+	
+	
+	public static final String WRITE_ALL_FIELDS_PROPERTY_DEFAULT="false";
+
+	boolean writeallfields;
+
+
+  
+  public static final String DATA_INTEGRITY_PROPERTY = "dataintegrity";
+  
+  
+  public static final String DATA_INTEGRITY_PROPERTY_DEFAULT = "false";
+
+  
+  private boolean dataintegrity;
+
+  
+  private final int DATA_INT_MATCH = 0;
+  private final int DATA_INT_DEVIATE = 1000;
+  private final int DATA_INT_UNEXPECTED_NULL = 2000;
+
+
+	
+	public static final String READ_PROPORTION_PROPERTY="readproportion";
+	
+	
+	public static final String READ_PROPORTION_PROPERTY_DEFAULT="0.95";
+
+	
+	public static final String UPDATE_PROPORTION_PROPERTY="updateproportion";
+	
+	
+	public static final String UPDATE_PROPORTION_PROPERTY_DEFAULT="0.05";
+
+	
+	public static final String INSERT_PROPORTION_PROPERTY="insertproportion";
+	
+	
+	public static final String INSERT_PROPORTION_PROPERTY_DEFAULT="0.0";
+
+	
+	public static final String SCAN_PROPORTION_PROPERTY="scanproportion";
+	
+	
+	public static final String SCAN_PROPORTION_PROPERTY_DEFAULT="0.0";
+	
+	
+	public static final String READMODIFYWRITE_PROPORTION_PROPERTY="readmodifywriteproportion";
+	
+	
+	public static final String READMODIFYWRITE_PROPORTION_PROPERTY_DEFAULT="0.0";
+	
+	
+	public static final String REQUEST_DISTRIBUTION_PROPERTY="requestdistribution";
+	
+	
+	public static final String REQUEST_DISTRIBUTION_PROPERTY_DEFAULT="uniform";
+
+	
+	public static final String MAX_SCAN_LENGTH_PROPERTY="maxscanlength";
+	
+	
+	public static final String MAX_SCAN_LENGTH_PROPERTY_DEFAULT="1000";
+	
+	
+	public static final String SCAN_LENGTH_DISTRIBUTION_PROPERTY="scanlengthdistribution";
+	
+	
+	public static final String SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT="uniform";
+	
+	
+	public static final String INSERT_ORDER_PROPERTY="insertorder";
+	
+	
+	public static final String INSERT_ORDER_PROPERTY_DEFAULT="hashed";
+	
+	
+  public static final String HOTSPOT_DATA_FRACTION = "hotspotdatafraction";
+  
+  
+  public static final String HOTSPOT_DATA_FRACTION_DEFAULT = "0.2";
+  
+  
+  public static final String HOTSPOT_OPN_FRACTION = "hotspotopnfraction";
+  
+  
+  public static final String HOTSPOT_OPN_FRACTION_DEFAULT = "0.8";
+	
+	IntegerGenerator keysequence;
+
+	DiscreteGenerator operationchooser;
+
+	IntegerGenerator keychooser;
+
+	Generator fieldchooser;
+
+	CounterGenerator transactioninsertkeysequence;
+	
+	IntegerGenerator scanlength;
+	
+	boolean orderedinserts;
+
+	int recordcount;
+	
+	protected static IntegerGenerator getFieldLengthGenerator(Properties p) throws WorkloadException{
+		IntegerGenerator fieldlengthgenerator;
+		String fieldlengthdistribution = p.getProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY, FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
+		int fieldlength=Integer.parseInt(p.getProperty(FIELD_LENGTH_PROPERTY,FIELD_LENGTH_PROPERTY_DEFAULT));
+		String fieldlengthhistogram = p.getProperty(FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY, FIELD_LENGTH_HISTOGRAM_FILE_PROPERTY_DEFAULT);
+		if(fieldlengthdistribution.compareTo("constant") == 0) {
+			fieldlengthgenerator = new ConstantIntegerGenerator(fieldlength);
+		} else if(fieldlengthdistribution.compareTo("uniform") == 0) {
+			fieldlengthgenerator = new UniformIntegerGenerator(1, fieldlength);
+		} else if(fieldlengthdistribution.compareTo("zipfian") == 0) {
+			fieldlengthgenerator = new ZipfianGenerator(1, fieldlength);
+		} else if(fieldlengthdistribution.compareTo("histogram") == 0) {
+			try {
+				fieldlengthgenerator = new HistogramGenerator(fieldlengthhistogram);
+			} catch(IOException e) {
+				throw new WorkloadException("Couldn't read field length histogram file: "+fieldlengthhistogram, e);
+			}
+		} else {
+			throw new WorkloadException("Unknown field length distribution \""+fieldlengthdistribution+"\"");
+		}
+		return fieldlengthgenerator;
+	}
+	
+	
+	public void init(Properties p) throws WorkloadException
+	{
+		table = p.getProperty(TABLENAME_PROPERTY,TABLENAME_PROPERTY_DEFAULT);
+		
+		fieldcount=Integer.parseInt(p.getProperty(FIELD_COUNT_PROPERTY,FIELD_COUNT_PROPERTY_DEFAULT));
+    fieldnames = new ArrayList<String>();
+    for (int i = 0; i < fieldcount; i++) {
+        fieldnames.add("field" + i);
+    }
+		fieldlengthgenerator = CoreWorkload.getFieldLengthGenerator(p);
+		
+		double readproportion=Double.parseDouble(p.getProperty(READ_PROPORTION_PROPERTY,READ_PROPORTION_PROPERTY_DEFAULT));
+		double updateproportion=Double.parseDouble(p.getProperty(UPDATE_PROPORTION_PROPERTY,UPDATE_PROPORTION_PROPERTY_DEFAULT));
+		double insertproportion=Double.parseDouble(p.getProperty(INSERT_PROPORTION_PROPERTY,INSERT_PROPORTION_PROPERTY_DEFAULT));
+		double scanproportion=Double.parseDouble(p.getProperty(SCAN_PROPORTION_PROPERTY,SCAN_PROPORTION_PROPERTY_DEFAULT));
+		double readmodifywriteproportion=Double.parseDouble(p.getProperty(READMODIFYWRITE_PROPORTION_PROPERTY,READMODIFYWRITE_PROPORTION_PROPERTY_DEFAULT));
+		recordcount=Integer.parseInt(p.getProperty(Client.RECORD_COUNT_PROPERTY));
+		String requestdistrib=p.getProperty(REQUEST_DISTRIBUTION_PROPERTY,REQUEST_DISTRIBUTION_PROPERTY_DEFAULT);
+		int maxscanlength=Integer.parseInt(p.getProperty(MAX_SCAN_LENGTH_PROPERTY,MAX_SCAN_LENGTH_PROPERTY_DEFAULT));
+		String scanlengthdistrib=p.getProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY,SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
+		
+		int insertstart=Integer.parseInt(p.getProperty(INSERT_START_PROPERTY,INSERT_START_PROPERTY_DEFAULT));
+		
+		readallfields=Boolean.parseBoolean(p.getProperty(READ_ALL_FIELDS_PROPERTY,READ_ALL_FIELDS_PROPERTY_DEFAULT));
+		writeallfields=Boolean.parseBoolean(p.getProperty(WRITE_ALL_FIELDS_PROPERTY,WRITE_ALL_FIELDS_PROPERTY_DEFAULT));
+		
+    dataintegrity = Boolean.parseBoolean(p.getProperty(DATA_INTEGRITY_PROPERTY, DATA_INTEGRITY_PROPERTY_DEFAULT));
+    
+    
+    if (dataintegrity && !(p.getProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY, FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT)).equals("constant"))
+    {
+      System.err.println("Must have constant field size to check data integrity.");
+      System.exit(-1);
+    }
+
+		if (p.getProperty(INSERT_ORDER_PROPERTY,INSERT_ORDER_PROPERTY_DEFAULT).compareTo("hashed")==0)
+		{
+			orderedinserts=false;
+		}
+		else if (requestdistrib.compareTo("exponential")==0)
+		{
+                    double percentile = Double.parseDouble(p.getProperty(ExponentialGenerator.EXPONENTIAL_PERCENTILE_PROPERTY,
+                                                                         ExponentialGenerator.EXPONENTIAL_PERCENTILE_DEFAULT));
+                    double frac       = Double.parseDouble(p.getProperty(ExponentialGenerator.EXPONENTIAL_FRAC_PROPERTY,
+                                                                         ExponentialGenerator.EXPONENTIAL_FRAC_DEFAULT));
+                    keychooser = new ExponentialGenerator(percentile, recordcount*frac);
+		}
+		else
+		{
+			orderedinserts=true;
+		}
+
+		keysequence=new CounterGenerator(insertstart);
+		operationchooser=new DiscreteGenerator();
+		if (readproportion>0)
+		{
+			operationchooser.addValue(readproportion,"READ");
+		}
+
+		if (updateproportion>0)
+		{
+			operationchooser.addValue(updateproportion,"UPDATE");
+		}
+
+		if (insertproportion>0)
+		{
+			operationchooser.addValue(insertproportion,"INSERT");
+		}
+		
+		if (scanproportion>0)
+		{
+			operationchooser.addValue(scanproportion,"SCAN");
+		}
+		
+		if (readmodifywriteproportion>0)
+		{
+			operationchooser.addValue(readmodifywriteproportion,"READMODIFYWRITE");
+		}
+
+		transactioninsertkeysequence=new CounterGenerator(recordcount);
+		if (requestdistrib.compareTo("uniform")==0)
+		{
+			keychooser=new UniformIntegerGenerator(0,recordcount-1);
+		}
+		else if (requestdistrib.compareTo("zipfian")==0)
+		{
+			
+			
+			
+			
+			
+			
+			
+			int opcount=Integer.parseInt(p.getProperty(Client.OPERATION_COUNT_PROPERTY));
+			int expectednewkeys=(int)(((double)opcount)*insertproportion*2.0); 
+			
+			keychooser=new ScrambledZipfianGenerator(recordcount+expectednewkeys);
+		}
+		else if (requestdistrib.compareTo("latest")==0)
+		{
+			keychooser=new SkewedLatestGenerator(transactioninsertkeysequence);
+		}
+		else if (requestdistrib.equals("hotspot")) 
+		{
+      double hotsetfraction = Double.parseDouble(p.getProperty(
+          HOTSPOT_DATA_FRACTION, HOTSPOT_DATA_FRACTION_DEFAULT));
+      double hotopnfraction = Double.parseDouble(p.getProperty(
+          HOTSPOT_OPN_FRACTION, HOTSPOT_OPN_FRACTION_DEFAULT));
+      keychooser = new HotspotIntegerGenerator(0, recordcount - 1, 
+          hotsetfraction, hotopnfraction);
+    }
+		else
+		{
+			throw new WorkloadException("Unknown request distribution \""+requestdistrib+"\"");
+		}
+
+		fieldchooser=new UniformIntegerGenerator(0,fieldcount-1);
+		
+		if (scanlengthdistrib.compareTo("uniform")==0)
+		{
+			scanlength=new UniformIntegerGenerator(1,maxscanlength);
+		}
+		else if (scanlengthdistrib.compareTo("zipfian")==0)
+		{
+			scanlength=new ZipfianGenerator(1,maxscanlength);
+		}
+		else
+		{
+			throw new WorkloadException("Distribution \""+scanlengthdistrib+"\" not allowed for scan length");
+		}
+	}
+
+	public String buildKeyName(long keynum) {
+ 		if (!orderedinserts)
+ 		{
+ 			keynum=Utils.hash(keynum);
+ 		}
+		return "user"+keynum;
+	}
+	
+  
+  private HashMap<String, ByteIterator> buildSingleValue(String key) {
+    HashMap<String,ByteIterator> value = new HashMap<String,ByteIterator>();
+
+    String fieldkey = fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+    ByteIterator data;
+    if (dataintegrity) {
+      data = new StringByteIterator(buildDeterministicValue(key, fieldkey));
+    } else {
+      
+      data = new RandomByteIterator(fieldlengthgenerator.nextInt());
+    }
+    value.put(fieldkey,data);
+
+    return value;    
+  }
+
+  
+  private HashMap<String, ByteIterator> buildValues(String key) {        
+    HashMap<String,ByteIterator> values = new HashMap<String,ByteIterator>();
+
+    for (String fieldkey : fieldnames) {
+      ByteIterator data;
+      if (dataintegrity) {
+        data = new StringByteIterator(buildDeterministicValue(key, fieldkey));
+      } else {
+        
+        data = new RandomByteIterator(fieldlengthgenerator.nextInt());
+      }
+      values.put(fieldkey,data);
+    }
+    return values;
+  }
+
+  
+  private String buildDeterministicValue(String key, String fieldkey) {
+    int size = fieldlengthgenerator.nextInt();
+    StringBuilder sb = new StringBuilder(size);
+    sb.append(key);
+    sb.append(':');
+    sb.append(fieldkey);
+    while (sb.length() < size) {
+      sb.append(':');
+      sb.append(sb.toString().hashCode());
+    }
+    sb.setLength(size);
+
+    return sb.toString();
+  }
+
+	
+	public boolean doInsert(DB db, Object threadstate)
+	{
+		int keynum=keysequence.nextInt();
+		String dbkey = buildKeyName(keynum);
+		HashMap<String, ByteIterator> values = buildValues(dbkey);
+		if (db.insert(table,dbkey,values) == 0)
+			return true;
+		else
+			return false;
+	}
+
+	
+	public boolean doTransaction(DB db, Object threadstate)
+	{
+		String op=operationchooser.nextString();
+
+		if (op.compareTo("READ")==0)
+		{
+			doTransactionRead(db);
+		}
+		else if (op.compareTo("UPDATE")==0)
+		{
+			doTransactionUpdate(db);
+		}
+		else if (op.compareTo("INSERT")==0)
+		{
+			doTransactionInsert(db);
+		}
+		else if (op.compareTo("SCAN")==0)
+		{
+			doTransactionScan(db);
+		}
+		else
+		{
+			doTransactionReadModifyWrite(db);
+		}
+		
+		return true;
+	}
+
+  
+  protected void verifyRow(String key, HashMap<String,ByteIterator> cells) {
+    int matchType = DATA_INT_MATCH;
+    if (!cells.isEmpty()) {
+      for (Map.Entry<String, ByteIterator> entry : cells.entrySet()) {
+        if (!entry.getValue().toString().equals(
+            buildDeterministicValue(key, entry.getKey()))) {
+          matchType = DATA_INT_DEVIATE;
+          break;
+        }
+      }
+    } else {
+      
+      matchType = DATA_INT_UNEXPECTED_NULL;
+    }
+    Measurements.getMeasurements().measure("VERIFY", matchType);
+  }
+
+    int nextKeynum() {
+        int keynum;
+        if(keychooser instanceof ExponentialGenerator) {
+            do
+                {
+                    keynum=transactioninsertkeysequence.lastInt() - keychooser.nextInt();
+                }
+            while(keynum < 0);
+        } else {
+            do
+                {
+                    keynum=keychooser.nextInt();
+                }
+            while (keynum > transactioninsertkeysequence.lastInt());
+        }
+        return keynum;
+    }
+
+	public void doTransactionRead(DB db)
+	{
+		
+		int keynum = nextKeynum();
+		
+		String keyname = buildKeyName(keynum);
+		
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+
+    HashMap<String,ByteIterator> cells =
+        new HashMap<String,ByteIterator>();
+		db.read(table,keyname,fields,cells);
+
+    if (dataintegrity) {
+      verifyRow(keyname, cells);
+    }
+	}
+	
+	public void doTransactionReadModifyWrite(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String keyname = buildKeyName(keynum);
+
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+		
+		HashMap<String,ByteIterator> values;
+
+		if (writeallfields)
+		{
+		   
+		   values = buildValues(keyname);
+		}
+		else
+		{
+		   
+		   values = buildSingleValue(keyname);
+		}
+
+		
+
+		HashMap<String,ByteIterator> cells =
+		    new HashMap<String,ByteIterator>();
+
+		long st=System.nanoTime();
+
+		db.read(table,keyname,fields,cells);
+		
+		db.update(table,keyname,values);
+
+		long en=System.nanoTime();
+
+    if (dataintegrity) {
+      verifyRow(keyname, cells);
+    }
+
+		Measurements.getMeasurements().measure("READ-MODIFY-WRITE", (int)((en-st)/1000));
+	}
+	
+	public void doTransactionScan(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String startkeyname = buildKeyName(keynum);
+		
+		
+		int len=scanlength.nextInt();
+
+		HashSet<String> fields=null;
+
+		if (!readallfields)
+		{
+			
+			String fieldname=fieldnames.get(Integer.parseInt(fieldchooser.nextString()));
+
+			fields=new HashSet<String>();
+			fields.add(fieldname);
+		}
+
+		db.scan(table,startkeyname,len,fields,new Vector<HashMap<String,ByteIterator>>());
+	}
+
+	public void doTransactionUpdate(DB db)
+	{
+		
+		int keynum = nextKeynum();
+
+		String keyname=buildKeyName(keynum);
+
+		HashMap<String,ByteIterator> values;
+
+		if (writeallfields)
+		{
+		   
+		   values = buildValues(keyname);
+		}
+		else
+		{
+		   
+		   values = buildSingleValue(keyname);
+		}
+
+		db.update(table,keyname,values);
+	}
+
+	public void doTransactionInsert(DB db)
+	{
+		
+		int keynum=transactioninsertkeysequence.nextInt();
+
+		String dbkey = buildKeyName(keynum);
+
+		HashMap<String, ByteIterator> values = buildValues(dbkey);
+		db.insert(table,dbkey,values);
+	}
+}

@@ -1,0 +1,16 @@
+Java_Projects/j2objc/j2objc-d05d92de/curr/jre_emul/Tests/com/google/j2objc/java8/CreationReferenceTest.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/jre_emul/Tests/com/google/j2objc/java8/SmallTests.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/translator/src/main/java/com/google/devtools/j2objc/ast/MethodReference.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/translator/src/main/java/com/google/devtools/j2objc/gen/StatementGenerator.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/translator/src/test/java/com/google/devtools/j2objc/SmallTests.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/translator/src/test/java/com/google/devtools/j2objc/ast/MethodReferenceTest.java
+Java_Projects/j2objc/j2objc-d05d92de/curr/translator/src/test/java/com/google/devtools/j2objc/ast/LambdaExpressionTest.java
+Java_Projects/j2objc/j2objc-d05d92de/prev/jre_emul/Tests/com/google/j2objc/java8/SmallTests.java
+Java_Projects/j2objc/j2objc-d05d92de/prev/translator/src/main/java/com/google/devtools/j2objc/ast/MethodReference.java
+Java_Projects/j2objc/j2objc-d05d92de/prev/translator/src/main/java/com/google/devtools/j2objc/gen/StatementGenerator.java
+Java_Projects/j2objc/j2objc-d05d92de/prev/translator/src/test/java/com/google/devtools/j2objc/SmallTests.java
+Java_Projects/j2objc/j2objc-d05d92de/prev/translator/src/test/java/com/google/devtools/j2objc/translate/LambdaExpressionTest.java
+Java_Projects/j2objc/j2objc-fa3e6fa0/curr/translator/src/main/java/com/google/devtools/j2objc/translate/Autoboxer.java
+Java_Projects/j2objc/j2objc-fa3e6fa0/curr/translator/src/test/java/com/google/devtools/j2objc/translate/AutoboxerTest.java
+Java_Projects/j2objc/j2objc-fa3e6fa0/prev/translator/src/main/java/com/google/devtools/j2objc/translate/Autoboxer.java
+Java_Projects/j2objc/j2objc-fa3e6fa0/prev/translator/src/test/java/com/google/devtools/j2objc/translate/AutoboxerTest.java

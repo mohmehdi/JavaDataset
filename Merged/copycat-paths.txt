@@ -1,0 +1,4 @@
+Java_Projects/copycat/copycat-19a49f8f/curr/raft/src/main/java/net/kuujo/copycat/raft/state/ActiveState.java
+Java_Projects/copycat/copycat-19a49f8f/curr/raft/src/main/java/net/kuujo/copycat/raft/state/PassiveState.java
+Java_Projects/copycat/copycat-19a49f8f/prev/raft/src/main/java/net/kuujo/copycat/raft/state/ActiveState.java
+Java_Projects/copycat/copycat-19a49f8f/prev/raft/src/main/java/net/kuujo/copycat/raft/state/PassiveState.java

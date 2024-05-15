@@ -1,0 +1,14 @@
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/Constants.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/utils/FileUtils.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/utils/StringUtils.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/activities/GistViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/activities/FileViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/activities/WebViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/curr/src/com/gh4a/activities/DiffViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/Constants.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/utils/FileUtils.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/utils/StringUtils.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/activities/GistViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/activities/FileViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/activities/WebViewerActivity.java
+Java_Projects/gh4a/gh4a-b8fffb70/prev/src/com/gh4a/activities/DiffViewerActivity.java

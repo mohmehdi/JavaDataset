@@ -1,0 +1,3803 @@
+
+package org.apache.pig.impl.util;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.io.SequenceInputStream;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.PathFilter;
+import org.apache.hadoop.io.compress.BZip2Codec;
+import org.apache.hadoop.io.compress.GzipCodec;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.pig.FileInputLoadFunc;
+import org.apache.pig.FuncSpec;
+import org.apache.pig.LoadFunc;
+import org.apache.pig.PigConfiguration;
+import org.apache.pig.PigException;
+import org.apache.pig.ResourceSchema;
+import org.apache.pig.ResourceSchema.ResourceFieldSchema;
+import org.apache.pig.backend.executionengine.ExecException;
+import org.apache.pig.backend.hadoop.datastorage.ConfigurationUtil;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfiguration;
+import org.apache.pig.data.DataType;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.PigContext;
+import org.apache.pig.impl.PigImplConstants;
+import org.apache.pig.impl.io.InterStorage;
+import org.apache.pig.impl.io.ReadToEndLoader;
+import org.apache.pig.impl.io.SequenceFileInterStorage;
+import org.apache.pig.impl.io.TFileStorage;
+import org.apache.pig.impl.logicalLayer.schema.Schema;
+import org.apache.pig.impl.logicalLayer.schema.Schema.FieldSchema;
+import org.apache.pig.newplan.logical.relational.LogicalSchema;
+import org.apache.pig.parser.ParserException;
+import org.apache.pig.parser.QueryParserDriver;
+import org.joda.time.DateTimeZone;
+
+import com.google.common.collect.Lists;
+import com.google.common.primitives.Longs;
+
+
+public class Utils {
+    private static final Log log = LogFactory.getLog(Utils.class);
+    private static final Pattern JAVA_MAXHEAPSIZE_PATTERN = Pattern.compile("-Xmx(([0-9]+)[mMgG])");
+
+
+    
+    public static boolean isVendorIBM() {
+    	  return System.getProperty("java.vendor").contains("IBM");
+    }
+
+    public static boolean isHadoop23() {
+        String version = org.apache.hadoop.util.VersionInfo.getVersion();
+        if (version.matches("\\b0\\.23\\..+\\b"))
+            return true;
+        return false;
+    }
+
+    public static boolean isHadoop2() {
+        String version = org.apache.hadoop.util.VersionInfo.getVersion();
+        if (version.matches("\\b2\\.\\d+\\..+"))
+            return true;
+        return false;
+    }
+
+    
+    public static boolean checkNullEquals(Object obj1, Object obj2, boolean checkEquality) {
+        if(obj1 == null || obj2 == null) {
+            return obj1 == obj2;
+        }
+        if(checkEquality) {
+            if(!obj1.equals(obj2)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+
+    
+    public static boolean checkNullAndClass(Object obj1, Object obj2) {
+        if(checkNullEquals(obj1, obj2, false)) {
+            if(obj1 != null) {
+                return obj1.getClass() == obj2.getClass();
+            } else {
+                return true; 
+            }
+        } else {
+            return false;
+        }
+    }
+
+    
+    public static Schema getScriptSchema(
+            String loadFuncSignature,
+            Configuration conf) throws IOException {
+        Schema scriptSchema = null;
+        String scriptField = conf.get(getScriptSchemaKey(loadFuncSignature));
+
+        if (scriptField != null) {
+            scriptSchema = (Schema) ObjectSerializer.deserialize(scriptField);
+        }
+
+        return scriptSchema;
+    }
+
+    public static String getScriptSchemaKey(String loadFuncSignature) {
+        return loadFuncSignature + ".scriptSchema";
+    }
+
+    public static ResourceSchema getSchema(LoadFunc wrappedLoadFunc, String location, boolean checkExistence, Job job)
+            throws IOException {
+        Configuration conf = job.getConfiguration();
+        if (checkExistence) {
+            Path path = new Path(location);
+            if (!FileSystem.get(conf).exists(path)) {
+                
+                
+                
+                return null;
+            }
+        }
+        ReadToEndLoader loader = new ReadToEndLoader(wrappedLoadFunc, conf, location, 0);
+        
+        
+        
+        Tuple t = loader.getNext();
+        if (t == null) {
+            
+            return null;
+        }
+        int numFields = t.size();
+        Schema s = new Schema();
+        for (int i = 0; i < numFields; i++) {
+            try {
+                s.add(DataType.determineFieldSchema(t.get(i)));
+            }
+            catch (Exception e) {
+                int errCode = 2104;
+                String msg = "Error while determining schema of SequenceFileStorage data.";
+                throw new ExecException(msg, errCode, PigException.BUG, e);
+            }
+        }
+        return new ResourceSchema(s);
+    }
+
+    
+    public static Schema getSchemaFromString(String schemaString) throws ParserException {
+        LogicalSchema schema = parseSchema(schemaString);
+        Schema result = org.apache.pig.newplan.logical.Util.translateSchema(schema);
+        Schema.setSchemaDefaultType(result, DataType.BYTEARRAY);
+        return result;
+    }
+
+    
+    public static Schema getSchemaFromBagSchemaString(String schemaString) throws ParserException {
+        String unwrappedSchemaString = schemaString.substring(1, schemaString.length() - 1);
+        return getSchemaFromString(unwrappedSchemaString);
+    }
+
+    public static LogicalSchema parseSchema(String schemaString) throws ParserException {
+        QueryParserDriver queryParser = new QueryParserDriver( new PigContext(),
+                "util", new HashMap<String, String>() ) ;
+        LogicalSchema schema = queryParser.parseSchema(schemaString);
+        return schema;
+    }
+
+    public static Object parseConstant(String constantString) throws ParserException {
+        QueryParserDriver queryParser = new QueryParserDriver( new PigContext(),
+                "util", new HashMap<String, String>() ) ;
+        Object constant = queryParser.parseConstant(constantString);
+        return constant;
+    }
+
+    
+    public static ResourceSchema getSchemaWithInputSourceTag(ResourceSchema schema, String fieldName) {
+        ResourceFieldSchema[] fieldSchemas = schema.getFields();
+        ResourceFieldSchema sourceTagSchema = new ResourceFieldSchema(new FieldSchema(fieldName, DataType.CHARARRAY));
+        ResourceFieldSchema[] fieldSchemasWithSourceTag = new ResourceFieldSchema[fieldSchemas.length + 1];
+        fieldSchemasWithSourceTag[0] = sourceTagSchema;
+        for(int j = 0; j < fieldSchemas.length; j++) {
+            fieldSchemasWithSourceTag[j + 1] = fieldSchemas[j];
+        }
+        return schema.setFields(fieldSchemasWithSourceTag);
+    }
+
+    private static enum TEMPFILE_CODEC {
+        GZ (GzipCodec.class.getName()),
+        GZIP (GzipCodec.class.getName()),
+        LZO ("com.hadoop.compression.lzo.LzoCodec"),
+        SNAPPY ("org.xerial.snappy.SnappyCodec"),
+        BZIP2 (BZip2Codec.class.getName());
+
+        private String hadoopCodecClassName;
+
+        TEMPFILE_CODEC(String codecClassName) {
+            this.hadoopCodecClassName = codecClassName;
+        }
+
+        public String lowerName() {
+            return this.name().toLowerCase();
+        }
+
+        public String getHadoopCodecClassName() {
+            return this.hadoopCodecClassName;
+        }
+    }
+
+    private static enum TEMPFILE_STORAGE {
+        INTER(InterStorage.class,
+                null),
+        TFILE(TFileStorage.class,
+                Arrays.asList(TEMPFILE_CODEC.GZ,
+                        TEMPFILE_CODEC.GZIP,
+                        TEMPFILE_CODEC.LZO)),
+        SEQFILE(SequenceFileInterStorage.class,
+                Arrays.asList(TEMPFILE_CODEC.GZ,
+                        TEMPFILE_CODEC.GZIP,
+                        TEMPFILE_CODEC.LZO,
+                        TEMPFILE_CODEC.SNAPPY,
+                        TEMPFILE_CODEC.BZIP2));
+
+        private Class<? extends FileInputLoadFunc> storageClass;
+        private List<TEMPFILE_CODEC> supportedCodecs;
+
+        TEMPFILE_STORAGE(
+                Class<? extends FileInputLoadFunc> storageClass,
+                List<TEMPFILE_CODEC> supportedCodecs) {
+            this.storageClass = storageClass;
+            this.supportedCodecs = supportedCodecs;
+        }
+
+        public String lowerName() {
+            return this.name().toLowerCase();
+        }
+
+        public Class<? extends FileInputLoadFunc> getStorageClass() {
+            return storageClass;
+        }
+
+        public boolean ensureCodecSupported(String codec) {
+            try {
+                return this.supportedCodecs.contains(TEMPFILE_CODEC.valueOf(codec.toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                return false;
+            }
+        }
+
+        public String supportedCodecsToString() {
+            StringBuffer sb = new StringBuffer();
+            boolean first = true;
+            for (TEMPFILE_CODEC codec : supportedCodecs) {
+                if(first) {
+                    first = false;
+                } else {
+                    sb.append(",");
+                }
+                sb.append(codec.name());
+            }
+            return sb.toString();
+        }
+    }
+
+    public static String getTmpFileCompressorName(PigContext pigContext) {
+        if (pigContext == null)
+            return InterStorage.class.getName();
+
+        String codec = pigContext.getProperties().getProperty(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        if (codec.equals(TEMPFILE_CODEC.LZO.lowerName())) {
+            pigContext.getProperties().setProperty("io.compression.codec.lzo.class", "com.hadoop.compression.lzo.LzoCodec");
+        }
+
+        return getTmpFileStorage(pigContext.getProperties()).getStorageClass().getName();
+    }
+
+    public static FileInputLoadFunc getTmpFileStorageObject(Configuration conf) throws IOException {
+        Class<? extends FileInputLoadFunc> storageClass = getTmpFileStorageClass(ConfigurationUtil.toProperties(conf));
+        try {
+            return storageClass.newInstance();
+        } catch (InstantiationException e) {
+            throw new IOException(e);
+        } catch (IllegalAccessException e) {
+            throw new IOException(e);
+        }
+    }
+
+    public static Class<? extends FileInputLoadFunc> getTmpFileStorageClass(Properties properties) {
+       return getTmpFileStorage(properties).getStorageClass();
+    }
+
+    private static TEMPFILE_STORAGE getTmpFileStorage(Properties properties) {
+        boolean tmpFileCompression = properties.getProperty(
+                PigConfiguration.PIG_ENABLE_TEMP_FILE_COMPRESSION, "false").equals("true");
+        String tmpFileCompressionStorage =
+                properties.getProperty(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_STORAGE,
+                        TEMPFILE_STORAGE.TFILE.lowerName());
+
+        if (!tmpFileCompression) {
+            return TEMPFILE_STORAGE.INTER;
+        } else if (TEMPFILE_STORAGE.SEQFILE.lowerName().equals(tmpFileCompressionStorage)) {
+            return TEMPFILE_STORAGE.SEQFILE;
+        } else if (TEMPFILE_STORAGE.TFILE.lowerName().equals(tmpFileCompressionStorage)) {
+            return TEMPFILE_STORAGE.TFILE;
+        } else {
+            throw new IllegalArgumentException("Unsupported storage format " + tmpFileCompressionStorage +
+                    ". Should be one of " + Arrays.toString(TEMPFILE_STORAGE.values()));
+        }
+    }
+
+    public static void setMapredCompressionCodecProps(Configuration conf) {
+        String codec = conf.get(
+                PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        if ("".equals(codec) && conf.get(MRConfiguration.OUTPUT_COMPRESSION_CODEC) != null) {
+            conf.setBoolean(MRConfiguration.OUTPUT_COMPRESS, true);
+        } else if (TEMPFILE_STORAGE.SEQFILE.ensureCodecSupported(codec)) {
+            conf.setBoolean(MRConfiguration.OUTPUT_COMPRESS, true);
+            conf.set(MRConfiguration.OUTPUT_COMPRESSION_CODEC,
+                    TEMPFILE_CODEC.valueOf(codec.toUpperCase()).getHadoopCodecClassName());
+        }
+        
+    }
+
+    public static void setTmpFileCompressionOnConf(PigContext pigContext, Configuration conf) throws IOException{
+        
+        if (pigContext == null) {
+            return;
+        }
+        TEMPFILE_STORAGE storage = getTmpFileStorage(pigContext.getProperties());
+        String codec = pigContext.getProperties().getProperty(
+                PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        switch (storage) {
+        case INTER:
+            break;
+        case SEQFILE:
+            conf.set(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_STORAGE, "seqfile");
+            if ("".equals(codec)) {
+                
+                log.warn("Temporary file compression codec is not specified. Using " +
+                         MRConfiguration.OUTPUT_COMPRESSION_CODEC + " property.");
+                if(conf.get(MRConfiguration.OUTPUT_COMPRESSION_CODEC) == null) {
+                    throw new IOException(MRConfiguration.OUTPUT_COMPRESSION_CODEC + " is not set");
+                }
+            } else if(storage.ensureCodecSupported(codec)) {
+                
+            } else {
+                throw new IOException("Invalid temporary file compression codec [" + codec + "]. " +
+                        "Expected compression codecs for " + storage.getStorageClass().getName() +
+                        " are " + storage.supportedCodecsToString() + ".");
+            }
+            break;
+        case TFILE:
+            if(storage.ensureCodecSupported(codec)) {
+                conf.set(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, codec.toLowerCase());
+            } else {
+                throw new IOException("Invalid temporary file compression codec [" + codec + "]. " +
+                        "Expected compression codecs for " + storage.getStorageClass().getName() +
+                        " are " + storage.supportedCodecsToString() + ".");
+            }
+            break;
+        }
+    }
+
+    public static String getStringFromArray(String[] arr) {
+        StringBuilder str = new StringBuilder();
+        for(String s: arr) {
+            str.append(s);
+            str.append(" ");
+        }
+        return str.toString();
+    }
+
+    public static FuncSpec buildSimpleFuncSpec(String className, byte...types) {
+        List<Schema.FieldSchema> fieldSchemas = Lists.newArrayListWithExpectedSize(types.length);
+        for (byte type : types) {
+            fieldSchemas.add(new Schema.FieldSchema(null, type));
+        }
+        return new FuncSpec(className, new Schema(fieldSchemas));
+    }
+
+    
+    public static String slashisize(String str) {
+        return str.replace("\\\\", "\\");
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <O> Collection<O> mergeCollection(Collection<O> a, Collection<O> b) {
+        if (a==null && b==null)
+            return null;
+        Collection<O> result = null;
+        try {
+            if (a!=null)
+                result = a.getClass().newInstance();
+            else
+                result = b.getClass().newInstance();
+        } catch (Exception e) {
+            
+        }
+        if (a==null) {
+            result.addAll(b);
+        }
+        else if (b==null) {
+            result.addAll(a);
+        }
+        else {
+            result.addAll(a);
+            for (O o : b) {
+                if (!result.contains(o)) {
+                    result.add(o);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    public static InputStream getCompositeStream(InputStream in, Properties properties) {
+        
+        final String bootupFile = properties.getProperty("pig.load.default.statements", System.getProperty("user.home") + "/.pigbootup");
+        try {
+            final InputStream inputSteam = new FileInputStream(new File(bootupFile));
+            return new SequenceInputStream(inputSteam, in);
+        } catch(FileNotFoundException fe) {
+            log.info("Default bootup file " +bootupFile+ " not found");
+            return in;
+        }
+    }
+
+    
+    public static void recomputeProperties(JobConf jobConf, Properties properties) {
+        
+        
+        if (jobConf != null && properties != null) {
+            
+            
+            Enumeration<Object> propertiesIter = properties.keys();
+            while (propertiesIter.hasMoreElements()) {
+                String key = (String) propertiesIter.nextElement();
+                String val = properties.getProperty(key);
+                
+                if (!key.equals("user.name")) {
+                    jobConf.set(key, val);
+                }
+            }
+            
+            properties.clear();
+            Iterator<Map.Entry<String, String>> iter = jobConf.iterator();
+            while (iter.hasNext()) {
+                Map.Entry<String, String> entry = iter.next();
+                properties.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    public static String getStackStraceStr(Throwable e) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(baos);
+        e.printStackTrace(ps);
+        return baos.toString();
+    }
+
+    public static boolean isLocal(PigContext pigContext, Configuration conf) {
+        return pigContext.getExecType().isLocal() || conf.getBoolean(PigImplConstants.CONVERTED_TO_LOCAL, false);
+    }
+
+    
+    
+    private static Pattern varPat = Pattern.compile("\\$\\{[^\\}\\$\u0020]+\\}");
+    private static int MAX_SUBST = 20;
+
+    public static String substituteVars(String expr) {
+        if (expr == null) {
+            return null;
+        }
+        Matcher match = varPat.matcher("");
+        String eval = expr;
+        for(int s=0; s<MAX_SUBST; s++) {
+            match.reset(eval);
+            if (!match.find()) {
+                return eval;
+            }
+            String var = match.group();
+            var = var.substring(2, var.length()-1); 
+            String val = null;
+            val = System.getProperty(var);
+            if (val == null) {
+                return eval; 
+            }
+            
+            eval = eval.substring(0, match.start())+val+eval.substring(match.end());
+        }
+        throw new IllegalStateException("Variable substitution depth too large: "
+                + MAX_SUBST + " " + expr);
+    }
+
+    
+    public static final PathFilter VISIBLE_FILES = new PathFilter() {
+      @Override
+      public boolean accept(final Path p) {
+        return (!(p.getName().startsWith("_") || p.getName().startsWith(".")));
+      }
+    };
+
+    
+
+    public static Path depthFirstSearchForFile(final FileStatus[] statusArray,
+            final FileSystem fileSystem) throws IOException {
+        return depthFirstSearchForFile(statusArray, fileSystem, null);
+    }
+
+    
+    public static Path depthFirstSearchForFile(final FileStatus[] statusArray,
+        final FileSystem fileSystem, PathFilter filter) throws IOException {
+
+      
+      Arrays.sort(statusArray,
+          new Comparator<FileStatus>() {
+            @Override
+            public int compare(final FileStatus fs1, final FileStatus fs2) {
+                return Longs.compare(fs2.getModificationTime(),fs1.getModificationTime());
+              }
+            }
+      );
+
+      for (FileStatus f : statusArray) {
+          if (fileSystem.isFile(f.getPath())) {
+              if (filter == null || filter.accept(f.getPath())) {
+                  return f.getPath();
+              } else {
+                  continue;
+              }
+            } else {
+              return depthFirstSearchForFile(
+                  fileSystem.listStatus(f.getPath(), VISIBLE_FILES),
+                  fileSystem, filter);
+            }
+      }
+
+      return null;
+
+    }
+
+    public static int extractHeapSizeInMB(String input) {
+        int ret = 0;
+        if(input == null || input.equals(""))
+            return ret;
+        Matcher m = JAVA_MAXHEAPSIZE_PATTERN.matcher(input);
+        String heapStr = null;
+        String heapNum = null;
+        
+        while (m.find()) {
+            heapStr = m.group(1);
+            heapNum = m.group(2);
+        }
+        if (heapStr != null) {
+            
+            if(heapStr.endsWith("g") || heapStr.endsWith("G")) {
+                ret = Integer.parseInt(heapNum) * 1024;
+            } else {
+                ret = Integer.parseInt(heapNum);
+            }
+        }
+        return ret;
+    }
+
+    public static void setDefaultTimeZone(Configuration conf) {
+        String dtzStr = conf.get(PigConfiguration.PIG_DATETIME_DEFAULT_TIMEZONE);
+        if (dtzStr != null && dtzStr.length() > 0) {
+            
+            DateTimeZone.setDefault(DateTimeZone.forID(dtzStr));
+        }
+    }
+}
+
+<code block>
+
+package org.apache.pig.builtin;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.GnuParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.PathFilter;
+import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.ql.io.orc.CompressionKind;
+import org.apache.hadoop.hive.ql.io.orc.OrcFile;
+import org.apache.hadoop.hive.ql.io.orc.OrcNewInputFormat;
+import org.apache.hadoop.hive.ql.io.orc.OrcNewOutputFormat;
+import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
+import org.apache.hadoop.hive.ql.io.orc.Reader;
+import org.apache.hadoop.hive.ql.io.orc.OrcFile.Version;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgument.Builder;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentFactory;
+import org.apache.hadoop.hive.serde2.AbstractSerDe;
+import org.apache.hadoop.hive.serde2.ColumnProjectionUtils;
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
+import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
+import org.apache.hadoop.hive.shims.HadoopShimsSecure;
+import org.apache.hadoop.mapreduce.InputFormat;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.OutputFormat;
+import org.apache.hadoop.mapreduce.RecordReader;
+import org.apache.hadoop.mapreduce.RecordWriter;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.pig.Expression;
+import org.apache.pig.Expression.BetweenExpression;
+import org.apache.pig.Expression.Column;
+import org.apache.pig.Expression.Const;
+import org.apache.pig.Expression.InExpression;
+import org.apache.pig.Expression.OpType;
+import org.apache.pig.Expression.UnaryExpression;
+import org.apache.pig.LoadFunc;
+import org.apache.pig.LoadMetadata;
+import org.apache.pig.LoadPredicatePushdown;
+import org.apache.pig.LoadPushDown;
+import org.apache.pig.PigException;
+import org.apache.pig.PigWarning;
+import org.apache.pig.ResourceSchema;
+import org.apache.pig.StoreFunc;
+import org.apache.pig.Expression.BinaryExpression;
+import org.apache.pig.ResourceSchema.ResourceFieldSchema;
+import org.apache.pig.ResourceStatistics;
+import org.apache.pig.StoreFuncInterface;
+import org.apache.pig.StoreResources;
+import org.apache.pig.backend.executionengine.ExecException;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PigSplit;
+import org.apache.pig.data.DataType;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.logicalLayer.FrontendException;
+import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.impl.util.UDFContext;
+import org.apache.pig.impl.util.Utils;
+import org.apache.pig.impl.util.hive.HiveUtils;
+import org.joda.time.DateTime;
+
+import com.esotericsoftware.kryo.io.Input;
+import com.google.common.annotations.VisibleForTesting;
+
+
+public class OrcStorage extends LoadFunc implements StoreFuncInterface, LoadMetadata, LoadPushDown, LoadPredicatePushdown, StoreResources {
+
+    
+    private static final String SARG_PUSHDOWN = "sarg.pushdown";
+
+    protected RecordReader in = null;
+    protected RecordWriter writer = null;
+    private TypeInfo typeInfo = null;
+    private ObjectInspector oi = null;
+    private OrcSerde serde = new OrcSerde();
+    private String signature;
+
+    private Long stripeSize;
+    private Integer rowIndexStride;
+    private Integer bufferSize;
+    private Boolean blockPadding;
+    private CompressionKind compress;
+    private Version version;
+
+    private static final Options validOptions;
+    private final CommandLineParser parser = new GnuParser();
+    protected final static Log log = LogFactory.getLog(OrcStorage.class);
+    protected boolean[] mRequiredColumns = null;
+
+    private static final String SchemaSignatureSuffix = "_schema";
+    private static final String RequiredColumnsSuffix = "_columns";
+    private static final String SearchArgsSuffix = "_sarg";
+
+    static {
+        validOptions = new Options();
+        validOptions.addOption("s", "stripeSize", true,
+                "Set the stripe size for the file");
+        validOptions.addOption("r", "rowIndexStride", true,
+                "Set the distance between entries in the row index");
+        validOptions.addOption("b", "bufferSize", true,
+                "The size of the memory buffers used for compressing and storing the " +
+                "stripe in memory");
+        validOptions.addOption("p", "blockPadding", false, "Sets whether the HDFS blocks " +
+                "are padded to prevent stripes from straddling blocks");
+        validOptions.addOption("c", "compress", true,
+                "Sets the generic compression that is used to compress the data");
+        validOptions.addOption("v", "version", true,
+                "Sets the version of the file that will be written");
+    }
+
+    public OrcStorage() {
+    }
+
+    public OrcStorage(String options) {
+        String[] optsArr = options.split(" ");
+        try {
+            CommandLine configuredOptions = parser.parse(validOptions, optsArr);
+            if (configuredOptions.hasOption('s')) {
+                stripeSize = Long.parseLong(configuredOptions.getOptionValue('s'));
+            }
+            if (configuredOptions.hasOption('r')) {
+                rowIndexStride = Integer.parseInt(configuredOptions.getOptionValue('r'));
+            }
+            if (configuredOptions.hasOption('b')) {
+                bufferSize = Integer.parseInt(configuredOptions.getOptionValue('b'));
+            }
+            blockPadding = configuredOptions.hasOption('p');
+            if (configuredOptions.hasOption('c')) {
+                compress = CompressionKind.valueOf(configuredOptions.getOptionValue('c'));
+            }
+            if (configuredOptions.hasOption('v')) {
+                version = Version.byName(configuredOptions.getOptionValue('v'));
+            }
+        } catch (ParseException e) {
+            log.error("Exception in OrcStorage", e);
+            log.error("OrcStorage called with arguments " + options);
+            warn("ParseException in OrcStorage", PigWarning.UDF_WARNING_1);
+            HelpFormatter formatter = new HelpFormatter();
+            formatter.printHelp("OrcStorage(',', '[options]')", validOptions);
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public String relToAbsPathForStoreLocation(String location, Path curDir)
+            throws IOException {
+        return LoadFunc.getAbsolutePath(location, curDir);
+    }
+
+    @Override
+    public OutputFormat getOutputFormat() throws IOException {
+        return new OrcNewOutputFormat();
+    }
+
+    @Override
+    public void setStoreLocation(String location, Job job) throws IOException {
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            if (stripeSize!=null) {
+                job.getConfiguration().setLong(HiveConf.ConfVars.HIVE_ORC_DEFAULT_STRIPE_SIZE.varname,
+                        stripeSize);
+            }
+            if (rowIndexStride!=null) {
+                job.getConfiguration().setInt(HiveConf.ConfVars.HIVE_ORC_DEFAULT_ROW_INDEX_STRIDE.varname,
+                        rowIndexStride);
+            }
+            if (bufferSize!=null) {
+                job.getConfiguration().setInt(HiveConf.ConfVars.HIVE_ORC_DEFAULT_BUFFER_SIZE.varname,
+                        bufferSize);
+            }
+            if (blockPadding!=null) {
+                job.getConfiguration().setBoolean(HiveConf.ConfVars.HIVE_ORC_DEFAULT_BLOCK_PADDING.varname,
+                        blockPadding);
+            }
+            if (compress!=null) {
+                job.getConfiguration().set(HiveConf.ConfVars.HIVE_ORC_DEFAULT_COMPRESS.varname,
+                        compress.toString());
+            }
+            if (version!=null) {
+                job.getConfiguration().set(HiveConf.ConfVars.HIVE_ORC_WRITE_FORMAT.varname,
+                        version.getName());
+            }
+        }
+        FileOutputFormat.setOutputPath(job, new Path(location));
+        if (typeInfo==null) {
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            typeInfo = (TypeInfo)ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        }
+        if (oi==null) {
+            oi = HiveUtils.createObjectInspector(typeInfo);
+        }
+    }
+
+    @Override
+    public void checkSchema(ResourceSchema rs) throws IOException {
+        ResourceFieldSchema fs = new ResourceFieldSchema();
+        fs.setType(DataType.TUPLE);
+        fs.setSchema(rs);
+        typeInfo = HiveUtils.getTypeInfo(fs);
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        p.setProperty(signature + SchemaSignatureSuffix, ObjectSerializer.serialize(typeInfo));
+    }
+
+    @Override
+    public void prepareToWrite(RecordWriter writer) throws IOException {
+        this.writer = writer;
+    }
+
+    @Override
+    public void putNext(Tuple t) throws IOException {
+        try {
+            writer.write(null, serde.serialize(t, oi));
+        } catch (InterruptedException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public void setStoreFuncUDFContextSignature(String signature) {
+        this.signature = signature;
+    }
+
+    @Override
+    public void setUDFContextSignature(String signature) {
+        this.signature = signature;
+    }
+
+    @Override
+    public void cleanupOnFailure(String location, Job job) throws IOException {
+        StoreFunc.cleanupOnFailureImpl(location, job);
+    }
+
+    @Override
+    public void cleanupOnSuccess(String location, Job job) throws IOException {
+    }
+
+    @Override
+    public void setLocation(String location, Job job) throws IOException {
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            typeInfo = (TypeInfo)ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        } else if (typeInfo == null) {
+            typeInfo = getTypeInfo(location, job);
+        }
+        if (typeInfo != null && oi == null) {
+            oi = OrcStruct.createObjectInspector(typeInfo);
+        }
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            if (p.getProperty(signature + RequiredColumnsSuffix) != null) {
+                mRequiredColumns = (boolean[]) ObjectSerializer.deserialize(p
+                        .getProperty(signature + RequiredColumnsSuffix));
+                job.getConfiguration().setBoolean(ColumnProjectionUtils.READ_ALL_COLUMNS, false);
+                job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_IDS_CONF_STR,
+                        getReqiredColumnIdString(mRequiredColumns));
+                if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                    
+                    job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_NAMES_CONF_STR,
+                            getReqiredColumnNamesString(getSchema(location, job), mRequiredColumns));
+                }
+            } else if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                
+                job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_NAMES_CONF_STR,
+                        getReqiredColumnNamesString(getSchema(location, job)));
+            }
+            if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                job.getConfiguration().set(SARG_PUSHDOWN, p.getProperty(signature + SearchArgsSuffix));
+            }
+
+        }
+        FileInputFormat.setInputPaths(job, location);
+    }
+
+    private String getReqiredColumnIdString(boolean[] requiredColumns) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < requiredColumns.length; i++) {
+            if (requiredColumns[i]) {
+                sb.append(i).append(",");
+            }
+        }
+        if (sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    private String getReqiredColumnNamesString(ResourceSchema schema) {
+        StringBuilder sb = new StringBuilder();
+        for (ResourceFieldSchema field : schema.getFields()) {
+            sb.append(field.getName()).append(",");
+        }
+        if(sb.charAt(sb.length() -1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    private String getReqiredColumnNamesString(ResourceSchema schema, boolean[] requiredColumns) {
+        StringBuilder sb = new StringBuilder();
+        ResourceFieldSchema[] fields = schema.getFields();
+        for (int i = 0; i < requiredColumns.length; i++) {
+            if (requiredColumns[i]) {
+                sb.append(fields[i]).append(",");
+            }
+        }
+        if(sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    @Override
+    public InputFormat getInputFormat() throws IOException {
+        return new OrcNewInputFormat();
+    }
+
+    @Override
+    public void prepareToRead(RecordReader reader, PigSplit split)
+            throws IOException {
+        in = reader;
+    }
+
+    @Override
+    public Tuple getNext() throws IOException {
+        try {
+            boolean notDone = in.nextKeyValue();
+            if (!notDone) {
+                return null;
+            }
+            Object value = in.getCurrentValue();
+
+            Tuple t = (Tuple)HiveUtils.convertHiveToPig(value, oi, mRequiredColumns);
+            return t;
+        } catch (InterruptedException e) {
+            int errCode = 6018;
+            String errMsg = "Error while reading input";
+            throw new ExecException(errMsg, errCode,
+                    PigException.REMOTE_ENVIRONMENT, e);
+        }
+    }
+
+    @Override
+    public List<String> getShipFiles() {
+        List<String> cacheFiles = new ArrayList<String>();
+        String hadoopVersion = "20S";
+        if (Utils.isHadoop23() || Utils.isHadoop2()) {
+            hadoopVersion = "23";
+        }
+        Class hadoopVersionShimsClass;
+        try {
+            hadoopVersionShimsClass = Class.forName("org.apache.hadoop.hive.shims.Hadoop" +
+                    hadoopVersion + "Shims");
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException("Cannot find Hadoop" + hadoopVersion + "ShimsClass in classpath");
+        }
+        Class[] classList = new Class[] {OrcFile.class, HiveConf.class, AbstractSerDe.class,
+                org.apache.hadoop.hive.shims.HadoopShims.class, HadoopShimsSecure.class, hadoopVersionShimsClass,
+                Input.class};
+        return FuncUtils.getShipFiles(classList);
+    }
+
+    private static Path getFirstFile(String location, FileSystem fs, PathFilter filter) throws IOException {
+        String[] locations = getPathStrings(location);
+        Path[] paths = new Path[locations.length];
+        for (int i = 0; i < paths.length; ++i) {
+            paths[i] = new Path(locations[i]);
+        }
+        List<FileStatus> statusList = new ArrayList<FileStatus>();
+        for (int i = 0; i < paths.length; ++i) {
+            FileStatus[] files = fs.globStatus(paths[i]);
+            if (files != null) {
+                for (FileStatus tempf : files) {
+                    statusList.add(tempf);
+                }
+            }
+        }
+        FileStatus[] statusArray = (FileStatus[]) statusList
+                .toArray(new FileStatus[statusList.size()]);
+        Path p = Utils.depthFirstSearchForFile(statusArray, fs, filter);
+        return p;
+    }
+
+    @Override
+    public ResourceSchema getSchema(String location, Job job)
+            throws IOException {
+        if (typeInfo == null) {
+            typeInfo = getTypeInfo(location, job);
+            
+            if (typeInfo == null) {
+                return null;
+            }
+        }
+
+        ResourceFieldSchema fs = HiveUtils.getResourceFieldSchema(typeInfo);
+        return fs.getSchema();
+    }
+
+    private TypeInfo getTypeInfo(String location, Job job) throws IOException {
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        TypeInfo typeInfo = (TypeInfo) ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        if (typeInfo == null) {
+            typeInfo = getTypeInfoFromLocation(location, job);
+        }
+        if (typeInfo != null) {
+            p.setProperty(signature + SchemaSignatureSuffix, ObjectSerializer.serialize(typeInfo));
+        }
+        return typeInfo;
+    }
+
+    private TypeInfo getTypeInfoFromLocation(String location, Job job) throws IOException {
+        FileSystem fs = FileSystem.get(job.getConfiguration());
+        Path path = getFirstFile(location, fs, new NonEmptyOrcFileFilter(fs));
+        if (path == null) {
+            log.info("Cannot find any ORC files from " + location +
+                    ". Probably multiple load store in script.");
+            return null;
+        }
+        Reader reader = OrcFile.createReader(fs, path);
+        ObjectInspector oip = (ObjectInspector)reader.getObjectInspector();
+        return TypeInfoUtils.getTypeInfoFromObjectInspector(oip);
+    }
+
+    public static class NonEmptyOrcFileFilter implements PathFilter {
+        private FileSystem fs;
+        public NonEmptyOrcFileFilter(FileSystem fs) {
+            this.fs = fs;
+        }
+        @Override
+        public boolean accept(Path path) {
+            Reader reader;
+            try {
+                reader = OrcFile.createReader(fs, path);
+                ObjectInspector oip = (ObjectInspector)reader.getObjectInspector();
+                ResourceFieldSchema rs = HiveUtils.getResourceFieldSchema(TypeInfoUtils.getTypeInfoFromObjectInspector(oip));
+                if (rs.getSchema().getFields().length!=0) {
+                    return true;
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            return false;
+        }
+    }
+
+    @Override
+    public ResourceStatistics getStatistics(String location, Job job)
+            throws IOException {
+        return null;
+    }
+
+    @Override
+    public String[] getPartitionKeys(String location, Job job)
+            throws IOException {
+        return null;
+    }
+
+    @Override
+    public void setPartitionFilter(Expression partitionFilter)
+            throws IOException {
+    }
+
+    @Override
+    public List<OperatorSet> getFeatures() {
+        return Arrays.asList(LoadPushDown.OperatorSet.PROJECTION);
+    }
+
+    @Override
+    public RequiredFieldResponse pushProjection(
+            RequiredFieldList requiredFieldList) throws FrontendException {
+        if (requiredFieldList == null)
+            return null;
+        if (requiredFieldList.getFields() != null)
+        {
+            int schemaSize = ((StructTypeInfo)typeInfo).getAllStructFieldTypeInfos().size();
+            mRequiredColumns = new boolean[schemaSize];
+            for (RequiredField rf: requiredFieldList.getFields())
+            {
+                if (rf.getIndex()!=-1)
+                    mRequiredColumns[rf.getIndex()] = true;
+            }
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            try {
+                p.setProperty(signature + RequiredColumnsSuffix, ObjectSerializer.serialize(mRequiredColumns));
+            } catch (Exception e) {
+                throw new RuntimeException("Cannot serialize mRequiredColumns");
+            }
+        }
+        return new RequiredFieldResponse(true);
+    }
+
+    @Override
+    public List<String> getPredicateFields(String location, Job job) throws IOException {
+        ResourceSchema schema = getSchema(location, job);
+        List<String> predicateFields = new ArrayList<String>();
+        for (ResourceFieldSchema field : schema.getFields()) {
+            switch(field.getType()) {
+            case DataType.BOOLEAN:
+            case DataType.INTEGER:
+            case DataType.LONG:
+            case DataType.FLOAT:
+            case DataType.DOUBLE:
+            case DataType.DATETIME:
+            case DataType.CHARARRAY:
+            case DataType.BIGINTEGER:
+            case DataType.BIGDECIMAL:
+                predicateFields.add(field.getName());
+                break;
+            default:
+                
+                break;
+            }
+        }
+        return predicateFields;
+    }
+
+    @Override
+    public List<OpType> getSupportedExpressionTypes() {
+        List<OpType> types = new ArrayList<OpType>();
+        types.add(OpType.OP_EQ);
+        types.add(OpType.OP_NE);
+        types.add(OpType.OP_GT);
+        types.add(OpType.OP_GE);
+        types.add(OpType.OP_LT);
+        types.add(OpType.OP_LE);
+        types.add(OpType.OP_IN);
+        types.add(OpType.OP_BETWEEN);
+        types.add(OpType.OP_NULL);
+        types.add(OpType.OP_NOT);
+        types.add(OpType.OP_AND);
+        types.add(OpType.OP_OR);
+        return types;
+    }
+
+    @Override
+    public void setPushdownPredicate(Expression expr) throws IOException {
+        SearchArgument sArg = getSearchArgument(expr);
+        if (sArg != null) {
+            log.info("Pushdown predicate expression is " + expr);
+            log.info("Pushdown predicate SearchArgument is:\n" + sArg);
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            try {
+                p.setProperty(signature + SearchArgsSuffix, sArg.toKryo());
+            } catch (Exception e) {
+                throw new IOException("Cannot serialize SearchArgument: " + sArg);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    SearchArgument getSearchArgument(Expression expr) {
+        if (expr == null) {
+            return null;
+        }
+        Builder builder = SearchArgumentFactory.newBuilder();
+        boolean beginWithAnd = !(expr.getOpType().equals(OpType.OP_AND) || expr.getOpType().equals(OpType.OP_OR) || expr.getOpType().equals(OpType.OP_NOT));
+        if (beginWithAnd) {
+            builder.startAnd();
+        }
+        buildSearchArgument(expr, builder);
+        if (beginWithAnd) {
+            builder.end();
+        }
+        SearchArgument sArg = builder.build();
+        return sArg;
+    }
+
+    private void buildSearchArgument(Expression expr, Builder builder) {
+        if (expr instanceof BinaryExpression) {
+            Expression lhs = ((BinaryExpression) expr).getLhs();
+            Expression rhs = ((BinaryExpression) expr).getRhs();
+            switch (expr.getOpType()) {
+            case OP_AND:
+                builder.startAnd();
+                buildSearchArgument(lhs, builder);
+                buildSearchArgument(rhs, builder);
+                builder.end();
+                break;
+            case OP_OR:
+                builder.startOr();
+                buildSearchArgument(lhs, builder);
+                buildSearchArgument(rhs, builder);
+                builder.end();
+                break;
+            case OP_EQ:
+                builder.equals(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_NE:
+                builder.startNot();
+                builder.equals(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_LT:
+                builder.lessThan(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_LE:
+                builder.lessThanEquals(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_GT:
+                builder.startNot();
+                builder.lessThanEquals(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_GE:
+                builder.startNot();
+                builder.lessThan(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_BETWEEN:
+                BetweenExpression between = (BetweenExpression) rhs;
+                builder.between(getColumnName(lhs), getSearchArgObjValue(between.getLower()),  getSearchArgObjValue(between.getUpper()));
+            case OP_IN:
+                InExpression in = (InExpression) rhs;
+                builder.in(getColumnName(lhs), getSearchArgObjValues(in.getValues()).toArray());
+            default:
+                throw new RuntimeException("Unsupported binary expression type: " + expr.getOpType() + " in " + expr);
+            }
+        } else if (expr instanceof UnaryExpression) {
+            Expression unaryExpr = ((UnaryExpression) expr).getExpression();
+            switch (expr.getOpType()) {
+            case OP_NULL:
+                builder.isNull(getColumnName(unaryExpr));
+                break;
+            case OP_NOT:
+                builder.startNot();
+                buildSearchArgument(unaryExpr, builder);
+                builder.end();
+                break;
+            default:
+                throw new RuntimeException("Unsupported unary expression type: " +
+                        expr.getOpType() + " in " + expr);
+            }
+        } else {
+            throw new RuntimeException("Unsupported expression type: " + expr.getOpType() + " in " + expr);
+        }
+    }
+
+    private String getColumnName(Expression expr) {
+        try {
+            return ((Column) expr).getName();
+        } catch (ClassCastException e) {
+            throw new RuntimeException("Expected a Column but found " + expr.getClass().getName() +
+                    " in expression " + expr, e);
+        }
+    }
+
+    private Object getExpressionValue(Expression expr) {
+        switch(expr.getOpType()) {
+        case TERM_COL:
+            return ((Column) expr).getName();
+        case TERM_CONST:
+            return getSearchArgObjValue(((Const) expr).getValue());
+        default:
+            throw new RuntimeException("Unsupported expression type: " + expr.getOpType() + " in " + expr);
+        }
+    }
+
+    private List<Object> getSearchArgObjValues(List<Object> values) {
+        if (!(values.get(0) instanceof BigInteger || values.get(0) instanceof BigDecimal || values.get(0) instanceof DateTime)) {
+            return values;
+        }
+        List<Object> newValues = new ArrayList<Object>(values.size());
+        for (Object value : values) {
+            newValues.add(getSearchArgObjValue(value));
+        }
+        return values;
+    }
+
+    private Object getSearchArgObjValue(Object value) {
+        if (value instanceof BigInteger) {
+            return new BigDecimal((BigInteger)value);
+        } else if (value instanceof BigDecimal) {
+            return value;
+        } else if (value instanceof DateTime) {
+            return new Timestamp(((DateTime)value).getMillis());
+        } else {
+            return value;
+        }
+    }
+
+}
+
+<code block>
+
+package org.apache.pig.impl.util;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.io.SequenceInputStream;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.PathFilter;
+import org.apache.hadoop.io.compress.BZip2Codec;
+import org.apache.hadoop.io.compress.GzipCodec;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.pig.FileInputLoadFunc;
+import org.apache.pig.FuncSpec;
+import org.apache.pig.LoadFunc;
+import org.apache.pig.PigConfiguration;
+import org.apache.pig.PigException;
+import org.apache.pig.ResourceSchema;
+import org.apache.pig.ResourceSchema.ResourceFieldSchema;
+import org.apache.pig.backend.executionengine.ExecException;
+import org.apache.pig.backend.hadoop.datastorage.ConfigurationUtil;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfiguration;
+import org.apache.pig.data.DataType;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.PigContext;
+import org.apache.pig.impl.PigImplConstants;
+import org.apache.pig.impl.io.InterStorage;
+import org.apache.pig.impl.io.ReadToEndLoader;
+import org.apache.pig.impl.io.SequenceFileInterStorage;
+import org.apache.pig.impl.io.TFileStorage;
+import org.apache.pig.impl.logicalLayer.schema.Schema;
+import org.apache.pig.impl.logicalLayer.schema.Schema.FieldSchema;
+import org.apache.pig.newplan.logical.relational.LogicalSchema;
+import org.apache.pig.parser.ParserException;
+import org.apache.pig.parser.QueryParserDriver;
+import org.joda.time.DateTimeZone;
+
+import com.google.common.collect.Lists;
+import com.google.common.primitives.Longs;
+
+
+public class Utils {
+    private static final Log log = LogFactory.getLog(Utils.class);
+    private static final Pattern JAVA_MAXHEAPSIZE_PATTERN = Pattern.compile("-Xmx(([0-9]+)[mMgG])");
+
+
+    
+    public static boolean isVendorIBM() {
+    	  return System.getProperty("java.vendor").contains("IBM");
+    }
+
+    public static boolean isHadoop23() {
+        String version = org.apache.hadoop.util.VersionInfo.getVersion();
+        if (version.matches("\\b0\\.23\\..+\\b"))
+            return true;
+        return false;
+    }
+
+    public static boolean isHadoop2() {
+        String version = org.apache.hadoop.util.VersionInfo.getVersion();
+        if (version.matches("\\b2\\.\\d+\\..+"))
+            return true;
+        return false;
+    }
+
+    
+    public static boolean checkNullEquals(Object obj1, Object obj2, boolean checkEquality) {
+        if(obj1 == null || obj2 == null) {
+            return obj1 == obj2;
+        }
+        if(checkEquality) {
+            if(!obj1.equals(obj2)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+
+    
+    public static boolean checkNullAndClass(Object obj1, Object obj2) {
+        if(checkNullEquals(obj1, obj2, false)) {
+            if(obj1 != null) {
+                return obj1.getClass() == obj2.getClass();
+            } else {
+                return true; 
+            }
+        } else {
+            return false;
+        }
+    }
+
+    
+    public static Schema getScriptSchema(
+            String loadFuncSignature,
+            Configuration conf) throws IOException {
+        Schema scriptSchema = null;
+        String scriptField = conf.get(getScriptSchemaKey(loadFuncSignature));
+
+        if (scriptField != null) {
+            scriptSchema = (Schema) ObjectSerializer.deserialize(scriptField);
+        }
+
+        return scriptSchema;
+    }
+
+    public static String getScriptSchemaKey(String loadFuncSignature) {
+        return loadFuncSignature + ".scriptSchema";
+    }
+
+    public static ResourceSchema getSchema(LoadFunc wrappedLoadFunc, String location, boolean checkExistence, Job job)
+            throws IOException {
+        Configuration conf = job.getConfiguration();
+        if (checkExistence) {
+            Path path = new Path(location);
+            if (!FileSystem.get(conf).exists(path)) {
+                
+                
+                
+                return null;
+            }
+        }
+        ReadToEndLoader loader = new ReadToEndLoader(wrappedLoadFunc, conf, location, 0);
+        
+        
+        
+        Tuple t = loader.getNext();
+        if (t == null) {
+            
+            return null;
+        }
+        int numFields = t.size();
+        Schema s = new Schema();
+        for (int i = 0; i < numFields; i++) {
+            try {
+                s.add(DataType.determineFieldSchema(t.get(i)));
+            }
+            catch (Exception e) {
+                int errCode = 2104;
+                String msg = "Error while determining schema of SequenceFileStorage data.";
+                throw new ExecException(msg, errCode, PigException.BUG, e);
+            }
+        }
+        return new ResourceSchema(s);
+    }
+
+    
+    public static Schema getSchemaFromString(String schemaString) throws ParserException {
+        LogicalSchema schema = parseSchema(schemaString);
+        Schema result = org.apache.pig.newplan.logical.Util.translateSchema(schema);
+        Schema.setSchemaDefaultType(result, DataType.BYTEARRAY);
+        return result;
+    }
+
+    
+    public static Schema getSchemaFromBagSchemaString(String schemaString) throws ParserException {
+        String unwrappedSchemaString = schemaString.substring(1, schemaString.length() - 1);
+        return getSchemaFromString(unwrappedSchemaString);
+    }
+
+    public static LogicalSchema parseSchema(String schemaString) throws ParserException {
+        QueryParserDriver queryParser = new QueryParserDriver( new PigContext(),
+                "util", new HashMap<String, String>() ) ;
+        LogicalSchema schema = queryParser.parseSchema(schemaString);
+        return schema;
+    }
+
+    public static Object parseConstant(String constantString) throws ParserException {
+        QueryParserDriver queryParser = new QueryParserDriver( new PigContext(),
+                "util", new HashMap<String, String>() ) ;
+        Object constant = queryParser.parseConstant(constantString);
+        return constant;
+    }
+
+    
+    public static ResourceSchema getSchemaWithInputSourceTag(ResourceSchema schema, String fieldName) {
+        ResourceFieldSchema[] fieldSchemas = schema.getFields();
+        ResourceFieldSchema sourceTagSchema = new ResourceFieldSchema(new FieldSchema(fieldName, DataType.CHARARRAY));
+        ResourceFieldSchema[] fieldSchemasWithSourceTag = new ResourceFieldSchema[fieldSchemas.length + 1];
+        fieldSchemasWithSourceTag[0] = sourceTagSchema;
+        for(int j = 0; j < fieldSchemas.length; j++) {
+            fieldSchemasWithSourceTag[j + 1] = fieldSchemas[j];
+        }
+        return schema.setFields(fieldSchemasWithSourceTag);
+    }
+
+    private static enum TEMPFILE_CODEC {
+        GZ (GzipCodec.class.getName()),
+        GZIP (GzipCodec.class.getName()),
+        LZO ("com.hadoop.compression.lzo.LzoCodec"),
+        SNAPPY ("org.xerial.snappy.SnappyCodec"),
+        BZIP2 (BZip2Codec.class.getName());
+
+        private String hadoopCodecClassName;
+
+        TEMPFILE_CODEC(String codecClassName) {
+            this.hadoopCodecClassName = codecClassName;
+        }
+
+        public String lowerName() {
+            return this.name().toLowerCase();
+        }
+
+        public String getHadoopCodecClassName() {
+            return this.hadoopCodecClassName;
+        }
+    }
+
+    private static enum TEMPFILE_STORAGE {
+        INTER(InterStorage.class,
+                null),
+        TFILE(TFileStorage.class,
+                Arrays.asList(TEMPFILE_CODEC.GZ,
+                        TEMPFILE_CODEC.GZIP,
+                        TEMPFILE_CODEC.LZO)),
+        SEQFILE(SequenceFileInterStorage.class,
+                Arrays.asList(TEMPFILE_CODEC.GZ,
+                        TEMPFILE_CODEC.GZIP,
+                        TEMPFILE_CODEC.LZO,
+                        TEMPFILE_CODEC.SNAPPY,
+                        TEMPFILE_CODEC.BZIP2));
+
+        private Class<? extends FileInputLoadFunc> storageClass;
+        private List<TEMPFILE_CODEC> supportedCodecs;
+
+        TEMPFILE_STORAGE(
+                Class<? extends FileInputLoadFunc> storageClass,
+                List<TEMPFILE_CODEC> supportedCodecs) {
+            this.storageClass = storageClass;
+            this.supportedCodecs = supportedCodecs;
+        }
+
+        public String lowerName() {
+            return this.name().toLowerCase();
+        }
+
+        public Class<? extends FileInputLoadFunc> getStorageClass() {
+            return storageClass;
+        }
+
+        public boolean ensureCodecSupported(String codec) {
+            try {
+                return this.supportedCodecs.contains(TEMPFILE_CODEC.valueOf(codec.toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                return false;
+            }
+        }
+
+        public String supportedCodecsToString() {
+            StringBuffer sb = new StringBuffer();
+            boolean first = true;
+            for (TEMPFILE_CODEC codec : supportedCodecs) {
+                if(first) {
+                    first = false;
+                } else {
+                    sb.append(",");
+                }
+                sb.append(codec.name());
+            }
+            return sb.toString();
+        }
+    }
+
+    public static String getTmpFileCompressorName(PigContext pigContext) {
+        if (pigContext == null)
+            return InterStorage.class.getName();
+
+        String codec = pigContext.getProperties().getProperty(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        if (codec.equals(TEMPFILE_CODEC.LZO.lowerName())) {
+            pigContext.getProperties().setProperty("io.compression.codec.lzo.class", "com.hadoop.compression.lzo.LzoCodec");
+        }
+
+        return getTmpFileStorage(pigContext.getProperties()).getStorageClass().getName();
+    }
+
+    public static FileInputLoadFunc getTmpFileStorageObject(Configuration conf) throws IOException {
+        Class<? extends FileInputLoadFunc> storageClass = getTmpFileStorageClass(ConfigurationUtil.toProperties(conf));
+        try {
+            return storageClass.newInstance();
+        } catch (InstantiationException e) {
+            throw new IOException(e);
+        } catch (IllegalAccessException e) {
+            throw new IOException(e);
+        }
+    }
+
+    public static Class<? extends FileInputLoadFunc> getTmpFileStorageClass(Properties properties) {
+       return getTmpFileStorage(properties).getStorageClass();
+    }
+
+    private static TEMPFILE_STORAGE getTmpFileStorage(Properties properties) {
+        boolean tmpFileCompression = properties.getProperty(
+                PigConfiguration.PIG_ENABLE_TEMP_FILE_COMPRESSION, "false").equals("true");
+        String tmpFileCompressionStorage =
+                properties.getProperty(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_STORAGE,
+                        TEMPFILE_STORAGE.TFILE.lowerName());
+
+        if (!tmpFileCompression) {
+            return TEMPFILE_STORAGE.INTER;
+        } else if (TEMPFILE_STORAGE.SEQFILE.lowerName().equals(tmpFileCompressionStorage)) {
+            return TEMPFILE_STORAGE.SEQFILE;
+        } else if (TEMPFILE_STORAGE.TFILE.lowerName().equals(tmpFileCompressionStorage)) {
+            return TEMPFILE_STORAGE.TFILE;
+        } else {
+            throw new IllegalArgumentException("Unsupported storage format " + tmpFileCompressionStorage +
+                    ". Should be one of " + Arrays.toString(TEMPFILE_STORAGE.values()));
+        }
+    }
+
+    public static void setMapredCompressionCodecProps(Configuration conf) {
+        String codec = conf.get(
+                PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        if ("".equals(codec) && conf.get(MRConfiguration.OUTPUT_COMPRESSION_CODEC) != null) {
+            conf.setBoolean(MRConfiguration.OUTPUT_COMPRESS, true);
+        } else if (TEMPFILE_STORAGE.SEQFILE.ensureCodecSupported(codec)) {
+            conf.setBoolean(MRConfiguration.OUTPUT_COMPRESS, true);
+            conf.set(MRConfiguration.OUTPUT_COMPRESSION_CODEC,
+                    TEMPFILE_CODEC.valueOf(codec.toUpperCase()).getHadoopCodecClassName());
+        }
+        
+    }
+
+    public static void setTmpFileCompressionOnConf(PigContext pigContext, Configuration conf) throws IOException{
+        
+        if (pigContext == null) {
+            return;
+        }
+        TEMPFILE_STORAGE storage = getTmpFileStorage(pigContext.getProperties());
+        String codec = pigContext.getProperties().getProperty(
+                PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, "");
+        switch (storage) {
+        case INTER:
+            break;
+        case SEQFILE:
+            conf.set(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_STORAGE, "seqfile");
+            if ("".equals(codec)) {
+                
+                log.warn("Temporary file compression codec is not specified. Using " +
+                         MRConfiguration.OUTPUT_COMPRESSION_CODEC + " property.");
+                if(conf.get(MRConfiguration.OUTPUT_COMPRESSION_CODEC) == null) {
+                    throw new IOException(MRConfiguration.OUTPUT_COMPRESSION_CODEC + " is not set");
+                }
+            } else if(storage.ensureCodecSupported(codec)) {
+                
+            } else {
+                throw new IOException("Invalid temporary file compression codec [" + codec + "]. " +
+                        "Expected compression codecs for " + storage.getStorageClass().getName() +
+                        " are " + storage.supportedCodecsToString() + ".");
+            }
+            break;
+        case TFILE:
+            if(storage.ensureCodecSupported(codec)) {
+                conf.set(PigConfiguration.PIG_TEMP_FILE_COMPRESSION_CODEC, codec.toLowerCase());
+            } else {
+                throw new IOException("Invalid temporary file compression codec [" + codec + "]. " +
+                        "Expected compression codecs for " + storage.getStorageClass().getName() +
+                        " are " + storage.supportedCodecsToString() + ".");
+            }
+            break;
+        }
+    }
+
+    public static String getStringFromArray(String[] arr) {
+        StringBuilder str = new StringBuilder();
+        for(String s: arr) {
+            str.append(s);
+            str.append(" ");
+        }
+        return str.toString();
+    }
+
+    public static FuncSpec buildSimpleFuncSpec(String className, byte...types) {
+        List<Schema.FieldSchema> fieldSchemas = Lists.newArrayListWithExpectedSize(types.length);
+        for (byte type : types) {
+            fieldSchemas.add(new Schema.FieldSchema(null, type));
+        }
+        return new FuncSpec(className, new Schema(fieldSchemas));
+    }
+
+    
+    public static String slashisize(String str) {
+        return str.replace("\\\\", "\\");
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <O> Collection<O> mergeCollection(Collection<O> a, Collection<O> b) {
+        if (a==null && b==null)
+            return null;
+        Collection<O> result = null;
+        try {
+            if (a!=null)
+                result = a.getClass().newInstance();
+            else
+                result = b.getClass().newInstance();
+        } catch (Exception e) {
+            
+        }
+        if (a==null) {
+            result.addAll(b);
+        }
+        else if (b==null) {
+            result.addAll(a);
+        }
+        else {
+            result.addAll(a);
+            for (O o : b) {
+                if (!result.contains(o)) {
+                    result.add(o);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    public static InputStream getCompositeStream(InputStream in, Properties properties) {
+        
+        final String bootupFile = properties.getProperty("pig.load.default.statements", System.getProperty("user.home") + "/.pigbootup");
+        try {
+            final InputStream inputSteam = new FileInputStream(new File(bootupFile));
+            return new SequenceInputStream(inputSteam, in);
+        } catch(FileNotFoundException fe) {
+            log.info("Default bootup file " +bootupFile+ " not found");
+            return in;
+        }
+    }
+
+    
+    public static void recomputeProperties(JobConf jobConf, Properties properties) {
+        
+        
+        if (jobConf != null && properties != null) {
+            
+            
+            Enumeration<Object> propertiesIter = properties.keys();
+            while (propertiesIter.hasMoreElements()) {
+                String key = (String) propertiesIter.nextElement();
+                String val = properties.getProperty(key);
+                
+                if (!key.equals("user.name")) {
+                    jobConf.set(key, val);
+                }
+            }
+            
+            properties.clear();
+            Iterator<Map.Entry<String, String>> iter = jobConf.iterator();
+            while (iter.hasNext()) {
+                Map.Entry<String, String> entry = iter.next();
+                properties.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    public static String getStackStraceStr(Throwable e) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(baos);
+        e.printStackTrace(ps);
+        return baos.toString();
+    }
+
+    public static boolean isLocal(PigContext pigContext, Configuration conf) {
+        return pigContext.getExecType().isLocal() || conf.getBoolean(PigImplConstants.CONVERTED_TO_LOCAL, false);
+    }
+
+    
+    
+    private static Pattern varPat = Pattern.compile("\\$\\{[^\\}\\$\u0020]+\\}");
+    private static int MAX_SUBST = 20;
+
+    public static String substituteVars(String expr) {
+        if (expr == null) {
+            return null;
+        }
+        Matcher match = varPat.matcher("");
+        String eval = expr;
+        for(int s=0; s<MAX_SUBST; s++) {
+            match.reset(eval);
+            if (!match.find()) {
+                return eval;
+            }
+            String var = match.group();
+            var = var.substring(2, var.length()-1); 
+            String val = null;
+            val = System.getProperty(var);
+            if (val == null) {
+                return eval; 
+            }
+            
+            eval = eval.substring(0, match.start())+val+eval.substring(match.end());
+        }
+        throw new IllegalStateException("Variable substitution depth too large: "
+                + MAX_SUBST + " " + expr);
+    }
+
+    
+    public static final PathFilter VISIBLE_FILES = new PathFilter() {
+      @Override
+      public boolean accept(final Path p) {
+        return (!(p.getName().startsWith("_") || p.getName().startsWith(".")));
+      }
+    };
+
+    
+
+    public static Path depthFirstSearchForFile(final FileStatus fileStatus,
+        final FileSystem fileSystem) throws IOException {
+      if (fileSystem.isFile(fileStatus.getPath())) {
+        return fileStatus.getPath();
+      } else {
+        return depthFirstSearchForFile(
+            fileSystem.listStatus(fileStatus.getPath(), VISIBLE_FILES),
+            fileSystem);
+      }
+
+    }
+
+    
+    public static Path depthFirstSearchForFile(final FileStatus[] statusArray,
+        final FileSystem fileSystem) throws IOException {
+
+      
+      Arrays.sort(statusArray,
+          new Comparator<FileStatus>() {
+            @Override
+            public int compare(final FileStatus fs1, final FileStatus fs2) {
+                return Longs.compare(fs2.getModificationTime(),fs1.getModificationTime());
+              }
+            }
+      );
+
+      for (FileStatus f : statusArray) {
+        Path p = depthFirstSearchForFile(f, fileSystem);
+        if (p != null) {
+          return p;
+        }
+      }
+
+      return null;
+
+    }
+
+    public static int extractHeapSizeInMB(String input) {
+        int ret = 0;
+        if(input == null || input.equals(""))
+            return ret;
+        Matcher m = JAVA_MAXHEAPSIZE_PATTERN.matcher(input);
+        String heapStr = null;
+        String heapNum = null;
+        
+        while (m.find()) {
+            heapStr = m.group(1);
+            heapNum = m.group(2);
+        }
+        if (heapStr != null) {
+            
+            if(heapStr.endsWith("g") || heapStr.endsWith("G")) {
+                ret = Integer.parseInt(heapNum) * 1024;
+            } else {
+                ret = Integer.parseInt(heapNum);
+            }
+        }
+        return ret;
+    }
+
+    public static void setDefaultTimeZone(Configuration conf) {
+        String dtzStr = conf.get(PigConfiguration.PIG_DATETIME_DEFAULT_TIMEZONE);
+        if (dtzStr != null && dtzStr.length() > 0) {
+            
+            DateTimeZone.setDefault(DateTimeZone.forID(dtzStr));
+        }
+    }
+}
+
+<code block>
+
+package org.apache.pig.builtin;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.GnuParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.ql.io.orc.CompressionKind;
+import org.apache.hadoop.hive.ql.io.orc.OrcFile;
+import org.apache.hadoop.hive.ql.io.orc.OrcNewInputFormat;
+import org.apache.hadoop.hive.ql.io.orc.OrcNewOutputFormat;
+import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
+import org.apache.hadoop.hive.ql.io.orc.Reader;
+import org.apache.hadoop.hive.ql.io.orc.OrcFile.Version;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgument.Builder;
+import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentFactory;
+import org.apache.hadoop.hive.serde2.AbstractSerDe;
+import org.apache.hadoop.hive.serde2.ColumnProjectionUtils;
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
+import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
+import org.apache.hadoop.hive.shims.HadoopShimsSecure;
+import org.apache.hadoop.mapreduce.InputFormat;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.OutputFormat;
+import org.apache.hadoop.mapreduce.RecordReader;
+import org.apache.hadoop.mapreduce.RecordWriter;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.pig.Expression;
+import org.apache.pig.Expression.BetweenExpression;
+import org.apache.pig.Expression.Column;
+import org.apache.pig.Expression.Const;
+import org.apache.pig.Expression.InExpression;
+import org.apache.pig.Expression.OpType;
+import org.apache.pig.Expression.UnaryExpression;
+import org.apache.pig.LoadFunc;
+import org.apache.pig.LoadMetadata;
+import org.apache.pig.LoadPredicatePushdown;
+import org.apache.pig.LoadPushDown;
+import org.apache.pig.PigException;
+import org.apache.pig.PigWarning;
+import org.apache.pig.ResourceSchema;
+import org.apache.pig.StoreFunc;
+import org.apache.pig.Expression.BinaryExpression;
+import org.apache.pig.ResourceSchema.ResourceFieldSchema;
+import org.apache.pig.ResourceStatistics;
+import org.apache.pig.StoreFuncInterface;
+import org.apache.pig.StoreResources;
+import org.apache.pig.backend.executionengine.ExecException;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PigSplit;
+import org.apache.pig.data.DataType;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.logicalLayer.FrontendException;
+import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.impl.util.UDFContext;
+import org.apache.pig.impl.util.Utils;
+import org.apache.pig.impl.util.hive.HiveUtils;
+import org.joda.time.DateTime;
+
+import com.esotericsoftware.kryo.io.Input;
+import com.google.common.annotations.VisibleForTesting;
+
+
+public class OrcStorage extends LoadFunc implements StoreFuncInterface, LoadMetadata, LoadPushDown, LoadPredicatePushdown, StoreResources {
+
+    
+    private static final String SARG_PUSHDOWN = "sarg.pushdown";
+
+    protected RecordReader in = null;
+    protected RecordWriter writer = null;
+    private TypeInfo typeInfo = null;
+    private ObjectInspector oi = null;
+    private OrcSerde serde = new OrcSerde();
+    private String signature;
+
+    private Long stripeSize;
+    private Integer rowIndexStride;
+    private Integer bufferSize;
+    private Boolean blockPadding;
+    private CompressionKind compress;
+    private Version version;
+
+    private static final Options validOptions;
+    private final CommandLineParser parser = new GnuParser();
+    protected final static Log log = LogFactory.getLog(OrcStorage.class);
+    protected boolean[] mRequiredColumns = null;
+
+    private static final String SchemaSignatureSuffix = "_schema";
+    private static final String RequiredColumnsSuffix = "_columns";
+    private static final String SearchArgsSuffix = "_sarg";
+
+    static {
+        validOptions = new Options();
+        validOptions.addOption("s", "stripeSize", true,
+                "Set the stripe size for the file");
+        validOptions.addOption("r", "rowIndexStride", true,
+                "Set the distance between entries in the row index");
+        validOptions.addOption("b", "bufferSize", true,
+                "The size of the memory buffers used for compressing and storing the " +
+                "stripe in memory");
+        validOptions.addOption("p", "blockPadding", false, "Sets whether the HDFS blocks " +
+                "are padded to prevent stripes from straddling blocks");
+        validOptions.addOption("c", "compress", true,
+                "Sets the generic compression that is used to compress the data");
+        validOptions.addOption("v", "version", true,
+                "Sets the version of the file that will be written");
+    }
+
+    public OrcStorage() {
+    }
+
+    public OrcStorage(String options) {
+        String[] optsArr = options.split(" ");
+        try {
+            CommandLine configuredOptions = parser.parse(validOptions, optsArr);
+            if (configuredOptions.hasOption('s')) {
+                stripeSize = Long.parseLong(configuredOptions.getOptionValue('s'));
+            }
+            if (configuredOptions.hasOption('r')) {
+                rowIndexStride = Integer.parseInt(configuredOptions.getOptionValue('r'));
+            }
+            if (configuredOptions.hasOption('b')) {
+                bufferSize = Integer.parseInt(configuredOptions.getOptionValue('b'));
+            }
+            blockPadding = configuredOptions.hasOption('p');
+            if (configuredOptions.hasOption('c')) {
+                compress = CompressionKind.valueOf(configuredOptions.getOptionValue('c'));
+            }
+            if (configuredOptions.hasOption('v')) {
+                version = Version.byName(configuredOptions.getOptionValue('v'));
+            }
+        } catch (ParseException e) {
+            log.error("Exception in OrcStorage", e);
+            log.error("OrcStorage called with arguments " + options);
+            warn("ParseException in OrcStorage", PigWarning.UDF_WARNING_1);
+            HelpFormatter formatter = new HelpFormatter();
+            formatter.printHelp("OrcStorage(',', '[options]')", validOptions);
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public String relToAbsPathForStoreLocation(String location, Path curDir)
+            throws IOException {
+        return LoadFunc.getAbsolutePath(location, curDir);
+    }
+
+    @Override
+    public OutputFormat getOutputFormat() throws IOException {
+        return new OrcNewOutputFormat();
+    }
+
+    @Override
+    public void setStoreLocation(String location, Job job) throws IOException {
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            if (stripeSize!=null) {
+                job.getConfiguration().setLong(HiveConf.ConfVars.HIVE_ORC_DEFAULT_STRIPE_SIZE.varname,
+                        stripeSize);
+            }
+            if (rowIndexStride!=null) {
+                job.getConfiguration().setInt(HiveConf.ConfVars.HIVE_ORC_DEFAULT_ROW_INDEX_STRIDE.varname,
+                        rowIndexStride);
+            }
+            if (bufferSize!=null) {
+                job.getConfiguration().setInt(HiveConf.ConfVars.HIVE_ORC_DEFAULT_BUFFER_SIZE.varname,
+                        bufferSize);
+            }
+            if (blockPadding!=null) {
+                job.getConfiguration().setBoolean(HiveConf.ConfVars.HIVE_ORC_DEFAULT_BLOCK_PADDING.varname,
+                        blockPadding);
+            }
+            if (compress!=null) {
+                job.getConfiguration().set(HiveConf.ConfVars.HIVE_ORC_DEFAULT_COMPRESS.varname,
+                        compress.toString());
+            }
+            if (version!=null) {
+                job.getConfiguration().set(HiveConf.ConfVars.HIVE_ORC_WRITE_FORMAT.varname,
+                        version.getName());
+            }
+        }
+        FileOutputFormat.setOutputPath(job, new Path(location));
+        if (typeInfo==null) {
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            typeInfo = (TypeInfo)ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        }
+        if (oi==null) {
+            oi = HiveUtils.createObjectInspector(typeInfo);
+        }
+    }
+
+    @Override
+    public void checkSchema(ResourceSchema rs) throws IOException {
+        ResourceFieldSchema fs = new ResourceFieldSchema();
+        fs.setType(DataType.TUPLE);
+        fs.setSchema(rs);
+        typeInfo = HiveUtils.getTypeInfo(fs);
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        p.setProperty(signature + SchemaSignatureSuffix, ObjectSerializer.serialize(typeInfo));
+    }
+
+    @Override
+    public void prepareToWrite(RecordWriter writer) throws IOException {
+        this.writer = writer;
+    }
+
+    @Override
+    public void putNext(Tuple t) throws IOException {
+        try {
+            writer.write(null, serde.serialize(t, oi));
+        } catch (InterruptedException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public void setStoreFuncUDFContextSignature(String signature) {
+        this.signature = signature;
+    }
+
+    @Override
+    public void setUDFContextSignature(String signature) {
+        this.signature = signature;
+    }
+
+    @Override
+    public void cleanupOnFailure(String location, Job job) throws IOException {
+        StoreFunc.cleanupOnFailureImpl(location, job);
+    }
+
+    @Override
+    public void cleanupOnSuccess(String location, Job job) throws IOException {
+    }
+
+    @Override
+    public void setLocation(String location, Job job) throws IOException {
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            typeInfo = (TypeInfo)ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        } else if (typeInfo == null) {
+            typeInfo = getTypeInfo(location, job);
+        }
+        if (typeInfo != null && oi == null) {
+            oi = OrcStruct.createObjectInspector(typeInfo);
+        }
+        if (!UDFContext.getUDFContext().isFrontend()) {
+            if (p.getProperty(signature + RequiredColumnsSuffix) != null) {
+                mRequiredColumns = (boolean[]) ObjectSerializer.deserialize(p
+                        .getProperty(signature + RequiredColumnsSuffix));
+                job.getConfiguration().setBoolean(ColumnProjectionUtils.READ_ALL_COLUMNS, false);
+                job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_IDS_CONF_STR,
+                        getReqiredColumnIdString(mRequiredColumns));
+                if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                    
+                    job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_NAMES_CONF_STR,
+                            getReqiredColumnNamesString(getSchema(location, job), mRequiredColumns));
+                }
+            } else if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                
+                job.getConfiguration().set(ColumnProjectionUtils.READ_COLUMN_NAMES_CONF_STR,
+                        getReqiredColumnNamesString(getSchema(location, job)));
+            }
+            if (p.getProperty(signature + SearchArgsSuffix) != null) {
+                job.getConfiguration().set(SARG_PUSHDOWN, p.getProperty(signature + SearchArgsSuffix));
+            }
+
+        }
+        FileInputFormat.setInputPaths(job, location);
+    }
+
+    private String getReqiredColumnIdString(boolean[] requiredColumns) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < requiredColumns.length; i++) {
+            if (requiredColumns[i]) {
+                sb.append(i).append(",");
+            }
+        }
+        if (sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    private String getReqiredColumnNamesString(ResourceSchema schema) {
+        StringBuilder sb = new StringBuilder();
+        for (ResourceFieldSchema field : schema.getFields()) {
+            sb.append(field.getName()).append(",");
+        }
+        if(sb.charAt(sb.length() -1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    private String getReqiredColumnNamesString(ResourceSchema schema, boolean[] requiredColumns) {
+        StringBuilder sb = new StringBuilder();
+        ResourceFieldSchema[] fields = schema.getFields();
+        for (int i = 0; i < requiredColumns.length; i++) {
+            if (requiredColumns[i]) {
+                sb.append(fields[i]).append(",");
+            }
+        }
+        if(sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    @Override
+    public InputFormat getInputFormat() throws IOException {
+        return new OrcNewInputFormat();
+    }
+
+    @Override
+    public void prepareToRead(RecordReader reader, PigSplit split)
+            throws IOException {
+        in = reader;
+    }
+
+    @Override
+    public Tuple getNext() throws IOException {
+        try {
+            boolean notDone = in.nextKeyValue();
+            if (!notDone) {
+                return null;
+            }
+            Object value = in.getCurrentValue();
+
+            Tuple t = (Tuple)HiveUtils.convertHiveToPig(value, oi, mRequiredColumns);
+            return t;
+        } catch (InterruptedException e) {
+            int errCode = 6018;
+            String errMsg = "Error while reading input";
+            throw new ExecException(errMsg, errCode,
+                    PigException.REMOTE_ENVIRONMENT, e);
+        }
+    }
+
+    @Override
+    public List<String> getShipFiles() {
+        List<String> cacheFiles = new ArrayList<String>();
+        String hadoopVersion = "20S";
+        if (Utils.isHadoop23() || Utils.isHadoop2()) {
+            hadoopVersion = "23";
+        }
+        Class hadoopVersionShimsClass;
+        try {
+            hadoopVersionShimsClass = Class.forName("org.apache.hadoop.hive.shims.Hadoop" +
+                    hadoopVersion + "Shims");
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException("Cannot find Hadoop" + hadoopVersion + "ShimsClass in classpath");
+        }
+        Class[] classList = new Class[] {OrcFile.class, HiveConf.class, AbstractSerDe.class,
+                org.apache.hadoop.hive.shims.HadoopShims.class, HadoopShimsSecure.class, hadoopVersionShimsClass,
+                Input.class};
+        return FuncUtils.getShipFiles(classList);
+    }
+
+    private static Path getFirstFile(String location, FileSystem fs) throws IOException {
+        String[] locations = getPathStrings(location);
+        Path[] paths = new Path[locations.length];
+        for (int i = 0; i < paths.length; ++i) {
+            paths[i] = new Path(locations[i]);
+        }
+        List<FileStatus> statusList = new ArrayList<FileStatus>();
+        for (int i = 0; i < paths.length; ++i) {
+            FileStatus[] files = fs.globStatus(paths[i]);
+            if (files != null) {
+                for (FileStatus tempf : files) {
+                    statusList.add(tempf);
+                }
+            }
+        }
+        FileStatus[] statusArray = (FileStatus[]) statusList
+                .toArray(new FileStatus[statusList.size()]);
+        Path p = Utils.depthFirstSearchForFile(statusArray, fs);
+        return p;
+    }
+
+    @Override
+    public ResourceSchema getSchema(String location, Job job)
+            throws IOException {
+        if (typeInfo == null) {
+            typeInfo = getTypeInfo(location, job);
+            
+            if (typeInfo == null) {
+                return null;
+            }
+        }
+
+        ResourceFieldSchema fs = HiveUtils.getResourceFieldSchema(typeInfo);
+        return fs.getSchema();
+    }
+
+    private TypeInfo getTypeInfo(String location, Job job) throws IOException {
+        Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+        TypeInfo typeInfo = (TypeInfo) ObjectSerializer.deserialize(p.getProperty(signature + SchemaSignatureSuffix));
+        if (typeInfo == null) {
+            typeInfo = getTypeInfoFromLocation(location, job);
+        }
+        if (typeInfo != null) {
+            p.setProperty(signature + SchemaSignatureSuffix, ObjectSerializer.serialize(typeInfo));
+        }
+        return typeInfo;
+    }
+
+    private TypeInfo getTypeInfoFromLocation(String location, Job job) throws IOException {
+        FileSystem fs = FileSystem.get(job.getConfiguration());
+        Path path = getFirstFile(location, fs);
+        if (path == null) {
+            log.info("Cannot find any ORC files from " + location +
+                    ". Probably multiple load store in script.");
+            return null;
+        }
+        Reader reader = OrcFile.createReader(fs, path);
+        ObjectInspector oip = (ObjectInspector)reader.getObjectInspector();
+        return TypeInfoUtils.getTypeInfoFromObjectInspector(oip);
+    }
+
+    @Override
+    public ResourceStatistics getStatistics(String location, Job job)
+            throws IOException {
+        return null;
+    }
+
+    @Override
+    public String[] getPartitionKeys(String location, Job job)
+            throws IOException {
+        return null;
+    }
+
+    @Override
+    public void setPartitionFilter(Expression partitionFilter)
+            throws IOException {
+    }
+
+    @Override
+    public List<OperatorSet> getFeatures() {
+        return Arrays.asList(LoadPushDown.OperatorSet.PROJECTION);
+    }
+
+    @Override
+    public RequiredFieldResponse pushProjection(
+            RequiredFieldList requiredFieldList) throws FrontendException {
+        if (requiredFieldList == null)
+            return null;
+        if (requiredFieldList.getFields() != null)
+        {
+            int schemaSize = ((StructTypeInfo)typeInfo).getAllStructFieldTypeInfos().size();
+            mRequiredColumns = new boolean[schemaSize];
+            for (RequiredField rf: requiredFieldList.getFields())
+            {
+                if (rf.getIndex()!=-1)
+                    mRequiredColumns[rf.getIndex()] = true;
+            }
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            try {
+                p.setProperty(signature + RequiredColumnsSuffix, ObjectSerializer.serialize(mRequiredColumns));
+            } catch (Exception e) {
+                throw new RuntimeException("Cannot serialize mRequiredColumns");
+            }
+        }
+        return new RequiredFieldResponse(true);
+    }
+
+    @Override
+    public List<String> getPredicateFields(String location, Job job) throws IOException {
+        ResourceSchema schema = getSchema(location, job);
+        List<String> predicateFields = new ArrayList<String>();
+        for (ResourceFieldSchema field : schema.getFields()) {
+            switch(field.getType()) {
+            case DataType.BOOLEAN:
+            case DataType.INTEGER:
+            case DataType.LONG:
+            case DataType.FLOAT:
+            case DataType.DOUBLE:
+            case DataType.DATETIME:
+            case DataType.CHARARRAY:
+            case DataType.BIGINTEGER:
+            case DataType.BIGDECIMAL:
+                predicateFields.add(field.getName());
+                break;
+            default:
+                
+                break;
+            }
+        }
+        return predicateFields;
+    }
+
+    @Override
+    public List<OpType> getSupportedExpressionTypes() {
+        List<OpType> types = new ArrayList<OpType>();
+        types.add(OpType.OP_EQ);
+        types.add(OpType.OP_NE);
+        types.add(OpType.OP_GT);
+        types.add(OpType.OP_GE);
+        types.add(OpType.OP_LT);
+        types.add(OpType.OP_LE);
+        types.add(OpType.OP_IN);
+        types.add(OpType.OP_BETWEEN);
+        types.add(OpType.OP_NULL);
+        types.add(OpType.OP_NOT);
+        types.add(OpType.OP_AND);
+        types.add(OpType.OP_OR);
+        return types;
+    }
+
+    @Override
+    public void setPushdownPredicate(Expression expr) throws IOException {
+        SearchArgument sArg = getSearchArgument(expr);
+        if (sArg != null) {
+            log.info("Pushdown predicate expression is " + expr);
+            log.info("Pushdown predicate SearchArgument is:\n" + sArg);
+            Properties p = UDFContext.getUDFContext().getUDFProperties(this.getClass());
+            try {
+                p.setProperty(signature + SearchArgsSuffix, sArg.toKryo());
+            } catch (Exception e) {
+                throw new IOException("Cannot serialize SearchArgument: " + sArg);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    SearchArgument getSearchArgument(Expression expr) {
+        if (expr == null) {
+            return null;
+        }
+        Builder builder = SearchArgumentFactory.newBuilder();
+        boolean beginWithAnd = !(expr.getOpType().equals(OpType.OP_AND) || expr.getOpType().equals(OpType.OP_OR) || expr.getOpType().equals(OpType.OP_NOT));
+        if (beginWithAnd) {
+            builder.startAnd();
+        }
+        buildSearchArgument(expr, builder);
+        if (beginWithAnd) {
+            builder.end();
+        }
+        SearchArgument sArg = builder.build();
+        return sArg;
+    }
+
+    private void buildSearchArgument(Expression expr, Builder builder) {
+        if (expr instanceof BinaryExpression) {
+            Expression lhs = ((BinaryExpression) expr).getLhs();
+            Expression rhs = ((BinaryExpression) expr).getRhs();
+            switch (expr.getOpType()) {
+            case OP_AND:
+                builder.startAnd();
+                buildSearchArgument(lhs, builder);
+                buildSearchArgument(rhs, builder);
+                builder.end();
+                break;
+            case OP_OR:
+                builder.startOr();
+                buildSearchArgument(lhs, builder);
+                buildSearchArgument(rhs, builder);
+                builder.end();
+                break;
+            case OP_EQ:
+                builder.equals(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_NE:
+                builder.startNot();
+                builder.equals(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_LT:
+                builder.lessThan(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_LE:
+                builder.lessThanEquals(getColumnName(lhs), getExpressionValue(rhs));
+                break;
+            case OP_GT:
+                builder.startNot();
+                builder.lessThanEquals(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_GE:
+                builder.startNot();
+                builder.lessThan(getColumnName(lhs), getExpressionValue(rhs));
+                builder.end();
+                break;
+            case OP_BETWEEN:
+                BetweenExpression between = (BetweenExpression) rhs;
+                builder.between(getColumnName(lhs), getSearchArgObjValue(between.getLower()),  getSearchArgObjValue(between.getUpper()));
+            case OP_IN:
+                InExpression in = (InExpression) rhs;
+                builder.in(getColumnName(lhs), getSearchArgObjValues(in.getValues()).toArray());
+            default:
+                throw new RuntimeException("Unsupported binary expression type: " + expr.getOpType() + " in " + expr);
+            }
+        } else if (expr instanceof UnaryExpression) {
+            Expression unaryExpr = ((UnaryExpression) expr).getExpression();
+            switch (expr.getOpType()) {
+            case OP_NULL:
+                builder.isNull(getColumnName(unaryExpr));
+                break;
+            case OP_NOT:
+                builder.startNot();
+                buildSearchArgument(unaryExpr, builder);
+                builder.end();
+                break;
+            default:
+                throw new RuntimeException("Unsupported unary expression type: " +
+                        expr.getOpType() + " in " + expr);
+            }
+        } else {
+            throw new RuntimeException("Unsupported expression type: " + expr.getOpType() + " in " + expr);
+        }
+    }
+
+    private String getColumnName(Expression expr) {
+        try {
+            return ((Column) expr).getName();
+        } catch (ClassCastException e) {
+            throw new RuntimeException("Expected a Column but found " + expr.getClass().getName() +
+                    " in expression " + expr, e);
+        }
+    }
+
+    private Object getExpressionValue(Expression expr) {
+        switch(expr.getOpType()) {
+        case TERM_COL:
+            return ((Column) expr).getName();
+        case TERM_CONST:
+            return getSearchArgObjValue(((Const) expr).getValue());
+        default:
+            throw new RuntimeException("Unsupported expression type: " + expr.getOpType() + " in " + expr);
+        }
+    }
+
+    private List<Object> getSearchArgObjValues(List<Object> values) {
+        if (!(values.get(0) instanceof BigInteger || values.get(0) instanceof BigDecimal || values.get(0) instanceof DateTime)) {
+            return values;
+        }
+        List<Object> newValues = new ArrayList<Object>(values.size());
+        for (Object value : values) {
+            newValues.add(getSearchArgObjValue(value));
+        }
+        return values;
+    }
+
+    private Object getSearchArgObjValue(Object value) {
+        if (value instanceof BigInteger) {
+            return new BigDecimal((BigInteger)value);
+        } else if (value instanceof BigDecimal) {
+            return value;
+        } else if (value instanceof DateTime) {
+            return new Timestamp(((DateTime)value).getMillis());
+        } else {
+            return value;
+        }
+    }
+
+}
+
+<code block>
+
+package org.apache.pig.backend.hadoop.executionengine.spark;
+
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.JobConf;
+
+import org.apache.pig.PigConfiguration;
+import org.apache.pig.PigConstants;
+import org.apache.pig.PigException;
+import org.apache.pig.backend.BackendException;
+import org.apache.pig.backend.hadoop.executionengine.Launcher;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PhyPlanSetter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCollectedGroup;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCounter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PODistinct;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFilter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POForEach;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLimit;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLoad;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLocalRearrange;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPackage;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PORank;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSort;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.*;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.AccumulatorOptimizer;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.SecondaryKeyOptimizerSpark;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.ParallelismSetter;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkCompiler;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperPlan;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperator;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkPOPackageAnnotator;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkPrinter;
+import org.apache.pig.backend.hadoop.executionengine.util.MapRedUtil;
+import org.apache.pig.data.SchemaTupleBackend;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.PigContext;
+import org.apache.pig.impl.plan.OperatorKey;
+import org.apache.pig.impl.plan.PlanException;
+import org.apache.pig.impl.plan.VisitorException;
+import org.apache.pig.impl.util.JarManager;
+import org.apache.pig.impl.util.Utils;
+import org.apache.pig.tools.pigstats.PigStats;
+import org.apache.pig.tools.pigstats.spark.SparkPigStats;
+import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.scheduler.JobLogger;
+import org.apache.spark.scheduler.StatsReportListener;
+import org.apache.spark.SparkException;
+
+
+public class SparkLauncher extends Launcher {
+
+	private static final Log LOG = LogFactory.getLog(SparkLauncher.class);
+
+	
+	
+	
+	private static JavaSparkContext sparkContext = null;
+	private static JobMetricsListener jobMetricsListener = new JobMetricsListener();
+	private String jobGroupID;
+    private PigContext pigContext = null;
+    private JobConf jobConf = null;
+    private String currentDirectoryPath = null;
+
+	@Override
+	public PigStats launchPig(PhysicalPlan physicalPlan, String grpName,
+			PigContext pigContext) throws Exception {
+		if (LOG.isDebugEnabled())
+		    LOG.debug(physicalPlan);
+        this.pigContext = pigContext;
+		initialize();
+		SparkOperPlan sparkplan = compile(physicalPlan, pigContext);
+		if (LOG.isDebugEnabled())
+			  explain(sparkplan, System.out, "text", true);
+		SparkPigStats sparkStats = (SparkPigStats) pigContext
+				.getExecutionEngine().instantiatePigStats();
+		PigStats.start(sparkStats);
+
+		startSparkIfNeeded(pigContext);
+
+		
+		
+		
+		jobGroupID = UUID.randomUUID().toString();
+		sparkContext.setJobGroup(jobGroupID, "Pig query to Spark cluster",
+				false);
+		jobMetricsListener.reset();
+
+		this.currentDirectoryPath = Paths.get(".").toAbsolutePath()
+				.normalize().toString()
+				+ "/";
+		addFilesToSparkJob();
+		LinkedList<POStore> stores = PlanHelper.getPhysicalOperators(
+				physicalPlan, POStore.class);
+		POStore firstStore = stores.getFirst();
+		if (firstStore != null) {
+			MapRedUtil.setupStreamingDirsConfSingle(firstStore, pigContext,
+					jobConf);
+		}
+
+		new ParallelismSetter(sparkplan, jobConf).visit();
+
+		byte[] confBytes = KryoSerializer.serializeJobConf(jobConf);
+
+		
+		Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap
+				= new HashMap<Class<? extends PhysicalOperator>, RDDConverter>();
+		convertMap.put(POLoad.class, new LoadConverter(pigContext,
+				physicalPlan, sparkContext.sc()));
+		convertMap.put(POStore.class, new StoreConverter(pigContext));
+		convertMap.put(POForEach.class, new ForEachConverter(confBytes));
+		convertMap.put(POFilter.class, new FilterConverter());
+		convertMap.put(POPackage.class, new PackageConverter(confBytes));
+		convertMap.put(POLocalRearrange.class, new LocalRearrangeConverter());
+        convertMap.put(POGlobalRearrangeSpark.class, new GlobalRearrangeConverter());
+        convertMap.put(POLimit.class, new LimitConverter());
+        convertMap.put(PODistinct.class, new DistinctConverter());
+		convertMap.put(POUnion.class, new UnionConverter(sparkContext.sc()));
+		convertMap.put(POSort.class, new SortConverter());
+		convertMap.put(POSplit.class, new SplitConverter());
+		convertMap.put(POSkewedJoin.class, new SkewedJoinConverter());
+		convertMap.put(POMergeJoin.class, new MergeJoinConverter());
+		convertMap.put(POCollectedGroup.class, new CollectedGroupConverter());
+		convertMap.put(POCounter.class, new CounterConverter());
+		convertMap.put(PORank.class, new RankConverter());
+		convertMap.put(POStream.class, new StreamConverter(confBytes));
+                convertMap.put(POFRJoin.class, new FRJoinConverter());
+
+		sparkPlanToRDD(sparkplan, convertMap, sparkStats, jobConf);
+		cleanUpSparkJob();
+		sparkStats.finish();
+
+		return sparkStats;
+	}
+
+    private void optimize(PigContext pc, SparkOperPlan plan) throws VisitorException {
+        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
+        if (!pc.inIllustrator && !("true".equals(prop))) {
+            SecondaryKeyOptimizerSpark skOptimizer = new SecondaryKeyOptimizerSpark(plan);
+            skOptimizer.visit();
+        }
+
+        boolean isAccum =
+                Boolean.valueOf(pc.getProperties().getProperty("opt.accumulator", "true"));
+        if (isAccum) {
+            AccumulatorOptimizer accum = new AccumulatorOptimizer(plan);
+            accum.visit();
+        }
+    }
+
+	
+	private List<Integer> getJobIDs(Set<Integer> seenJobIDs) {
+		Set<Integer> groupjobIDs = new HashSet<Integer>(
+				Arrays.asList(ArrayUtils.toObject(sparkContext.statusTracker()
+						.getJobIdsForGroup(jobGroupID))));
+		groupjobIDs.removeAll(seenJobIDs);
+		List<Integer> unseenJobIDs = new ArrayList<Integer>(groupjobIDs);
+		if (unseenJobIDs.size() == 0) {
+			throw new RuntimeException("Expected at least one unseen jobID "
+					+ " in this call to getJobIdsForGroup, but got "
+					+ unseenJobIDs.size());
+		}
+
+		seenJobIDs.addAll(unseenJobIDs);
+		return unseenJobIDs;
+	}
+
+	private void cleanUpSparkJob() {
+		LOG.info("clean up Spark Job");
+		boolean isLocal = System.getenv("SPARK_MASTER") != null ? System
+				.getenv("SPARK_MASTER").equalsIgnoreCase("LOCAL") : true;
+		if (isLocal) {
+			String shipFiles = pigContext.getProperties().getProperty(
+					"pig.streaming.ship.files");
+			if (shipFiles != null) {
+				for (String file : shipFiles.split(",")) {
+					File shipFile = new File(file);
+					File deleteFile = new File(currentDirectoryPath + "/"
+							+ shipFile.getName());
+					if (deleteFile.exists()) {
+						LOG.info(String.format("delete ship file result: %b",
+								deleteFile.delete()));
+					}
+				}
+			}
+			String cacheFiles = pigContext.getProperties().getProperty(
+					"pig.streaming.cache.files");
+			if (cacheFiles != null) {
+				for (String file : cacheFiles.split(",")) {
+					String fileName = extractFileName(file.trim());
+					File deleteFile = new File(currentDirectoryPath + "/"
+							+ fileName);
+					if (deleteFile.exists()) {
+						LOG.info(String.format("delete cache file result: %b",
+								deleteFile.delete()));
+					}
+				}
+			}
+		}
+	}
+
+	private void addFilesToSparkJob() throws IOException {
+		LOG.info("add Files Spark Job");
+		String shipFiles = pigContext.getProperties().getProperty(
+				"pig.streaming.ship.files");
+		shipFiles(shipFiles);
+		String cacheFiles = pigContext.getProperties().getProperty(
+				"pig.streaming.cache.files");
+		cacheFiles(cacheFiles);
+	}
+
+
+	private void shipFiles(String shipFiles)
+			throws IOException {
+		if (shipFiles != null) {
+			for (String file : shipFiles.split(",")) {
+				File shipFile = new File(file.trim());
+				if (shipFile.exists()) {
+					LOG.info(String.format("shipFile:%s", shipFile));
+                    addJarToSparkJobWorkingDirectory(shipFile,shipFile.getName());
+				}
+			}
+		}
+	}
+
+	private void cacheFiles(String cacheFiles) throws IOException {
+		if (cacheFiles != null) {
+			Configuration conf = SparkUtil.newJobConf(pigContext);
+			for (String file : cacheFiles.split(",")) {
+				String fileName = extractFileName(file.trim());
+				Path src = new Path(extractFileUrl(file.trim()));
+				File tmpFile = File.createTempFile(fileName, ".tmp");
+				Path tmpFilePath = new Path(tmpFile.getAbsolutePath());
+				FileSystem fs = tmpFilePath.getFileSystem(conf);
+				fs.copyToLocalFile(src, tmpFilePath);
+				tmpFile.deleteOnExit();
+                LOG.info(String.format("cacheFile:%s", fileName));
+			    addJarToSparkJobWorkingDirectory(tmpFile, fileName);
+			}
+		}
+	}
+
+    private void addJarToSparkJobWorkingDirectory(File jarFile, String jarName) throws IOException {
+        LOG.info("Added jar "+jarName);
+        boolean isLocal = System.getenv("SPARK_MASTER") != null ? System
+                .getenv("SPARK_MASTER").equalsIgnoreCase("LOCAL") : true;
+        if (isLocal) {
+            File localFile = new File(currentDirectoryPath + "/"
+                    + jarName);
+            if (jarFile.getAbsolutePath().equals(localFile.getAbsolutePath()) 
+                    && jarFile.exists()) {
+                return;
+            }
+            if (localFile.exists()) {
+                LOG.info(String.format(
+                        "jar file %s exists, ready to delete",
+                        localFile.getAbsolutePath()));
+                localFile.delete();
+            } else {
+                LOG.info(String.format("jar file %s not exists,",
+                        localFile.getAbsolutePath()));
+            }
+            Files.copy(Paths.get(new Path(jarFile.getAbsolutePath()).toString()),
+                    Paths.get(localFile.getAbsolutePath()));
+        } else {
+            sparkContext.addFile(jarFile.toURI().toURL()
+                    .toExternalForm());
+        }
+    }
+
+	private String extractFileName(String cacheFileUrl) {
+		String[] tmpAry = cacheFileUrl.split("#");
+		String fileName = tmpAry != null && tmpAry.length == 2 ? tmpAry[1]
+				: null;
+		if (fileName == null) {
+			throw new RuntimeException("cache file is invalid format, file:"
+					+ cacheFileUrl);
+		} else {
+			LOG.debug("cache file name is valid:" + cacheFileUrl);
+			return fileName;
+		}
+	}
+
+	private String extractFileUrl(String cacheFileUrl) {
+		String[] tmpAry = cacheFileUrl.split("#");
+		String fileName = tmpAry != null && tmpAry.length == 2 ? tmpAry[0]
+				: null;
+		if (fileName == null) {
+			throw new RuntimeException("cache file is invalid format, file:"
+					+ cacheFileUrl);
+		} else {
+			LOG.debug("cache file name is valid:" + cacheFileUrl);
+			return fileName;
+		}
+	}
+
+	private SparkOperPlan compile(PhysicalPlan physicalPlan,
+			PigContext pigContext) throws PlanException, IOException,
+			VisitorException {
+		SparkCompiler sparkCompiler = new SparkCompiler(physicalPlan,
+				pigContext);
+		sparkCompiler.compile();
+		SparkOperPlan sparkPlan = sparkCompiler.getSparkPlan();
+
+		
+		SparkPOPackageAnnotator pkgAnnotator = new SparkPOPackageAnnotator(
+				sparkPlan);
+		pkgAnnotator.visit();
+
+		optimize(pigContext, sparkPlan);
+		return sparkPlan;
+	}
+
+	private static void startSparkIfNeeded(PigContext pc) throws PigException {
+		if (sparkContext == null) {
+			String master = null;
+			if (pc.getExecType().isLocal()) {
+				master = "local";
+			} else {
+				master = System.getenv("SPARK_MASTER");
+				if (master == null) {
+					LOG.info("SPARK_MASTER not specified, using \"local\"");
+					master = "local";
+				}
+			}
+
+			String sparkHome = System.getenv("SPARK_HOME");
+			String sparkJarsSetting = System.getenv("SPARK_JARS");
+			String pigJar = System.getenv("SPARK_PIG_JAR");
+			String[] sparkJars = sparkJarsSetting == null ? new String[] {}
+					: sparkJarsSetting.split(",");
+			List<String> jars = Lists.asList(pigJar, sparkJars);
+
+			if (!master.startsWith("local") && !master.equals("yarn-client")) {
+				
+				
+				if (sparkHome == null) {
+					System.err
+							.println("You need to set SPARK_HOME to run on a Mesos cluster!");
+					throw new PigException("SPARK_HOME is not set");
+				}
+			}
+
+			sparkContext = new JavaSparkContext(master, "PigOnSpark", sparkHome,
+					jars.toArray(new String[jars.size()]));
+			sparkContext.sc().addSparkListener(new StatsReportListener());
+			sparkContext.sc().addSparkListener(new JobLogger());
+			sparkContext.sc().addSparkListener(jobMetricsListener);
+		}
+	}
+
+	
+	static void stopSpark() {
+		if (sparkContext != null) {
+			sparkContext.stop();
+			sparkContext = null;
+		}
+	}
+
+	private void sparkPlanToRDD(SparkOperPlan sparkPlan,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap,
+			SparkPigStats sparkStats, JobConf jobConf)
+			throws IOException, InterruptedException {
+		Set<Integer> seenJobIDs = new HashSet<Integer>();
+		if (sparkPlan == null) {
+			throw new RuntimeException("SparkPlan is null.");
+		}
+
+		List<SparkOperator> leaves = sparkPlan.getLeaves();
+		Collections.sort(leaves);
+		Map<OperatorKey, RDD<Tuple>> sparkOpToRdds = new HashMap();
+		if (LOG.isDebugEnabled()) {
+			LOG.debug("Converting " + leaves.size() + " Spark Operators to RDDs");
+		}
+
+		for (SparkOperator leaf : leaves) {
+			new PhyPlanSetter(leaf.physicalPlan).visit();
+			Map<OperatorKey, RDD<Tuple>> physicalOpToRdds = new HashMap();
+			sparkOperToRDD(sparkPlan, leaf, sparkOpToRdds,
+					physicalOpToRdds, convertMap, seenJobIDs, sparkStats,
+					jobConf);
+		}
+	}
+
+    private void addUDFJarsToSparkJobWorkingDirectory(SparkOperator leaf) throws IOException {
+
+        for (String udf : leaf.UDFs) {
+            Class clazz = pigContext.getClassForAlias(udf);
+            if (clazz != null) {
+                String jar = JarManager.findContainingJar(clazz);
+                if( jar != null) {
+                    File jarFile = new File(jar);
+                    addJarToSparkJobWorkingDirectory(jarFile, jarFile.getName());
+                }
+            }
+        }
+    }
+
+    private void sparkOperToRDD(SparkOperPlan sparkPlan,
+			SparkOperator sparkOperator,
+			Map<OperatorKey, RDD<Tuple>> sparkOpRdds,
+			Map<OperatorKey, RDD<Tuple>> physicalOpRdds,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap,
+			Set<Integer> seenJobIDs, SparkPigStats sparkStats, JobConf conf)
+			throws IOException, InterruptedException {
+        addUDFJarsToSparkJobWorkingDirectory(sparkOperator);
+		List<SparkOperator> predecessors = sparkPlan
+				.getPredecessors(sparkOperator);
+		List<RDD<Tuple>> predecessorRDDs = Lists.newArrayList();
+		if (predecessors != null) {
+			for (SparkOperator pred : predecessors) {
+				if (sparkOpRdds.get(pred.getOperatorKey()) == null) {
+					sparkOperToRDD(sparkPlan, pred, sparkOpRdds,
+							physicalOpRdds, convertMap, seenJobIDs, sparkStats,
+							conf);
+				}
+				predecessorRDDs.add(sparkOpRdds.get(pred.getOperatorKey()));
+			}
+		}
+
+		List<PhysicalOperator> leafPOs = sparkOperator.physicalPlan.getLeaves();
+		boolean isFail = false;
+		Exception exception = null;
+		if (leafPOs != null && leafPOs.size() != 1) {
+			throw new IllegalArgumentException(
+					String.format(
+							"sparkOperator "
+									+ ".physicalPlan should have 1 leaf, but  sparkOperator"
+									+ ".physicalPlan.getLeaves():{} not equals 1, sparkOperator"
+									+ "sparkOperator:{}",
+							sparkOperator.physicalPlan.getLeaves().size(),
+							sparkOperator.name()));
+		}
+
+		PhysicalOperator leafPO = leafPOs.get(0);
+		try {
+			physicalToRDD(sparkOperator.physicalPlan, leafPO, physicalOpRdds,
+					predecessorRDDs, convertMap);
+			sparkOpRdds.put(sparkOperator.getOperatorKey(),
+					physicalOpRdds.get(leafPO.getOperatorKey()));
+		} catch(Exception e) {
+			if( e instanceof  SparkException) {
+				LOG.info("throw SparkException, error founds when running " +
+						"rdds in spark");
+			}
+			exception = e;
+			isFail = true;
+		}
+
+		List<POStore> poStores = PlanHelper.getPhysicalOperators(
+				sparkOperator.physicalPlan, POStore.class);
+		if (poStores != null && poStores.size() == 1) {
+			  POStore poStore = poStores.get(0);
+            if (!isFail) {
+                for (int jobID : getJobIDs(seenJobIDs)) {
+                    SparkStatsUtil.waitForJobAddStats(jobID, poStore,
+                            jobMetricsListener, sparkContext, sparkStats, conf);
+                }
+            } else {
+                String failJobID = sparkOperator.name().concat("_fail");
+                SparkStatsUtil.addFailJobStats(failJobID, poStore, sparkStats,
+                        conf, exception);
+            }
+        } else {
+			LOG.info(String
+					.format(String.format("sparkOperator:{} does not have POStore or" +
+									" sparkOperator has more than 1 POStore. {} is the size of POStore."),
+							sparkOperator.name(), poStores.size()));
+		}
+	}
+
+	private void physicalToRDD(PhysicalPlan plan,
+			PhysicalOperator physicalOperator,
+			Map<OperatorKey, RDD<Tuple>> rdds,
+			List<RDD<Tuple>> rddsFromPredeSparkOper,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap)
+			throws IOException {
+        RDD<Tuple> nextRDD = null;
+        List<PhysicalOperator> predecessors = plan
+                .getPredecessors(physicalOperator);
+        if (predecessors != null && predecessors.size() > 1) {
+            Collections.sort(predecessors);
+        }
+
+        List<RDD<Tuple>> predecessorRdds = Lists.newArrayList();
+		if (predecessors != null) {
+			for (PhysicalOperator predecessor : predecessors) {
+				physicalToRDD(plan, predecessor, rdds, rddsFromPredeSparkOper,
+						convertMap);
+				predecessorRdds.add(rdds.get(predecessor.getOperatorKey()));
+			}
+
+		} else {
+			if (rddsFromPredeSparkOper != null
+					&& rddsFromPredeSparkOper.size() > 0) {
+				predecessorRdds.addAll(rddsFromPredeSparkOper);
+			}
+		}
+
+		RDDConverter converter = convertMap.get(physicalOperator.getClass());
+		if (converter == null) {
+			throw new IllegalArgumentException(
+					"Pig on Spark does not support Physical Operator: " + physicalOperator);
+		}
+
+		LOG.info("Converting operator "
+				+ physicalOperator.getClass().getSimpleName() + " "
+				+ physicalOperator);
+		nextRDD = converter.convert(predecessorRdds, physicalOperator);
+
+		if (nextRDD == null) {
+			throw new IllegalArgumentException(
+					"RDD should not be null after PhysicalOperator: "
+							+ physicalOperator);
+		}
+
+		rdds.put(physicalOperator.getOperatorKey(), nextRDD);
+	}
+
+	@Override
+	public void explain(PhysicalPlan pp, PigContext pc, PrintStream ps,
+			String format, boolean verbose) throws IOException {
+		SparkOperPlan sparkPlan = compile(pp, pc);
+		explain(sparkPlan, ps, format, verbose);
+	}
+
+	private void explain(SparkOperPlan sparkPlan, PrintStream ps,
+	    String format, boolean verbose)
+		  throws IOException {
+		Map<OperatorKey, SparkOperator> allOperKeys = sparkPlan.getKeys();
+		List<OperatorKey> operKeyList = new ArrayList(allOperKeys.keySet());
+		Collections.sort(operKeyList);
+		for (OperatorKey operatorKey : operKeyList) {
+			SparkOperator op = sparkPlan.getOperator(operatorKey);
+			ps.print(op.getOperatorKey());
+			List<SparkOperator> successors = sparkPlan.getSuccessors(op);
+			if (successors != null) {
+				ps.print("->");
+				for (SparkOperator suc : successors) {
+					ps.print(suc.getOperatorKey() + " ");
+				}
+			}
+			ps.println();
+		}
+
+		if (format.equals("text")) {
+			SparkPrinter printer = new SparkPrinter(ps, sparkPlan);
+			printer.setVerbose(verbose);
+			printer.visit();
+		} else { 
+			throw new IOException(
+					"Non-text output of explain is not supported.");
+		}
+	}
+
+	@Override
+	public void kill() throws BackendException {
+		
+
+	}
+
+	@Override
+	public void killJob(String jobID, Configuration conf)
+			throws BackendException {
+		
+
+	}
+
+    
+    private void saveUdfImportList() {
+        String udfImportList = Joiner.on(",").join(PigContext.getPackageImportList());
+        pigContext.getProperties().setProperty("spark.udf.import.list", udfImportList);
+    }
+
+    private void initialize() throws IOException {
+        saveUdfImportList();
+        jobConf = SparkUtil.newJobConf(pigContext);
+        jobConf.set(PigConstants.LOCAL_CODE_DIR,
+                System.getProperty("java.io.tmpdir"));
+
+        SchemaTupleBackend.initialize(jobConf, pigContext);
+        Utils.setDefaultTimeZone(jobConf);
+    }
+}
+
+<code block>
+
+package org.apache.pig.backend.hadoop.executionengine.spark;
+
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.JobConf;
+
+import org.apache.pig.PigConfiguration;
+import org.apache.pig.PigConstants;
+import org.apache.pig.PigException;
+import org.apache.pig.backend.BackendException;
+import org.apache.pig.backend.hadoop.executionengine.Launcher;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PhyPlanSetter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCollectedGroup;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCounter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PODistinct;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFilter;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POForEach;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLimit;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLoad;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLocalRearrange;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPackage;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PORank;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSort;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.*;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.AccumulatorOptimizer;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.SecondaryKeyOptimizerSpark;
+import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.ParallelismSetter;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkCompiler;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperPlan;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperator;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkPOPackageAnnotator;
+import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkPrinter;
+import org.apache.pig.backend.hadoop.executionengine.util.MapRedUtil;
+import org.apache.pig.data.SchemaTupleBackend;
+import org.apache.pig.data.Tuple;
+import org.apache.pig.impl.PigContext;
+import org.apache.pig.impl.plan.OperatorKey;
+import org.apache.pig.impl.plan.PlanException;
+import org.apache.pig.impl.plan.VisitorException;
+import org.apache.pig.impl.util.JarManager;
+import org.apache.pig.tools.pigstats.PigStats;
+import org.apache.pig.tools.pigstats.spark.SparkPigStats;
+import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.scheduler.JobLogger;
+import org.apache.spark.scheduler.StatsReportListener;
+import org.apache.spark.SparkException;
+
+
+public class SparkLauncher extends Launcher {
+
+	private static final Log LOG = LogFactory.getLog(SparkLauncher.class);
+
+	
+	
+	
+	private static JavaSparkContext sparkContext = null;
+	private static JobMetricsListener jobMetricsListener = new JobMetricsListener();
+	private String jobGroupID;
+    private PigContext pigContext = null;
+    private String currentDirectoryPath = null;
+
+	@Override
+	public PigStats launchPig(PhysicalPlan physicalPlan, String grpName,
+			PigContext pigContext) throws Exception {
+		if (LOG.isDebugEnabled())
+		    LOG.debug(physicalPlan);
+        this.pigContext = pigContext;
+        saveUdfImportList(pigContext);
+		JobConf jobConf = SparkUtil.newJobConf(pigContext);
+		jobConf.set(PigConstants.LOCAL_CODE_DIR,
+				System.getProperty("java.io.tmpdir"));
+
+		SchemaTupleBackend.initialize(jobConf, pigContext);
+		SparkOperPlan sparkplan = compile(physicalPlan, pigContext);
+		if (LOG.isDebugEnabled())
+			  explain(sparkplan, System.out, "text", true);
+		SparkPigStats sparkStats = (SparkPigStats) pigContext
+				.getExecutionEngine().instantiatePigStats();
+		PigStats.start(sparkStats);
+
+		startSparkIfNeeded(pigContext);
+
+		
+		
+		
+		jobGroupID = UUID.randomUUID().toString();
+		sparkContext.setJobGroup(jobGroupID, "Pig query to Spark cluster",
+				false);
+		jobMetricsListener.reset();
+
+		this.currentDirectoryPath = Paths.get(".").toAbsolutePath()
+				.normalize().toString()
+				+ "/";
+		startSparkJob();
+		LinkedList<POStore> stores = PlanHelper.getPhysicalOperators(
+				physicalPlan, POStore.class);
+		POStore firstStore = stores.getFirst();
+		if (firstStore != null) {
+			MapRedUtil.setupStreamingDirsConfSingle(firstStore, pigContext,
+					jobConf);
+		}
+
+		new ParallelismSetter(sparkplan, jobConf).visit();
+
+		byte[] confBytes = KryoSerializer.serializeJobConf(jobConf);
+
+		
+		Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap
+				= new HashMap<Class<? extends PhysicalOperator>, RDDConverter>();
+		convertMap.put(POLoad.class, new LoadConverter(pigContext,
+				physicalPlan, sparkContext.sc()));
+		convertMap.put(POStore.class, new StoreConverter(pigContext));
+		convertMap.put(POForEach.class, new ForEachConverter(confBytes));
+		convertMap.put(POFilter.class, new FilterConverter());
+		convertMap.put(POPackage.class, new PackageConverter(confBytes));
+		convertMap.put(POLocalRearrange.class, new LocalRearrangeConverter());
+        convertMap.put(POGlobalRearrangeSpark.class, new GlobalRearrangeConverter());
+        convertMap.put(POLimit.class, new LimitConverter());
+        convertMap.put(PODistinct.class, new DistinctConverter());
+		convertMap.put(POUnion.class, new UnionConverter(sparkContext.sc()));
+		convertMap.put(POSort.class, new SortConverter());
+		convertMap.put(POSplit.class, new SplitConverter());
+		convertMap.put(POSkewedJoin.class, new SkewedJoinConverter());
+		convertMap.put(POMergeJoin.class, new MergeJoinConverter());
+		convertMap.put(POCollectedGroup.class, new CollectedGroupConverter());
+		convertMap.put(POCounter.class, new CounterConverter());
+		convertMap.put(PORank.class, new RankConverter());
+		convertMap.put(POStream.class, new StreamConverter(confBytes));
+                convertMap.put(POFRJoin.class, new FRJoinConverter());
+
+		sparkPlanToRDD(sparkplan, convertMap, sparkStats, jobConf);
+		cleanUpSparkJob();
+		sparkStats.finish();
+
+		return sparkStats;
+	}
+
+    private void optimize(PigContext pc, SparkOperPlan plan) throws VisitorException {
+        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
+        if (!pc.inIllustrator && !("true".equals(prop))) {
+            SecondaryKeyOptimizerSpark skOptimizer = new SecondaryKeyOptimizerSpark(plan);
+            skOptimizer.visit();
+        }
+
+        boolean isAccum =
+                Boolean.valueOf(pc.getProperties().getProperty("opt.accumulator", "true"));
+        if (isAccum) {
+            AccumulatorOptimizer accum = new AccumulatorOptimizer(plan);
+            accum.visit();
+        }
+    }
+
+	
+	private List<Integer> getJobIDs(Set<Integer> seenJobIDs) {
+		Set<Integer> groupjobIDs = new HashSet<Integer>(
+				Arrays.asList(ArrayUtils.toObject(sparkContext.statusTracker()
+						.getJobIdsForGroup(jobGroupID))));
+		groupjobIDs.removeAll(seenJobIDs);
+		List<Integer> unseenJobIDs = new ArrayList<Integer>(groupjobIDs);
+		if (unseenJobIDs.size() == 0) {
+			throw new RuntimeException("Expected at least one unseen jobID "
+					+ " in this call to getJobIdsForGroup, but got "
+					+ unseenJobIDs.size());
+		}
+
+		seenJobIDs.addAll(unseenJobIDs);
+		return unseenJobIDs;
+	}
+
+	private void cleanUpSparkJob() {
+		LOG.info("clean up Spark Job");
+		boolean isLocal = System.getenv("SPARK_MASTER") != null ? System
+				.getenv("SPARK_MASTER").equalsIgnoreCase("LOCAL") : true;
+		if (isLocal) {
+			String shipFiles = pigContext.getProperties().getProperty(
+					"pig.streaming.ship.files");
+			if (shipFiles != null) {
+				for (String file : shipFiles.split(",")) {
+					File shipFile = new File(file);
+					File deleteFile = new File(currentDirectoryPath + "/"
+							+ shipFile.getName());
+					if (deleteFile.exists()) {
+						LOG.info(String.format("delete ship file result: %b",
+								deleteFile.delete()));
+					}
+				}
+			}
+			String cacheFiles = pigContext.getProperties().getProperty(
+					"pig.streaming.cache.files");
+			if (cacheFiles != null) {
+				for (String file : cacheFiles.split(",")) {
+					String fileName = extractFileName(file.trim());
+					File deleteFile = new File(currentDirectoryPath + "/"
+							+ fileName);
+					if (deleteFile.exists()) {
+						LOG.info(String.format("delete cache file result: %b",
+								deleteFile.delete()));
+					}
+				}
+			}
+		}
+	}
+
+	private void startSparkJob() throws IOException {
+		LOG.info("start Spark Job");
+		String shipFiles = pigContext.getProperties().getProperty(
+				"pig.streaming.ship.files");
+		shipFiles(shipFiles);
+		String cacheFiles = pigContext.getProperties().getProperty(
+				"pig.streaming.cache.files");
+		cacheFiles(cacheFiles);
+
+	}
+
+
+	private void shipFiles(String shipFiles)
+			throws IOException {
+		if (shipFiles != null) {
+			for (String file : shipFiles.split(",")) {
+				File shipFile = new File(file.trim());
+				if (shipFile.exists()) {
+					LOG.info(String.format("shipFile:%s", shipFile));
+                    addJarToSparkJobWorkingDirectory(shipFile,shipFile.getName());
+				}
+			}
+		}
+	}
+
+	private void cacheFiles(String cacheFiles) throws IOException {
+		if (cacheFiles != null) {
+			Configuration conf = SparkUtil.newJobConf(pigContext);
+			for (String file : cacheFiles.split(",")) {
+				String fileName = extractFileName(file.trim());
+				Path src = new Path(extractFileUrl(file.trim()));
+				File tmpFile = File.createTempFile(fileName, ".tmp");
+				Path tmpFilePath = new Path(tmpFile.getAbsolutePath());
+				FileSystem fs = tmpFilePath.getFileSystem(conf);
+				fs.copyToLocalFile(src, tmpFilePath);
+				tmpFile.deleteOnExit();
+                LOG.info(String.format("cacheFile:%s", fileName));
+			    addJarToSparkJobWorkingDirectory(tmpFile, fileName);
+			}
+		}
+	}
+
+    private void addJarToSparkJobWorkingDirectory(File jarFile, String jarName) throws IOException {
+        LOG.info("Added jar "+jarName);
+        boolean isLocal = System.getenv("SPARK_MASTER") != null ? System
+                .getenv("SPARK_MASTER").equalsIgnoreCase("LOCAL") : true;
+        if (isLocal) {
+            File localFile = new File(currentDirectoryPath + "/"
+                    + jarName);
+            if (jarFile.getAbsolutePath().equals(localFile.getAbsolutePath()) 
+                    && jarFile.exists()) {
+                return;
+            }
+            if (localFile.exists()) {
+                LOG.info(String.format(
+                        "jar file %s exists, ready to delete",
+                        localFile.getAbsolutePath()));
+                localFile.delete();
+            } else {
+                LOG.info(String.format("jar file %s not exists,",
+                        localFile.getAbsolutePath()));
+            }
+            Files.copy(Paths.get(new Path(jarFile.getAbsolutePath()).toString()),
+                    Paths.get(localFile.getAbsolutePath()));
+        } else {
+            sparkContext.addFile(jarFile.toURI().toURL()
+                    .toExternalForm());
+        }
+    }
+
+	private String extractFileName(String cacheFileUrl) {
+		String[] tmpAry = cacheFileUrl.split("#");
+		String fileName = tmpAry != null && tmpAry.length == 2 ? tmpAry[1]
+				: null;
+		if (fileName == null) {
+			throw new RuntimeException("cache file is invalid format, file:"
+					+ cacheFileUrl);
+		} else {
+			LOG.debug("cache file name is valid:" + cacheFileUrl);
+			return fileName;
+		}
+	}
+
+	private String extractFileUrl(String cacheFileUrl) {
+		String[] tmpAry = cacheFileUrl.split("#");
+		String fileName = tmpAry != null && tmpAry.length == 2 ? tmpAry[0]
+				: null;
+		if (fileName == null) {
+			throw new RuntimeException("cache file is invalid format, file:"
+					+ cacheFileUrl);
+		} else {
+			LOG.debug("cache file name is valid:" + cacheFileUrl);
+			return fileName;
+		}
+	}
+
+	private SparkOperPlan compile(PhysicalPlan physicalPlan,
+			PigContext pigContext) throws PlanException, IOException,
+			VisitorException {
+		SparkCompiler sparkCompiler = new SparkCompiler(physicalPlan,
+				pigContext);
+		sparkCompiler.compile();
+		SparkOperPlan sparkPlan = sparkCompiler.getSparkPlan();
+
+		
+		SparkPOPackageAnnotator pkgAnnotator = new SparkPOPackageAnnotator(
+				sparkPlan);
+		pkgAnnotator.visit();
+
+		optimize(pigContext, sparkPlan);
+		return sparkPlan;
+	}
+
+	private static void startSparkIfNeeded(PigContext pc) throws PigException {
+		if (sparkContext == null) {
+			String master = null;
+			if (pc.getExecType().isLocal()) {
+				master = "local";
+			} else {
+				master = System.getenv("SPARK_MASTER");
+				if (master == null) {
+					LOG.info("SPARK_MASTER not specified, using \"local\"");
+					master = "local";
+				}
+			}
+
+			String sparkHome = System.getenv("SPARK_HOME");
+			String sparkJarsSetting = System.getenv("SPARK_JARS");
+			String pigJar = System.getenv("SPARK_PIG_JAR");
+			String[] sparkJars = sparkJarsSetting == null ? new String[] {}
+					: sparkJarsSetting.split(",");
+			List<String> jars = Lists.asList(pigJar, sparkJars);
+
+			if (!master.startsWith("local") && !master.equals("yarn-client")) {
+				
+				
+				if (sparkHome == null) {
+					System.err
+							.println("You need to set SPARK_HOME to run on a Mesos cluster!");
+					throw new PigException("SPARK_HOME is not set");
+				}
+			}
+
+			sparkContext = new JavaSparkContext(master, "PigOnSpark", sparkHome,
+					jars.toArray(new String[jars.size()]));
+			sparkContext.sc().addSparkListener(new StatsReportListener());
+			sparkContext.sc().addSparkListener(new JobLogger());
+			sparkContext.sc().addSparkListener(jobMetricsListener);
+		}
+	}
+
+	
+	static void stopSpark() {
+		if (sparkContext != null) {
+			sparkContext.stop();
+			sparkContext = null;
+		}
+	}
+
+	private void sparkPlanToRDD(SparkOperPlan sparkPlan,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap,
+			SparkPigStats sparkStats, JobConf jobConf)
+			throws IOException, InterruptedException {
+		Set<Integer> seenJobIDs = new HashSet<Integer>();
+		if (sparkPlan == null) {
+			throw new RuntimeException("SparkPlan is null.");
+		}
+
+		List<SparkOperator> leaves = sparkPlan.getLeaves();
+		Collections.sort(leaves);
+		Map<OperatorKey, RDD<Tuple>> sparkOpToRdds = new HashMap();
+		if (LOG.isDebugEnabled()) {
+			LOG.debug("Converting " + leaves.size() + " Spark Operators to RDDs");
+		}
+
+		for (SparkOperator leaf : leaves) {
+			new PhyPlanSetter(leaf.physicalPlan).visit();
+			Map<OperatorKey, RDD<Tuple>> physicalOpToRdds = new HashMap();
+			sparkOperToRDD(sparkPlan, leaf, sparkOpToRdds,
+					physicalOpToRdds, convertMap, seenJobIDs, sparkStats,
+					jobConf);
+		}
+	}
+
+    private void addUDFJarsToSparkJobWorkingDirectory(SparkOperator leaf) throws IOException {
+
+        for (String udf : leaf.UDFs) {
+            Class clazz = pigContext.getClassForAlias(udf);
+            if (clazz != null) {
+                String jar = JarManager.findContainingJar(clazz);
+                if( jar != null) {
+                    File jarFile = new File(jar);
+                    addJarToSparkJobWorkingDirectory(jarFile, jarFile.getName());
+                }
+            }
+        }
+    }
+
+    private void sparkOperToRDD(SparkOperPlan sparkPlan,
+			SparkOperator sparkOperator,
+			Map<OperatorKey, RDD<Tuple>> sparkOpRdds,
+			Map<OperatorKey, RDD<Tuple>> physicalOpRdds,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap,
+			Set<Integer> seenJobIDs, SparkPigStats sparkStats, JobConf conf)
+			throws IOException, InterruptedException {
+        addUDFJarsToSparkJobWorkingDirectory(sparkOperator);
+		List<SparkOperator> predecessors = sparkPlan
+				.getPredecessors(sparkOperator);
+		List<RDD<Tuple>> predecessorRDDs = Lists.newArrayList();
+		if (predecessors != null) {
+			for (SparkOperator pred : predecessors) {
+				if (sparkOpRdds.get(pred.getOperatorKey()) == null) {
+					sparkOperToRDD(sparkPlan, pred, sparkOpRdds,
+							physicalOpRdds, convertMap, seenJobIDs, sparkStats,
+							conf);
+				}
+				predecessorRDDs.add(sparkOpRdds.get(pred.getOperatorKey()));
+			}
+		}
+
+		List<PhysicalOperator> leafPOs = sparkOperator.physicalPlan.getLeaves();
+		boolean isFail = false;
+		Exception exception = null;
+		if (leafPOs != null && leafPOs.size() != 1) {
+			throw new IllegalArgumentException(
+					String.format(
+							"sparkOperator "
+									+ ".physicalPlan should have 1 leaf, but  sparkOperator"
+									+ ".physicalPlan.getLeaves():{} not equals 1, sparkOperator"
+									+ "sparkOperator:{}",
+							sparkOperator.physicalPlan.getLeaves().size(),
+							sparkOperator.name()));
+		}
+
+		PhysicalOperator leafPO = leafPOs.get(0);
+		try {
+			physicalToRDD(sparkOperator.physicalPlan, leafPO, physicalOpRdds,
+					predecessorRDDs, convertMap);
+			sparkOpRdds.put(sparkOperator.getOperatorKey(),
+					physicalOpRdds.get(leafPO.getOperatorKey()));
+		} catch(Exception e) {
+			if( e instanceof  SparkException) {
+				LOG.info("throw SparkException, error founds when running " +
+						"rdds in spark");
+			}
+			exception = e;
+			isFail = true;
+		}
+
+		List<POStore> poStores = PlanHelper.getPhysicalOperators(
+				sparkOperator.physicalPlan, POStore.class);
+		if (poStores != null && poStores.size() == 1) {
+			  POStore poStore = poStores.get(0);
+            if (!isFail) {
+                for (int jobID : getJobIDs(seenJobIDs)) {
+                    SparkStatsUtil.waitForJobAddStats(jobID, poStore,
+                            jobMetricsListener, sparkContext, sparkStats, conf);
+                }
+            } else {
+                String failJobID = sparkOperator.name().concat("_fail");
+                SparkStatsUtil.addFailJobStats(failJobID, poStore, sparkStats,
+                        conf, exception);
+            }
+        } else {
+			LOG.info(String
+					.format(String.format("sparkOperator:{} does not have POStore or" +
+									" sparkOperator has more than 1 POStore. {} is the size of POStore."),
+							sparkOperator.name(), poStores.size()));
+		}
+	}
+
+	private void physicalToRDD(PhysicalPlan plan,
+			PhysicalOperator physicalOperator,
+			Map<OperatorKey, RDD<Tuple>> rdds,
+			List<RDD<Tuple>> rddsFromPredeSparkOper,
+			Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap)
+			throws IOException {
+        RDD<Tuple> nextRDD = null;
+        List<PhysicalOperator> predecessors = plan
+                .getPredecessors(physicalOperator);
+        if (predecessors != null && predecessors.size() > 1) {
+            Collections.sort(predecessors);
+        }
+
+        List<RDD<Tuple>> predecessorRdds = Lists.newArrayList();
+		if (predecessors != null) {
+			for (PhysicalOperator predecessor : predecessors) {
+				physicalToRDD(plan, predecessor, rdds, rddsFromPredeSparkOper,
+						convertMap);
+				predecessorRdds.add(rdds.get(predecessor.getOperatorKey()));
+			}
+
+		} else {
+			if (rddsFromPredeSparkOper != null
+					&& rddsFromPredeSparkOper.size() > 0) {
+				predecessorRdds.addAll(rddsFromPredeSparkOper);
+			}
+		}
+
+		RDDConverter converter = convertMap.get(physicalOperator.getClass());
+		if (converter == null) {
+			throw new IllegalArgumentException(
+					"Pig on Spark does not support Physical Operator: " + physicalOperator);
+		}
+
+		LOG.info("Converting operator "
+				+ physicalOperator.getClass().getSimpleName() + " "
+				+ physicalOperator);
+		nextRDD = converter.convert(predecessorRdds, physicalOperator);
+
+		if (nextRDD == null) {
+			throw new IllegalArgumentException(
+					"RDD should not be null after PhysicalOperator: "
+							+ physicalOperator);
+		}
+
+		rdds.put(physicalOperator.getOperatorKey(), nextRDD);
+	}
+
+	@Override
+	public void explain(PhysicalPlan pp, PigContext pc, PrintStream ps,
+			String format, boolean verbose) throws IOException {
+		SparkOperPlan sparkPlan = compile(pp, pc);
+		explain(sparkPlan, ps, format, verbose);
+	}
+
+	private void explain(SparkOperPlan sparkPlan, PrintStream ps,
+	    String format, boolean verbose)
+		  throws IOException {
+		Map<OperatorKey, SparkOperator> allOperKeys = sparkPlan.getKeys();
+		List<OperatorKey> operKeyList = new ArrayList(allOperKeys.keySet());
+		Collections.sort(operKeyList);
+		for (OperatorKey operatorKey : operKeyList) {
+			SparkOperator op = sparkPlan.getOperator(operatorKey);
+			ps.print(op.getOperatorKey());
+			List<SparkOperator> successors = sparkPlan.getSuccessors(op);
+			if (successors != null) {
+				ps.print("->");
+				for (SparkOperator suc : successors) {
+					ps.print(suc.getOperatorKey() + " ");
+				}
+			}
+			ps.println();
+		}
+
+		if (format.equals("text")) {
+			SparkPrinter printer = new SparkPrinter(ps, sparkPlan);
+			printer.setVerbose(verbose);
+			printer.visit();
+		} else { 
+			throw new IOException(
+					"Non-text output of explain is not supported.");
+		}
+	}
+
+	@Override
+	public void kill() throws BackendException {
+		
+
+	}
+
+	@Override
+	public void killJob(String jobID, Configuration conf)
+			throws BackendException {
+		
+
+	}
+
+    
+    private void saveUdfImportList(PigContext pigContext) {
+        String udfImportList = Joiner.on(",").join(PigContext.getPackageImportList());
+        pigContext.getProperties().setProperty("spark.udf.import.list", udfImportList);
+    }
+}

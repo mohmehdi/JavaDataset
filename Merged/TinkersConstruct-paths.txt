@@ -1,0 +1,9 @@
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/curr/src/main/java/tconstruct/tools/RedstoneModifier.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/curr/src/main/java/tconstruct/library/mantle/RecipeMatchRegistry.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/curr/src/main/java/tconstruct/library/mantle/RecipeMatch.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/curr/src/main/java/tconstruct/library/modifiers/IModifier.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/curr/src/main/java/tconstruct/library/modifiers/Modifier.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/prev/src/main/java/tconstruct/tools/RedstoneModifier.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/prev/src/main/java/tconstruct/library/modifiers/IModifier.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/prev/src/main/java/tconstruct/library/modifiers/RecipeMatch.java
+Java_Projects/TinkersConstruct/TinkersConstruct-71820e57/prev/src/main/java/tconstruct/library/modifiers/Modifier.java

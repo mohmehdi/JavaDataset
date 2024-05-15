@@ -1,0 +1,2 @@
+Java_Projects/Android_IMSI_Catcher_Detector/Android_IMSI_Catcher_Detector-e235f884/curr/app/src/main/java/com/SecUpwN/AIMSICD/adapters/AIMSICDDbAdapter.java
+Java_Projects/Android_IMSI_Catcher_Detector/Android_IMSI_Catcher_Detector-e235f884/prev/app/src/main/java/com/SecUpwN/AIMSICD/adapters/AIMSICDDbAdapter.java

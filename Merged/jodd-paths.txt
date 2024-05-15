@@ -1,0 +1,8 @@
+Java_Projects/jodd/jodd-722ef915/curr/jodd-http/src/main/java/jodd/http/HttpBase.java
+Java_Projects/jodd/jodd-722ef915/curr/jodd-http/src/test/java/jodd/http/Echo2Servlet.java
+Java_Projects/jodd/jodd-722ef915/curr/jodd-http/src/test/java/jodd/http/EchoServlet.java
+Java_Projects/jodd/jodd-722ef915/curr/jodd-http/src/test/java/jodd/http/EncodingTest.java
+Java_Projects/jodd/jodd-722ef915/prev/jodd-http/src/main/java/jodd/http/HttpBase.java
+Java_Projects/jodd/jodd-722ef915/prev/jodd-http/src/test/java/jodd/http/Echo2Servlet.java
+Java_Projects/jodd/jodd-722ef915/prev/jodd-http/src/test/java/jodd/http/EchoServlet.java
+Java_Projects/jodd/jodd-722ef915/prev/jodd-http/src/test/java/jodd/http/EncodingTest.java

@@ -1,0 +1,17 @@
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/main/java/org/robobinding/codegen/presentationmodel/processor/PresentationModelInfoBuilder.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/sharedfactorymethod/MyItemPresentationModel.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/sharedfactorymethod/Item.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/sharedfactorymethod/SharedFacotryMethodPresentationModel.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPM/SubItem.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPM/SubItemPresentationModelExample.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPM/Item.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPM/ItemPresentationModelExample.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPM/PresentationModelExample.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/curr/codegen/src/test/java/org/robobinding/codegen/presentationmodel/processor/PresentationModelProcessorTest.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/main/java/org/robobinding/codegen/presentationmodel/processor/PresentationModelInfoBuilder.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/processor/PresentationModelProcessorTest.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPMexample/SubItem.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPMexample/SubItemPresentationModelExample.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPMexample/Item.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPMexample/ItemPresentationModelExample.java
+Java_Projects/RoboBinding/RoboBinding-b6565814/prev/codegen/src/test/java/org/robobinding/codegen/presentationmodel/nestedIPMexample/PresentationModelExample.java

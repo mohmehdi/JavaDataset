@@ -1,0 +1,7 @@
+Java_Projects/AntennaPod/AntennaPod-c64217e2/curr/core/src/main/java/de/danoeh/antennapod/core/storage/DBWriter.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/curr/app/src/main/java/de/danoeh/antennapod/menuhandler/FeedMenuHandler.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/curr/app/src/main/java/de/danoeh/antennapod/dialog/EpisodesApplyActionFragment.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/curr/app/src/main/java/de/danoeh/antennapod/fragment/ItemlistFragment.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/prev/core/src/main/java/de/danoeh/antennapod/core/storage/DBWriter.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/prev/app/src/main/java/de/danoeh/antennapod/menuhandler/FeedMenuHandler.java
+Java_Projects/AntennaPod/AntennaPod-c64217e2/prev/app/src/main/java/de/danoeh/antennapod/fragment/ItemlistFragment.java

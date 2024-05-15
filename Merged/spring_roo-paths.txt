@@ -1,0 +1,6 @@
+Java_Projects/spring_roo/spring_roo-0bb4cca1/curr/runtime/classpath/src/main/java/org/springframework/roo/classpath/details/AbstractInvocableMemberMetadataBuilder.java
+Java_Projects/spring_roo/spring_roo-0bb4cca1/curr/runtime/classpath/src/main/java/org/springframework/roo/classpath/details/MethodMetadataBuilder.java
+Java_Projects/spring_roo/spring_roo-0bb4cca1/curr/addon-web-mvc-controller/addon/src/main/java/org/springframework/roo/addon/web/mvc/controller/addon/scaffold/WebScaffoldMetadata.java
+Java_Projects/spring_roo/spring_roo-0bb4cca1/prev/runtime/classpath/src/main/java/org/springframework/roo/classpath/details/AbstractInvocableMemberMetadataBuilder.java
+Java_Projects/spring_roo/spring_roo-0bb4cca1/prev/runtime/classpath/src/main/java/org/springframework/roo/classpath/details/MethodMetadataBuilder.java
+Java_Projects/spring_roo/spring_roo-0bb4cca1/prev/addon-web-mvc-controller/addon/src/main/java/org/springframework/roo/addon/web/mvc/controller/addon/scaffold/WebScaffoldMetadata.java

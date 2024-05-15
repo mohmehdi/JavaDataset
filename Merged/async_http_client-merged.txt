@@ -1,0 +1,899 @@
+
+package org.asynchttpclient.oauth;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.asynchttpclient.util.MiscUtils.isNonEmpty;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+
+import org.asynchttpclient.Param;
+import org.asynchttpclient.Request;
+import org.asynchttpclient.RequestBuilderBase;
+import org.asynchttpclient.SignatureCalculator;
+import org.asynchttpclient.uri.Uri;
+import org.asynchttpclient.util.Base64;
+import org.asynchttpclient.util.StringUtils;
+import org.asynchttpclient.util.Utf8UrlEncoder;
+
+
+public class OAuthSignatureCalculator implements SignatureCalculator {
+    public final static String HEADER_AUTHORIZATION = "Authorization";
+
+    private static final String KEY_OAUTH_CONSUMER_KEY = "oauth_consumer_key";
+    private static final String KEY_OAUTH_NONCE = "oauth_nonce";
+    private static final String KEY_OAUTH_SIGNATURE = "oauth_signature";
+    private static final String KEY_OAUTH_SIGNATURE_METHOD = "oauth_signature_method";
+    private static final String KEY_OAUTH_TIMESTAMP = "oauth_timestamp";
+    private static final String KEY_OAUTH_TOKEN = "oauth_token";
+    private static final String KEY_OAUTH_VERSION = "oauth_version";
+
+    private static final String OAUTH_VERSION_1_0 = "1.0";
+    private static final String OAUTH_SIGNATURE_METHOD = "HMAC-SHA1";
+
+    protected static final ThreadLocal<byte[]> NONCE_BUFFER = new ThreadLocal<byte[]>() {
+        protected byte[] initialValue() {
+            return new byte[16];
+        }
+    };
+
+    protected final ThreadSafeHMAC mac;
+
+    protected final ConsumerKey consumerAuth;
+
+    protected final RequestToken userAuth;
+
+    
+    public OAuthSignatureCalculator(ConsumerKey consumerAuth, RequestToken userAuth) {
+        mac = new ThreadSafeHMAC(consumerAuth, userAuth);
+        this.consumerAuth = consumerAuth;
+        this.userAuth = userAuth;
+    }
+
+    @Override
+    public void calculateAndAddSignature(Request request, RequestBuilderBase<?> requestBuilder) {
+        String nonce = generateNonce();
+        long timestamp = generateTimestamp();
+        String signature = calculateSignature(request.getMethod(), request.getUri(), timestamp, nonce, request.getFormParams(), request.getQueryParams());
+        String headerValue = constructAuthHeader(signature, nonce, timestamp);
+        requestBuilder.setHeader(HEADER_AUTHORIZATION, headerValue);
+    }
+
+    private String baseUrl(Uri uri) {
+        
+        String scheme = uri.getScheme();
+
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append(scheme).append(":
+        
+        int port = uri.getPort();
+        if (scheme.equals("http")) {
+            if (port == 80)
+                port = -1;
+        } else if (scheme.equals("https")) {
+            if (port == 443)
+                port = -1;
+        }
+
+        if (port != -1)
+            sb.append(':').append(port);
+
+        if (isNonEmpty(uri.getPath()))
+            sb.append(uri.getPath());
+        
+        return sb.toString();
+    }
+
+    private String encodedParams(long oauthTimestamp, String nonce, List<Param> formParams, List<Param> queryParams) {
+        
+        int allParametersSize = 5
+                + (userAuth.getKey() != null ? 1 : 0)
+                + (formParams != null ? formParams.size() : 0)
+                + (queryParams != null ? queryParams.size() : 0);
+        OAuthParameterSet allParameters = new OAuthParameterSet(allParametersSize);
+
+        
+        allParameters.add(KEY_OAUTH_CONSUMER_KEY, Utf8UrlEncoder.encodeQueryElement(consumerAuth.getKey()));
+        allParameters.add(KEY_OAUTH_NONCE, nonce);
+        allParameters.add(KEY_OAUTH_SIGNATURE_METHOD, OAUTH_SIGNATURE_METHOD);
+        allParameters.add(KEY_OAUTH_TIMESTAMP, String.valueOf(oauthTimestamp));
+        if (userAuth.getKey() != null) {
+            allParameters.add(KEY_OAUTH_TOKEN, Utf8UrlEncoder.encodeQueryElement(userAuth.getKey()));
+        }
+        allParameters.add(KEY_OAUTH_VERSION, OAUTH_VERSION_1_0);
+
+        if (formParams != null) {
+            for (Param param : formParams) {
+                
+                allParameters.add(Utf8UrlEncoder.encodeQueryElement(param.getName()), Utf8UrlEncoder.encodeQueryElement(param.getValue()));
+            }
+        }
+        if (queryParams != null) {
+            for (Param param : queryParams) {
+             
+                allParameters.add(param.getName(), param.getValue());
+            }
+        }
+        return allParameters.sortAndConcat();
+    }
+
+    StringBuilder signatureBaseString(String method, Uri uri, long oauthTimestamp, String nonce,
+                                     List<Param> formParams, List<Param> queryParams) {
+        
+        
+        String baseUrl = baseUrl(uri);
+        String encodedParams = encodedParams(oauthTimestamp, nonce, formParams, queryParams);
+
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append(method); 
+        sb.append('&');
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, baseUrl);
+
+
+        
+        sb.append('&');
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, encodedParams);
+        return sb;
+    }
+    
+    
+    public String calculateSignature(String method, Uri uri, long oauthTimestamp, String nonce,
+                                     List<Param> formParams, List<Param> queryParams) {
+
+        StringBuilder sb = signatureBaseString(method, uri, oauthTimestamp, nonce, formParams, queryParams);
+
+        ByteBuffer rawBase = StringUtils.charSequence2ByteBuffer(sb, UTF_8);
+        byte[] rawSignature = mac.digest(rawBase);
+        
+        return Base64.encode(rawSignature);
+    }
+
+    
+    private String constructAuthHeader(String signature, String nonce, long oauthTimestamp) {
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append("OAuth ");
+        sb.append(KEY_OAUTH_CONSUMER_KEY).append("=\"").append(consumerAuth.getKey()).append("\", ");
+        if (userAuth.getKey() != null) {
+            sb.append(KEY_OAUTH_TOKEN).append("=\"").append(userAuth.getKey()).append("\", ");
+        }
+        sb.append(KEY_OAUTH_SIGNATURE_METHOD).append("=\"").append(OAUTH_SIGNATURE_METHOD).append("\", ");
+
+        
+        sb.append(KEY_OAUTH_SIGNATURE).append("=\"");
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, signature).append("\", ");
+        sb.append(KEY_OAUTH_TIMESTAMP).append("=\"").append(oauthTimestamp).append("\", ");
+
+        
+        sb.append(KEY_OAUTH_NONCE).append("=\"");
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, nonce);
+        sb.append("\", ");
+
+        sb.append(KEY_OAUTH_VERSION).append("=\"").append(OAUTH_VERSION_1_0).append("\"");
+        return sb.toString();
+    }
+
+    protected long generateTimestamp() {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    protected String generateNonce() {
+        byte[] nonceBuffer = NONCE_BUFFER.get();
+        ThreadLocalRandom.current().nextBytes(nonceBuffer);
+        
+        return Base64.encode(nonceBuffer);
+
+    }
+
+    
+    final static class OAuthParameterSet {
+        private final ArrayList<Parameter> allParameters;
+
+        public OAuthParameterSet(int size) {
+            allParameters = new ArrayList<>(size);
+        }
+
+        public OAuthParameterSet add(String key, String value) {
+            allParameters.add(new Parameter(key, value));
+            return this;
+        }
+
+        public String sortAndConcat() {
+            
+            Parameter[] params = allParameters.toArray(new Parameter[allParameters.size()]);
+            Arrays.sort(params);
+
+            
+            StringBuilder encodedParams = new StringBuilder(100);
+            for (Parameter param : params) {
+                if (encodedParams.length() > 0) {
+                    encodedParams.append('&');
+                }
+                encodedParams.append(param.key()).append('=').append(param.value());
+            }
+            return encodedParams.toString();
+        }
+    }
+
+    
+    final static class Parameter implements Comparable<Parameter> {
+        private final String key, value;
+
+        public Parameter(String key, String value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public String value() {
+            return value;
+        }
+
+        @Override
+        public int compareTo(Parameter other) {
+            int diff = key.compareTo(other.key);
+            if (diff == 0) {
+                diff = value.compareTo(other.value);
+            }
+            return diff;
+        }
+
+        @Override
+        public String toString() {
+            return key + "=" + value;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Parameter parameter = (Parameter) o;
+
+            if (!key.equals(parameter.key)) return false;
+            if (!value.equals(parameter.value)) return false;
+
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = key.hashCode();
+            result = 31 * result + value.hashCode();
+            return result;
+        }
+    }
+}
+
+<code block>
+
+package org.asynchttpclient.oauth;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.asynchttpclient.Param;
+import org.asynchttpclient.Request;
+import org.asynchttpclient.RequestBuilder;
+import org.asynchttpclient.uri.Uri;
+import org.testng.annotations.Test;
+
+
+public class OAuthSignatureCalculatorTest {
+    private static final String CONSUMER_KEY = "dpf43f3p2l4k3l03";
+
+    private static final String CONSUMER_SECRET = "kd94hf93k423kf44";
+
+    public static final String TOKEN_KEY = "nnch734d00sl2jdk";
+
+    public static final String TOKEN_SECRET = "pfkkdhi9sl3r4s00";
+
+    public static final String NONCE = "kllo9940pd9333jh";
+
+    final static long TIMESTAMP = 1191242096;
+
+    private static class StaticOAuthSignatureCalculator extends OAuthSignatureCalculator {
+
+        private final long timestamp;
+        private final String nonce;
+
+        public StaticOAuthSignatureCalculator(ConsumerKey consumerAuth, RequestToken userAuth, long timestamp, String nonce) {
+            super(consumerAuth, userAuth);
+            this.timestamp = timestamp;
+            this.nonce = nonce;
+        }
+
+        @Override
+        protected long generateTimestamp() {
+            return timestamp;
+        }
+
+        @Override
+        protected String generateNonce() {
+            return nonce;
+        }
+    }
+
+    
+    private void testSignatureBaseString(Request request) {
+        ConsumerKey consumer = new ConsumerKey("9djdj82h48djs9d2", CONSUMER_SECRET);
+        RequestToken user = new RequestToken("kkk9d7dh3k39sjv7", TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new OAuthSignatureCalculator(consumer, user);
+
+        String signatureBaseString = calc.signatureBaseString(
+                request.getMethod(),
+                request.getUri(),
+                137131201,
+                "7d8f3e4a",
+                request.getFormParams(),
+                request.getQueryParams()).toString();
+
+        assertEquals(signatureBaseString, "POST&" 
+                + "http%3A%2F%2Fexample.com%2Frequest" 
+                + "&a2%3Dr%2520b%26"
+                + "a3%3D2%2520q%26" + "a3%3Da%26"
+                + "b5%3D%253D%25253D%26"
+                + "c%2540%3D%26"
+                + "c2%3D%26"
+                + "oauth_consumer_key%3D9djdj82h48djs9d2%26"
+                + "oauth_nonce%3D7d8f3e4a%26"
+                + "oauth_signature_method%3DHMAC-SHA1%26"
+                + "oauth_timestamp%3D137131201%26"
+                + "oauth_token%3Dkkk9d7dh3k39sjv7%26"
+                + "oauth_version%3D1.0");
+    }
+
+    @Test(groups = "fast")
+    public void testSignatureBaseStringWithProperlyEncodedUri() {
+
+        Request request = new RequestBuilder("POST")
+                .setUrl("http:
+                .addFormParam("c2", "")
+                .addFormParam("a3", "2 q")
+                .build();
+
+        testSignatureBaseString(request);
+    }
+
+    @Test(groups = "fast")
+    public void testSignatureBaseStringWithRawUri() {
+
+        
+        
+        
+        
+        Request request = new RequestBuilder("POST")
+                .setUrl("http:
+                .addFormParam("c2", "")
+                .addFormParam("a3", "2 q")
+                .build();
+
+        testSignatureBaseString(request);
+    }
+
+    
+    
+    @Test(groups = "fast")
+    public void testGetCalculateSignature() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new OAuthSignatureCalculator(consumer, user);
+        List<Param> queryParams = new ArrayList<>();
+        queryParams.add(new Param("file", "vacation.jpg"));
+        queryParams.add(new Param("size", "original"));
+        String url = "http:
+        String sig = calc.calculateSignature("GET", Uri.create(url), TIMESTAMP, NONCE, null, queryParams);
+
+        assertEquals(sig, "tR3+Ty81lMeYAr/Fid0kMTYa/WM=");
+    }
+
+    @Test(groups = "fast")
+    public void testPostCalculateSignature() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new StaticOAuthSignatureCalculator(consumer, user, TIMESTAMP, NONCE);
+
+        List<Param> formParams = new ArrayList<Param>();
+        formParams.add(new Param("file", "vacation.jpg"));
+        formParams.add(new Param("size", "original"));
+        String url = "http:
+        final Request req = new RequestBuilder("POST")
+                .setUri(Uri.create(url))
+                .setFormParams(formParams)
+                .setSignatureCalculator(calc)
+                .build();
+
+        
+        
+        
+        
+        
+        
+        
+        
+
+        String authHeader = req.getHeaders().get("Authorization").get(0);
+        Matcher m = Pattern.compile("oauth_signature=\"(.+?)\"").matcher(authHeader);
+        assertEquals(m.find(), true);
+        String encodedSig = m.group(1);
+        String sig = null;
+        try {
+            sig = URLDecoder.decode(encodedSig, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            fail("bad encoding", e);
+        }
+
+        assertEquals(sig, "wPkvxykrw+BTdCcGqKr+3I+PsiM=");
+    }
+
+    @Test(groups = "fast")
+    public void testGetWithRequestBuilder() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new StaticOAuthSignatureCalculator(consumer, user, TIMESTAMP, NONCE);
+
+        List<Param> queryParams = new ArrayList<Param>();
+        queryParams.add(new Param("file", "vacation.jpg"));
+        queryParams.add(new Param("size", "original"));
+        String url = "http:
+
+        final Request req = new RequestBuilder("GET")
+                .setUri(Uri.create(url))
+                .setQueryParams(queryParams)
+                .setSignatureCalculator(calc)
+                .build();
+
+        final List<Param> params = req.getQueryParams();
+        assertEquals(params.size(), 2);
+
+        
+        
+        
+        
+        
+        
+        
+        
+
+        String authHeader = req.getHeaders().get("Authorization").get(0);
+        Matcher m = Pattern.compile("oauth_signature=\"(.+?)\"").matcher(authHeader);
+        assertEquals(m.find(), true);
+        String encodedSig = m.group(1);
+        String sig = null;
+        try {
+            sig = URLDecoder.decode(encodedSig, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            fail("bad encoding", e);
+        }
+
+        assertEquals(sig, "tR3+Ty81lMeYAr/Fid0kMTYa/WM=");
+
+    }
+
+}
+
+<code block>
+
+package org.asynchttpclient.oauth;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.asynchttpclient.util.MiscUtils.isNonEmpty;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+
+import org.asynchttpclient.Param;
+import org.asynchttpclient.Request;
+import org.asynchttpclient.RequestBuilderBase;
+import org.asynchttpclient.SignatureCalculator;
+import org.asynchttpclient.uri.Uri;
+import org.asynchttpclient.util.Base64;
+import org.asynchttpclient.util.StringUtils;
+import org.asynchttpclient.util.Utf8UrlEncoder;
+
+
+public class OAuthSignatureCalculator implements SignatureCalculator {
+    public final static String HEADER_AUTHORIZATION = "Authorization";
+
+    private static final String KEY_OAUTH_CONSUMER_KEY = "oauth_consumer_key";
+    private static final String KEY_OAUTH_NONCE = "oauth_nonce";
+    private static final String KEY_OAUTH_SIGNATURE = "oauth_signature";
+    private static final String KEY_OAUTH_SIGNATURE_METHOD = "oauth_signature_method";
+    private static final String KEY_OAUTH_TIMESTAMP = "oauth_timestamp";
+    private static final String KEY_OAUTH_TOKEN = "oauth_token";
+    private static final String KEY_OAUTH_VERSION = "oauth_version";
+
+    private static final String OAUTH_VERSION_1_0 = "1.0";
+    private static final String OAUTH_SIGNATURE_METHOD = "HMAC-SHA1";
+
+    protected static final ThreadLocal<byte[]> NONCE_BUFFER = new ThreadLocal<byte[]>() {
+        protected byte[] initialValue() {
+            return new byte[16];
+        }
+    };
+
+    protected final ThreadSafeHMAC mac;
+
+    protected final ConsumerKey consumerAuth;
+
+    protected final RequestToken userAuth;
+
+    
+    public OAuthSignatureCalculator(ConsumerKey consumerAuth, RequestToken userAuth) {
+        mac = new ThreadSafeHMAC(consumerAuth, userAuth);
+        this.consumerAuth = consumerAuth;
+        this.userAuth = userAuth;
+    }
+
+    @Override
+    public void calculateAndAddSignature(Request request, RequestBuilderBase<?> requestBuilder) {
+        String nonce = generateNonce();
+        long timestamp = generateTimestamp();
+        String signature = calculateSignature(request.getMethod(), request.getUri(), timestamp, nonce, request.getFormParams(), request.getQueryParams());
+        String headerValue = constructAuthHeader(signature, nonce, timestamp);
+        requestBuilder.setHeader(HEADER_AUTHORIZATION, headerValue);
+    }
+
+    private String baseUrl(Uri uri) {
+        
+        String scheme = uri.getScheme();
+
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append(scheme).append(":
+        
+        int port = uri.getPort();
+        if (scheme.equals("http")) {
+            if (port == 80)
+                port = -1;
+        } else if (scheme.equals("https")) {
+            if (port == 443)
+                port = -1;
+        }
+
+        if (port != -1)
+            sb.append(':').append(port);
+
+        if (isNonEmpty(uri.getPath()))
+            sb.append(uri.getPath());
+        
+        return sb.toString();
+    }
+
+    private String encodedParams(long oauthTimestamp, String nonce, List<Param> formParams, List<Param> queryParams) {
+        
+        int allParametersSize = 5
+                + (userAuth.getKey() != null ? 1 : 0)
+                + (formParams != null ? formParams.size() : 0)
+                + (queryParams != null ? queryParams.size() : 0);
+        OAuthParameterSet allParameters = new OAuthParameterSet(allParametersSize);
+
+        
+        allParameters.add(KEY_OAUTH_CONSUMER_KEY, consumerAuth.getKey());
+        allParameters.add(KEY_OAUTH_NONCE, nonce);
+        allParameters.add(KEY_OAUTH_SIGNATURE_METHOD, OAUTH_SIGNATURE_METHOD);
+        allParameters.add(KEY_OAUTH_TIMESTAMP, String.valueOf(oauthTimestamp));
+        if (userAuth.getKey() != null) {
+            allParameters.add(KEY_OAUTH_TOKEN, userAuth.getKey());
+        }
+        allParameters.add(KEY_OAUTH_VERSION, OAUTH_VERSION_1_0);
+
+        if (formParams != null) {
+            for (Param param : formParams) {
+                allParameters.add(param.getName(), param.getValue());
+            }
+        }
+        if (queryParams != null) {
+            for (Param param : queryParams) {
+                allParameters.add(param.getName(), param.getValue());
+            }
+        }
+        return allParameters.sortAndConcat();
+    }
+
+    
+    public String calculateSignature(String method, Uri uri, long oauthTimestamp, String nonce,
+                                     List<Param> formParams, List<Param> queryParams) {
+
+        
+        String baseUrl = baseUrl(uri);
+        String encodedParams = encodedParams(oauthTimestamp, nonce, formParams, queryParams);
+
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append(method); 
+        sb.append('&');
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, baseUrl);
+
+
+        
+        sb.append('&');
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, encodedParams);
+
+        ByteBuffer rawBase = StringUtils.charSequence2ByteBuffer(sb, UTF_8);
+        byte[] rawSignature = mac.digest(rawBase);
+        
+        return Base64.encode(rawSignature);
+    }
+
+    
+    private String constructAuthHeader(String signature, String nonce, long oauthTimestamp) {
+        StringBuilder sb = StringUtils.stringBuilder();
+        sb.append("OAuth ");
+        sb.append(KEY_OAUTH_CONSUMER_KEY).append("=\"").append(consumerAuth.getKey()).append("\", ");
+        if (userAuth.getKey() != null) {
+            sb.append(KEY_OAUTH_TOKEN).append("=\"").append(userAuth.getKey()).append("\", ");
+        }
+        sb.append(KEY_OAUTH_SIGNATURE_METHOD).append("=\"").append(OAUTH_SIGNATURE_METHOD).append("\", ");
+
+        
+        sb.append(KEY_OAUTH_SIGNATURE).append("=\"");
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, signature).append("\", ");
+        sb.append(KEY_OAUTH_TIMESTAMP).append("=\"").append(oauthTimestamp).append("\", ");
+
+        
+        sb.append(KEY_OAUTH_NONCE).append("=\"");
+        Utf8UrlEncoder.encodeAndAppendQueryElement(sb, nonce);
+        sb.append("\", ");
+
+        sb.append(KEY_OAUTH_VERSION).append("=\"").append(OAUTH_VERSION_1_0).append("\"");
+        return sb.toString();
+    }
+
+    protected synchronized String generateNonce() {
+        byte[] nonceBuffer = NONCE_BUFFER.get();
+        ThreadLocalRandom.current().nextBytes(nonceBuffer);
+        
+        return Base64.encode(nonceBuffer);
+
+    }
+
+    protected long generateTimestamp() {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    
+    final static class OAuthParameterSet {
+        private final ArrayList<Parameter> allParameters;
+
+        public OAuthParameterSet(int size) {
+            allParameters = new ArrayList<>(size);
+        }
+
+        public OAuthParameterSet add(String key, String value) {
+            Parameter p = new Parameter(Utf8UrlEncoder.encodeQueryElement(key), Utf8UrlEncoder.encodeQueryElement(value));
+            allParameters.add(p);
+            return this;
+        }
+
+        public String sortAndConcat() {
+            
+            Parameter[] params = allParameters.toArray(new Parameter[allParameters.size()]);
+            Arrays.sort(params);
+
+            
+            StringBuilder encodedParams = new StringBuilder(100);
+            for (Parameter param : params) {
+                if (encodedParams.length() > 0) {
+                    encodedParams.append('&');
+                }
+                encodedParams.append(param.key()).append('=').append(param.value());
+            }
+            return encodedParams.toString();
+        }
+    }
+
+    
+    final static class Parameter implements Comparable<Parameter> {
+        private final String key, value;
+
+        public Parameter(String key, String value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public String value() {
+            return value;
+        }
+
+        @Override
+        public int compareTo(Parameter other) {
+            int diff = key.compareTo(other.key);
+            if (diff == 0) {
+                diff = value.compareTo(other.value);
+            }
+            return diff;
+        }
+
+        @Override
+        public String toString() {
+            return key + "=" + value;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Parameter parameter = (Parameter) o;
+
+            if (!key.equals(parameter.key)) return false;
+            if (!value.equals(parameter.value)) return false;
+
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = key.hashCode();
+            result = 31 * result + value.hashCode();
+            return result;
+        }
+    }
+}
+
+<code block>
+
+package org.asynchttpclient.oauth;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.asynchttpclient.Param;
+import org.asynchttpclient.Request;
+import org.asynchttpclient.RequestBuilder;
+import org.asynchttpclient.uri.Uri;
+import org.testng.annotations.Test;
+
+
+public class OAuthSignatureCalculatorTest {
+    private static final String CONSUMER_KEY = "dpf43f3p2l4k3l03";
+
+    private static final String CONSUMER_SECRET = "kd94hf93k423kf44";
+
+    public static final String TOKEN_KEY = "nnch734d00sl2jdk";
+
+    public static final String TOKEN_SECRET = "pfkkdhi9sl3r4s00";
+
+    public static final String NONCE = "kllo9940pd9333jh";
+
+    final static long TIMESTAMP = 1191242096;
+
+    private static class StaticOAuthSignatureCalculator extends OAuthSignatureCalculator {
+        
+        private final long timestamp;
+        private final String nonce;
+        
+        public StaticOAuthSignatureCalculator(ConsumerKey consumerAuth, RequestToken userAuth, long timestamp, String nonce) {
+            super(consumerAuth, userAuth);
+            this.timestamp = timestamp;   
+            this.nonce = nonce;
+        }
+        
+        @Override
+        protected long generateTimestamp() {
+            return timestamp;
+        }
+
+        @Override
+        protected String generateNonce() {
+            return nonce;
+        }
+    }
+    
+    
+    
+    @Test(groups = "fast")
+    public void testGetCalculateSignature() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new OAuthSignatureCalculator(consumer, user);
+        List<Param> queryParams = new ArrayList<>();
+        queryParams.add(new Param("file", "vacation.jpg"));
+        queryParams.add(new Param("size", "original"));
+        String url = "http:
+        String sig = calc.calculateSignature("GET", Uri.create(url), TIMESTAMP, NONCE, null, queryParams);
+
+        assertEquals(sig, "tR3+Ty81lMeYAr/Fid0kMTYa/WM=");
+    }
+
+    @Test(groups = "fast")
+    public void testPostCalculateSignature() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new StaticOAuthSignatureCalculator(consumer, user, TIMESTAMP, NONCE);
+
+        List<Param> formParams = new ArrayList<Param>();
+        formParams.add(new Param("file", "vacation.jpg"));
+        formParams.add(new Param("size", "original"));
+        String url = "http:
+        final Request req = new RequestBuilder("POST")
+                .setUri(Uri.create(url))
+                .setFormParams(formParams)
+                .setSignatureCalculator(calc).build();
+
+        
+        
+        
+        
+        
+
+        String authHeader = req.getHeaders().get("Authorization").get(0);
+        Matcher m = Pattern.compile("oauth_signature=\"(.+?)\"").matcher(authHeader);
+        assertEquals(m.find(), true);
+        String encodedSig = m.group(1);
+        String sig = null;
+        try {
+            sig = URLDecoder.decode(encodedSig, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            fail("bad encoding", e);
+        }
+
+        assertEquals(sig, "wPkvxykrw+BTdCcGqKr+3I+PsiM=");
+    }
+
+    @Test(groups = "fast")
+    public void testGetWithRequestBuilder() {
+        ConsumerKey consumer = new ConsumerKey(CONSUMER_KEY, CONSUMER_SECRET);
+        RequestToken user = new RequestToken(TOKEN_KEY, TOKEN_SECRET);
+        OAuthSignatureCalculator calc = new StaticOAuthSignatureCalculator(consumer, user, TIMESTAMP, NONCE);
+
+        List<Param> queryParams = new ArrayList<Param>();
+        queryParams.add(new Param("file", "vacation.jpg"));
+        queryParams.add(new Param("size", "original"));
+        String url = "http:
+
+        final Request req = new RequestBuilder("GET")
+                .setUri(Uri.create(url))
+                .setQueryParams(queryParams)
+                .setSignatureCalculator(calc).build();
+
+        final List<Param> params = req.getQueryParams();
+        assertEquals(params.size(), 2);
+        
+        
+        
+        
+        
+        
+
+        String authHeader = req.getHeaders().get("Authorization").get(0);
+        Matcher m = Pattern.compile("oauth_signature=\"(.+?)\"").matcher(authHeader);
+        assertEquals(m.find(), true);
+        String encodedSig = m.group(1);
+        String sig = null;
+        try {
+            sig = URLDecoder.decode(encodedSig, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            fail("bad encoding", e);
+        }
+
+        assertEquals(sig, "tR3+Ty81lMeYAr/Fid0kMTYa/WM=");
+
+    }
+
+}
