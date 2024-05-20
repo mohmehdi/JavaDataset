@@ -1,4 +1,4 @@
-Java_Projects/rest_assured/rest_assured-7cac88b9/curr/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SSLITest.java
-Java_Projects/rest_assured/rest_assured-7cac88b9/curr/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SpecificationBuilderITest.java
-Java_Projects/rest_assured/rest_assured-7cac88b9/prev/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SSLITest.java
 Java_Projects/rest_assured/rest_assured-7cac88b9/prev/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SpecificationBuilderITest.java
+Java_Projects/rest_assured/rest_assured-7cac88b9/prev/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SSLITest.java
+Java_Projects/rest_assured/rest_assured-7cac88b9/curr/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SpecificationBuilderITest.java
+Java_Projects/rest_assured/rest_assured-7cac88b9/curr/examples/rest-assured-itest-java/src/test/java/com/jayway/restassured/itest/java/SSLITest.java

@@ -1,50 +1,24 @@
 
 package org.springframework.security.messaging.access.expression;
 
-import org.springframework.messaging.Message;
-import org.springframework.security.access.expression.SecurityExpressionRoot;
-import org.springframework.security.core.Authentication;
-
-
-public class MessageSecurityExpressionRoot extends SecurityExpressionRoot {
-
-	public final Message<?> message;
-
-	public MessageSecurityExpressionRoot(Authentication authentication, Message<?> message) {
-		super(authentication);
-		this.message = message;
-	}
-}
-
-<code block>
-
-package org.springframework.security.messaging.access.expression;
+import org.springframework.expression.Expression;
+import org.springframework.security.access.ConfigAttribute;
+import org.springframework.security.messaging.access.intercept.DefaultMessageSecurityMetadataSource;
+import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
+import org.springframework.security.messaging.util.matcher.MessageMatcher;
 
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.springframework.expression.Expression;
-import org.springframework.messaging.Message;
-import org.springframework.security.access.ConfigAttribute;
-import org.springframework.security.access.expression.SecurityExpressionHandler;
-import org.springframework.security.messaging.access.intercept.DefaultMessageSecurityMetadataSource;
-import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
-import org.springframework.security.messaging.util.matcher.MessageMatcher;
-
 
 public final class ExpressionBasedMessageSecurityMetadataSourceFactory {
 
-	
+
 	public static MessageSecurityMetadataSource createExpressionMessageMetadataSource(
 			LinkedHashMap<MessageMatcher<?>, String> matcherToExpression) {
-		return createExpressionMessageMetadataSource(matcherToExpression, new DefaultMessageSecurityExpressionHandler<Object>());
-	}
-
-	
-	public static MessageSecurityMetadataSource createExpressionMessageMetadataSource(
-			LinkedHashMap<MessageMatcher<?>, String> matcherToExpression, SecurityExpressionHandler<Message<Object>> handler) {
+		DefaultMessageSecurityExpressionHandler<Object> handler = new DefaultMessageSecurityExpressionHandler<Object>();
 
 		LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>> matcherToAttrs = new LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>>();
 
@@ -64,9 +38,515 @@ public final class ExpressionBasedMessageSecurityMetadataSourceFactory {
 }
 <code block>
 
-package org.springframework.security.config.websocket;
+package org.springframework.security.messaging.access.expression;
 
-import static org.springframework.security.config.Elements.*;
+import org.springframework.messaging.Message;
+import org.springframework.security.access.expression.SecurityExpressionRoot;
+import org.springframework.security.core.Authentication;
+
+
+public final class MessageSecurityExpressionRoot extends SecurityExpressionRoot {
+
+	public final Message<?> message;
+
+	public MessageSecurityExpressionRoot(Authentication authentication, Message<?> message) {
+		super(authentication);
+		this.message = message;
+	}
+}
+
+<code block>
+
+package org.springframework.security.config.annotation.web.messaging;
+
+import org.springframework.messaging.Message;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.security.config.annotation.web.configurers.RememberMeConfigurer;
+import org.springframework.security.messaging.access.expression.ExpressionBasedMessageSecurityMetadataSourceFactory;
+import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
+import org.springframework.security.messaging.util.matcher.MessageMatcher;
+import org.springframework.security.messaging.util.matcher.SimpDestinationMessageMatcher;
+import org.springframework.security.messaging.util.matcher.SimpMessageTypeMatcher;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.util.Assert;
+import org.springframework.util.PathMatcher;
+import org.springframework.util.StringUtils;
+
+import java.util.*;
+
+
+public class MessageSecurityMetadataSourceRegistry {
+	private static final String permitAll = "permitAll";
+	private static final String denyAll = "denyAll";
+	private static final String anonymous = "anonymous";
+	private static final String authenticated = "authenticated";
+	private static final String fullyAuthenticated = "fullyAuthenticated";
+	private static final String rememberMe = "rememberMe";
+
+	private final LinkedHashMap<MatcherBuilder, String> matcherToExpression = new LinkedHashMap<MatcherBuilder, String>();
+
+	private DelegatingPathMatcher pathMatcher = new DelegatingPathMatcher();
+
+	private boolean defaultPathMatcher = true;
+
+
+	public Constraint anyMessage() {
+		return matchers(MessageMatcher.ANY_MESSAGE);
+	}
+
+
+	public Constraint nullDestMatcher() {
+		return matchers(SimpDestinationMessageMatcher.NULL_DESTINATION_MATCHER);
+	}
+
+
+	public Constraint simpTypeMatchers(SimpMessageType... typesToMatch) {
+		MessageMatcher<?>[] typeMatchers = new MessageMatcher<?>[typesToMatch.length];
+		for (int i = 0; i < typesToMatch.length; i++) {
+			SimpMessageType typeToMatch = typesToMatch[i];
+			typeMatchers[i] = new SimpMessageTypeMatcher(typeToMatch);
+		}
+		return matchers(typeMatchers);
+	}
+
+
+	public Constraint simpDestMatchers(String... patterns) {
+		return simpDestMatchers(null, patterns);
+	}
+
+
+	public Constraint simpMessageDestMatchers(String... patterns) {
+		return simpDestMatchers(SimpMessageType.MESSAGE, patterns);
+	}
+
+
+	public Constraint simpSubscribeDestMatchers(String... patterns) {
+		return simpDestMatchers(SimpMessageType.SUBSCRIBE, patterns);
+	}
+
+
+	private Constraint simpDestMatchers(SimpMessageType type, String... patterns) {
+		List<MatcherBuilder> matchers = new ArrayList<MatcherBuilder>(patterns.length);
+		for (String pattern : patterns) {
+			matchers.add(new PathMatcherMessageMatcherBuilder(pattern, type));
+		}
+		return new Constraint(matchers);
+	}
+
+
+	public MessageSecurityMetadataSourceRegistry simpDestPathMatcher(
+			PathMatcher pathMatcher) {
+		Assert.notNull(pathMatcher, "pathMatcher cannot be null");
+		this.pathMatcher.setPathMatcher(pathMatcher);
+		this.defaultPathMatcher = false;
+		return this;
+	}
+
+
+	protected boolean isSimpDestPathMatcherConfigured() {
+		return !this.defaultPathMatcher;
+	}
+
+
+	public Constraint matchers(MessageMatcher<?>... matchers) {
+		List<MatcherBuilder> builders = new ArrayList<MatcherBuilder>(matchers.length);
+		for (MessageMatcher<?> matcher : matchers) {
+			builders.add(new PreBuiltMatcherBuilder(matcher));
+		}
+		return new Constraint(builders);
+	}
+
+
+	protected MessageSecurityMetadataSource createMetadataSource() {
+		LinkedHashMap<MessageMatcher<?>, String> matcherToExpression = new LinkedHashMap<MessageMatcher<?>, String>();
+		for (Map.Entry<MatcherBuilder, String> entry : this.matcherToExpression
+				.entrySet()) {
+			matcherToExpression.put(entry.getKey().build(), entry.getValue());
+		}
+		return ExpressionBasedMessageSecurityMetadataSourceFactory
+				.createExpressionMessageMetadataSource(matcherToExpression);
+	}
+
+
+	protected boolean containsMapping() {
+		return !this.matcherToExpression.isEmpty();
+	}
+
+
+	public class Constraint {
+		private final List<? extends MatcherBuilder> messageMatchers;
+
+
+		private Constraint(List<? extends MatcherBuilder> messageMatchers) {
+			Assert.notEmpty(messageMatchers, "messageMatchers cannot be null or empty");
+			this.messageMatchers = messageMatchers;
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry hasRole(String role) {
+			return access(MessageSecurityMetadataSourceRegistry.hasRole(role));
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry hasAnyRole(String... roles) {
+			return access(MessageSecurityMetadataSourceRegistry.hasAnyRole(roles));
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry hasAuthority(String authority) {
+			return access(MessageSecurityMetadataSourceRegistry.hasAuthority(authority));
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry hasAnyAuthority(
+				String... authorities) {
+			return access(MessageSecurityMetadataSourceRegistry
+					.hasAnyAuthority(authorities));
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry permitAll() {
+			return access(permitAll);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry anonymous() {
+			return access(anonymous);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry rememberMe() {
+			return access(rememberMe);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry denyAll() {
+			return access(denyAll);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry authenticated() {
+			return access(authenticated);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry fullyAuthenticated() {
+			return access(fullyAuthenticated);
+		}
+
+
+		public MessageSecurityMetadataSourceRegistry access(String attribute) {
+			for (MatcherBuilder messageMatcher : messageMatchers) {
+				matcherToExpression.put(messageMatcher, attribute);
+			}
+			return MessageSecurityMetadataSourceRegistry.this;
+		}
+	}
+
+	private static String hasAnyRole(String... authorities) {
+		String anyAuthorities = StringUtils.arrayToDelimitedString(authorities,
+				"','ROLE_");
+		return "hasAnyRole('ROLE_" + anyAuthorities + "')";
+	}
+
+	private static String hasRole(String role) {
+		Assert.notNull(role, "role cannot be null");
+		if (role.startsWith("ROLE_")) {
+			throw new IllegalArgumentException(
+					"role should not start with 'ROLE_' since it is automatically inserted. Got '"
+							+ role + "'");
+		}
+		return "hasRole('ROLE_" + role + "')";
+	}
+
+	private static String hasAuthority(String authority) {
+		return "hasAuthority('" + authority + "')";
+	}
+
+	private static String hasAnyAuthority(String... authorities) {
+		String anyAuthorities = StringUtils.arrayToDelimitedString(authorities, "','");
+		return "hasAnyAuthority('" + anyAuthorities + "')";
+	}
+
+	private static class PreBuiltMatcherBuilder implements MatcherBuilder {
+		private MessageMatcher<?> matcher;
+
+		private PreBuiltMatcherBuilder(MessageMatcher<?> matcher) {
+			this.matcher = matcher;
+		}
+
+		public MessageMatcher<?> build() {
+			return matcher;
+		}
+	}
+
+	private class PathMatcherMessageMatcherBuilder implements MatcherBuilder {
+		private final String pattern;
+		private final SimpMessageType type;
+
+		private PathMatcherMessageMatcherBuilder(String pattern, SimpMessageType type) {
+			this.pattern = pattern;
+			this.type = type;
+		}
+
+		public MessageMatcher<?> build() {
+			if (type == null) {
+				return new SimpDestinationMessageMatcher(pattern, pathMatcher);
+			}
+			else if (SimpMessageType.MESSAGE == type) {
+				return SimpDestinationMessageMatcher.createMessageMatcher(pattern,
+						pathMatcher);
+			}
+			else if (SimpMessageType.SUBSCRIBE == type) {
+				return SimpDestinationMessageMatcher.createSubscribeMatcher(pattern,
+						pathMatcher);
+			}
+			throw new IllegalStateException(type
+					+ " is not supported since it does not have a destination");
+		}
+	}
+
+	private interface MatcherBuilder {
+		MessageMatcher<?> build();
+	}
+
+
+	static class DelegatingPathMatcher implements PathMatcher {
+
+		private PathMatcher delegate = new AntPathMatcher();
+
+		public boolean isPattern(String path) {
+			return delegate.isPattern(path);
+		}
+
+		public boolean match(String pattern, String path) {
+			return delegate.match(pattern, path);
+		}
+
+		public boolean matchStart(String pattern, String path) {
+			return delegate.matchStart(pattern, path);
+		}
+
+		public String extractPathWithinPattern(String pattern, String path) {
+			return delegate.extractPathWithinPattern(pattern, path);
+		}
+
+		public Map<String, String> extractUriTemplateVariables(String pattern, String path) {
+			return delegate.extractUriTemplateVariables(pattern, path);
+		}
+
+		public Comparator<String> getPatternComparator(String path) {
+			return delegate.getPatternComparator(path);
+		}
+
+		public String combine(String pattern1, String pattern2) {
+			return delegate.combine(pattern1, pattern2);
+		}
+
+		void setPathMatcher(PathMatcher pathMatcher) {
+			this.delegate = pathMatcher;
+		}
+	}
+}
+
+<code block>
+
+package org.springframework.security.config.annotation.web.socket;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
+import org.springframework.messaging.simp.annotation.support.SimpAnnotationMethodMessageHandler;
+import org.springframework.messaging.simp.config.ChannelRegistration;
+import org.springframework.security.access.AccessDecisionVoter;
+import org.springframework.security.access.vote.AffirmativeBased;
+import org.springframework.security.config.annotation.web.messaging.MessageSecurityMetadataSourceRegistry;
+import org.springframework.security.messaging.access.expression.MessageExpressionVoter;
+import org.springframework.security.messaging.access.intercept.ChannelSecurityInterceptor;
+import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
+import org.springframework.security.messaging.context.AuthenticationPrincipalArgumentResolver;
+import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
+import org.springframework.security.messaging.web.csrf.CsrfChannelInterceptor;
+import org.springframework.security.messaging.web.socket.server.CsrfTokenHandshakeInterceptor;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.util.PathMatcher;
+import org.springframework.web.servlet.handler.SimpleUrlHandlerMapping;
+import org.springframework.web.socket.config.annotation.AbstractWebSocketMessageBrokerConfigurer;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+import org.springframework.web.socket.server.support.WebSocketHttpRequestHandler;
+import org.springframework.web.socket.sockjs.SockJsService;
+import org.springframework.web.socket.sockjs.support.SockJsHttpRequestHandler;
+import org.springframework.web.socket.sockjs.transport.TransportHandlingSockJsService;
+
+
+@Order(Ordered.HIGHEST_PRECEDENCE + 100)
+public abstract class AbstractSecurityWebSocketMessageBrokerConfigurer extends
+		AbstractWebSocketMessageBrokerConfigurer implements SmartInitializingSingleton {
+	private final WebSocketMessageSecurityMetadataSourceRegistry inboundRegistry = new WebSocketMessageSecurityMetadataSourceRegistry();
+
+	private ApplicationContext context;
+
+	public void registerStompEndpoints(StompEndpointRegistry registry) {
+	}
+
+	@Override
+	public void addArgumentResolvers(List<HandlerMethodArgumentResolver> argumentResolvers) {
+		argumentResolvers.add(new AuthenticationPrincipalArgumentResolver());
+	}
+
+	@Override
+	public final void configureClientInboundChannel(ChannelRegistration registration) {
+		ChannelSecurityInterceptor inboundChannelSecurity = inboundChannelSecurity();
+		registration.setInterceptors(securityContextChannelInterceptor());
+		if (!sameOriginDisabled()) {
+			registration.setInterceptors(csrfChannelInterceptor());
+		}
+		if (inboundRegistry.containsMapping()) {
+			registration.setInterceptors(inboundChannelSecurity);
+		}
+		customizeClientInboundChannel(registration);
+	}
+
+	private PathMatcher getDefaultPathMatcher() {
+		try {
+			return context.getBean(SimpAnnotationMethodMessageHandler.class).getPathMatcher();
+		} catch(NoSuchBeanDefinitionException e) {
+			return new AntPathMatcher();
+		}
+	}
+
+
+	protected boolean sameOriginDisabled() {
+		return false;
+	}
+
+
+	protected void customizeClientInboundChannel(ChannelRegistration registration) {
+	}
+
+	@Bean
+	public CsrfChannelInterceptor csrfChannelInterceptor() {
+		return new CsrfChannelInterceptor();
+	}
+
+	@Bean
+	public ChannelSecurityInterceptor inboundChannelSecurity() {
+		ChannelSecurityInterceptor channelSecurityInterceptor = new ChannelSecurityInterceptor(
+				inboundMessageSecurityMetadataSource());
+		List<AccessDecisionVoter<? extends Object>> voters = new ArrayList<AccessDecisionVoter<? extends Object>>();
+		voters.add(new MessageExpressionVoter<Object>());
+		AffirmativeBased manager = new AffirmativeBased(voters);
+		channelSecurityInterceptor.setAccessDecisionManager(manager);
+		return channelSecurityInterceptor;
+	}
+
+	@Bean
+	public SecurityContextChannelInterceptor securityContextChannelInterceptor() {
+		return new SecurityContextChannelInterceptor();
+	}
+
+	@Bean
+	public MessageSecurityMetadataSource inboundMessageSecurityMetadataSource() {
+		configureInbound(inboundRegistry);
+		return inboundRegistry.createMetadataSource();
+	}
+
+
+	protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+	}
+
+	private static class WebSocketMessageSecurityMetadataSourceRegistry extends
+			MessageSecurityMetadataSourceRegistry {
+		@Override
+		public MessageSecurityMetadataSource createMetadataSource() {
+			return super.createMetadataSource();
+		}
+
+		@Override
+		protected boolean containsMapping() {
+			return super.containsMapping();
+		}
+
+		@Override
+		protected boolean isSimpDestPathMatcherConfigured() {
+			return super.isSimpDestPathMatcherConfigured();
+		}
+	}
+
+	@Autowired
+	public void setApplicationContext(ApplicationContext context) {
+		this.context = context;
+	}
+
+	public void afterSingletonsInstantiated() {
+		if (sameOriginDisabled()) {
+			return;
+		}
+
+		String beanName = "stompWebSocketHandlerMapping";
+		SimpleUrlHandlerMapping mapping = context.getBean(beanName,
+				SimpleUrlHandlerMapping.class);
+		Map<String, Object> mappings = mapping.getHandlerMap();
+		for (Object object : mappings.values()) {
+			if (object instanceof SockJsHttpRequestHandler) {
+				SockJsHttpRequestHandler sockjsHandler = (SockJsHttpRequestHandler) object;
+				SockJsService sockJsService = sockjsHandler.getSockJsService();
+				if (!(sockJsService instanceof TransportHandlingSockJsService)) {
+					throw new IllegalStateException(
+							"sockJsService must be instance of TransportHandlingSockJsService got "
+									+ sockJsService);
+				}
+
+				TransportHandlingSockJsService transportHandlingSockJsService = (TransportHandlingSockJsService) sockJsService;
+				List<HandshakeInterceptor> handshakeInterceptors = transportHandlingSockJsService
+						.getHandshakeInterceptors();
+				List<HandshakeInterceptor> interceptorsToSet = new ArrayList<HandshakeInterceptor>(
+						handshakeInterceptors.size() + 1);
+				interceptorsToSet.add(new CsrfTokenHandshakeInterceptor());
+				interceptorsToSet.addAll(handshakeInterceptors);
+
+				transportHandlingSockJsService
+						.setHandshakeInterceptors(interceptorsToSet);
+			}
+			else if (object instanceof WebSocketHttpRequestHandler) {
+				WebSocketHttpRequestHandler handler = (WebSocketHttpRequestHandler) object;
+				List<HandshakeInterceptor> handshakeInterceptors = handler
+						.getHandshakeInterceptors();
+				List<HandshakeInterceptor> interceptorsToSet = new ArrayList<HandshakeInterceptor>(
+						handshakeInterceptors.size() + 1);
+				interceptorsToSet.add(new CsrfTokenHandshakeInterceptor());
+				interceptorsToSet.addAll(handshakeInterceptors);
+
+				handler.setHandshakeInterceptors(interceptorsToSet);
+			}
+			else {
+				throw new IllegalStateException(
+						"Bean "
+								+ beanName
+								+ " is expected to contain mappings to either a SockJsHttpRequestHandler or a WebSocketHttpRequestHandler but got "
+								+ object);
+			}
+		}
+
+		if (inboundRegistry.containsMapping() && !inboundRegistry.isSimpDestPathMatcherConfigured()) {
+			PathMatcher pathMatcher = getDefaultPathMatcher();
+			inboundRegistry.simpDestPathMatcher(pathMatcher);
+		}
+	}
+}
+<code block>
+
+package org.springframework.security.config.websocket;
 
 import java.util.Comparator;
 import java.util.List;
@@ -121,7 +601,7 @@ public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
 
 	private static final String PATH_MATCHER_BEAN_NAME = "springSecurityMessagePathMatcher";
 
-	
+
 	public BeanDefinition parse(Element element, ParserContext parserContext) {
 		BeanDefinitionRegistry registry = parserContext.getRegistry();
 		XmlReaderContext context = parserContext.getReaderContext();
@@ -129,11 +609,6 @@ public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
 		ManagedMap<BeanDefinition, String> matcherToExpression = new ManagedMap<BeanDefinition, String>();
 
 		String id = element.getAttribute(ID_ATTR);
-		Element expressionHandlerElt = DomUtils.getChildElementByTagName(element,
-				EXPRESSION_HANDLER);
-		String expressionHandlerRef = expressionHandlerElt == null ? null : expressionHandlerElt.getAttribute("ref");
-		boolean expressionHandlerDefined = StringUtils.hasText(expressionHandlerRef);
-
 		boolean sameOriginDisabled = Boolean.parseBoolean(element
 				.getAttribute(DISABLED_ATTR));
 
@@ -153,18 +628,11 @@ public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
 				.rootBeanDefinition(ExpressionBasedMessageSecurityMetadataSourceFactory.class);
 		mds.setFactoryMethod("createExpressionMessageMetadataSource");
 		mds.addConstructorArgValue(matcherToExpression);
-		if(expressionHandlerDefined) {
-			mds.addConstructorArgReference(expressionHandlerRef);
-		}
 
 		String mdsId = context.registerWithGeneratedName(mds.getBeanDefinition());
 
 		ManagedList<BeanDefinition> voters = new ManagedList<BeanDefinition>();
-		BeanDefinitionBuilder messageExpressionVoterBldr = BeanDefinitionBuilder.rootBeanDefinition(MessageExpressionVoter.class);
-		if(expressionHandlerDefined) {
-			messageExpressionVoterBldr.addPropertyReference("expressionHandler", expressionHandlerRef);
-		}
-		voters.add(messageExpressionVoterBldr.getBeanDefinition());
+		voters.add(new RootBeanDefinition(MessageExpressionVoter.class));
 		BeanDefinitionBuilder adm = BeanDefinitionBuilder
 				.rootBeanDefinition(ConsensusBased.class);
 		adm.addConstructorArgValue(voters);
@@ -238,7 +706,7 @@ public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
 	static class MessageSecurityPostProcessor implements
 			BeanDefinitionRegistryPostProcessor {
 
-		
+
 		private static final String WEB_SOCKET_AMMH_CLASS_NAME = "org.springframework.web.socket.messaging.WebSocketAnnotationMethodMessageHandler";
 
 		private static final String CLIENT_INBOUND_CHANNEL_BEAN_ID = "clientInboundChannel";
@@ -382,6 +850,676 @@ public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
 }
 <code block>
 
+package org.springframework.security.config.annotation.web.socket;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.MessageDeliveryException;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.messaging.support.GenericMessage;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.mock.web.MockServletConfig;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.config.annotation.web.messaging.MessageSecurityMetadataSourceRegistry;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.security.web.csrf.DefaultCsrfToken;
+import org.springframework.security.web.csrf.MissingCsrfTokenException;
+import org.springframework.stereotype.Controller;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.web.HttpRequestHandler;
+import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
+import org.springframework.web.servlet.HandlerMapping;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.server.HandshakeFailureException;
+import org.springframework.web.socket.server.HandshakeHandler;
+import org.springframework.web.socket.server.support.HttpSessionHandshakeInterceptor;
+import org.springframework.web.socket.sockjs.transport.handler.SockJsWebSocketHandler;
+import org.springframework.web.socket.sockjs.transport.session.WebSocketServerSockJsSession;
+
+import javax.servlet.http.HttpServletRequest;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.fest.assertions.Assertions.assertThat;
+import static org.junit.Assert.fail;
+
+public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
+	AnnotationConfigWebApplicationContext context;
+
+	TestingAuthenticationToken messageUser;
+
+	CsrfToken token;
+
+	String sessionAttr;
+
+	@Before
+	public void setup() {
+		token = new DefaultCsrfToken("header", "param", "token");
+		sessionAttr = "sessionAttr";
+		messageUser = new TestingAuthenticationToken("user", "pass", "ROLE_USER");
+	}
+
+	@After
+	public void cleanup() {
+		if (context != null) {
+			context.close();
+		}
+	}
+
+	@Test
+	public void simpleRegistryMappings() {
+		loadConfig(SockJsSecurityConfig.class);
+
+		clientInboundChannel().send(message("/permitAll"));
+
+		try {
+			clientInboundChannel().send(message("/denyAll"));
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException expected) {
+			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
+		}
+	}
+
+	@Test
+	public void annonymousSupported() {
+		loadConfig(SockJsSecurityConfig.class);
+
+		messageUser = null;
+		clientInboundChannel().send(message("/permitAll"));
+	}
+
+	@Test
+	public void addsAuthenticationPrincipalResolver() throws InterruptedException {
+		loadConfig(SockJsSecurityConfig.class);
+
+		MessageChannel messageChannel = clientInboundChannel();
+		Message<String> message = message("/permitAll/authentication");
+		messageChannel.send(message);
+
+		assertThat(context.getBean(MyController.class).authenticationPrincipal)
+				.isEqualTo((String) messageUser.getPrincipal());
+	}
+
+	@Test
+	public void addsAuthenticationPrincipalResolverWhenNoAuthorization()
+			throws InterruptedException {
+		loadConfig(NoInboundSecurityConfig.class);
+
+		MessageChannel messageChannel = clientInboundChannel();
+		Message<String> message = message("/permitAll/authentication");
+		messageChannel.send(message);
+
+		assertThat(context.getBean(MyController.class).authenticationPrincipal)
+				.isEqualTo((String) messageUser.getPrincipal());
+	}
+
+	@Test
+	public void addsCsrfProtectionWhenNoAuthorization() throws InterruptedException {
+		loadConfig(NoInboundSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/authentication");
+		MessageChannel messageChannel = clientInboundChannel();
+
+		try {
+			messageChannel.send(message);
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException success) {
+			assertThat(success.getCause()).isInstanceOf(MissingCsrfTokenException.class);
+		}
+	}
+
+	@Test
+	public void csrfProtectionForConnect() throws InterruptedException {
+		loadConfig(SockJsSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/authentication");
+		MessageChannel messageChannel = clientInboundChannel();
+
+		try {
+			messageChannel.send(message);
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException success) {
+			assertThat(success.getCause()).isInstanceOf(MissingCsrfTokenException.class);
+		}
+	}
+
+	@Test
+	public void csrfProtectionDisabledForConnect() throws InterruptedException {
+		loadConfig(CsrfDisabledSockJsSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/permitAll/connect");
+		MessageChannel messageChannel = clientInboundChannel();
+
+		messageChannel.send(message);
+	}
+
+	@Test
+	public void messagesConnectUseCsrfTokenHandshakeInterceptor() throws Exception {
+
+		loadConfig(SockJsSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/authentication");
+		MockHttpServletRequest request = sockjsHttpRequest("/chat");
+		HttpRequestHandler handler = handler(request);
+
+		handler.handleRequest(request, new MockHttpServletResponse());
+
+		assertHandshake(request);
+	}
+
+	@Test
+	public void messagesConnectUseCsrfTokenHandshakeInterceptorMultipleMappings()
+			throws Exception {
+		loadConfig(SockJsSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/authentication");
+		MockHttpServletRequest request = sockjsHttpRequest("/other");
+		HttpRequestHandler handler = handler(request);
+
+		handler.handleRequest(request, new MockHttpServletResponse());
+
+		assertHandshake(request);
+	}
+
+	@Test
+	public void messagesConnectWebSocketUseCsrfTokenHandshakeInterceptor()
+			throws Exception {
+		loadConfig(WebSocketSecurityConfig.class);
+
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
+				.create(SimpMessageType.CONNECT);
+		Message<?> message = message(headers, "/authentication");
+		MockHttpServletRequest request = websocketHttpRequest("/websocket");
+		HttpRequestHandler handler = handler(request);
+
+		handler.handleRequest(request, new MockHttpServletResponse());
+
+		assertHandshake(request);
+	}
+
+	@Test
+	public void msmsRegistryCustomPatternMatcher()
+			throws Exception {
+		loadConfig(MsmsRegistryCustomPatternMatcherConfig.class);
+
+		clientInboundChannel().send(message("/app/a.b"));
+
+		try {
+			clientInboundChannel().send(message("/app/a.b.c"));
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException expected) {
+			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class MsmsRegistryCustomPatternMatcherConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry
+				.addEndpoint("/other")
+				.setHandshakeHandler(testHandshakeHandler());
+		}
+
+
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+			messages
+				.simpDestMatchers("/app/a.*").permitAll()
+				.anyMessage().denyAll();
+		}
+
+
+		@Override
+		public void configureMessageBroker(MessageBrokerRegistry registry) {
+			registry.setPathMatcher(new AntPathMatcher("."));
+			registry.enableSimpleBroker("/queue/", "/topic/");
+			registry.setApplicationDestinationPrefixes("/app");
+		}
+
+		@Bean
+		public TestHandshakeHandler testHandshakeHandler() {
+			return new TestHandshakeHandler();
+		}
+	}
+
+	@Test
+	public void overrideMsmsRegistryCustomPatternMatcher()
+			throws Exception {
+		loadConfig(OverrideMsmsRegistryCustomPatternMatcherConfig.class);
+
+		clientInboundChannel().send(message("/app/a/b"));
+
+		try {
+			clientInboundChannel().send(message("/app/a/b/c"));
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException expected) {
+			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class OverrideMsmsRegistryCustomPatternMatcherConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry
+				.addEndpoint("/other")
+				.setHandshakeHandler(testHandshakeHandler());
+		}
+
+
+
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+			messages
+				.simpDestPathMatcher(new AntPathMatcher())
+				.simpDestMatchers("/app/a/*").permitAll()
+				.anyMessage().denyAll();
+		}
+
+
+		@Override
+		public void configureMessageBroker(MessageBrokerRegistry registry) {
+			registry.setPathMatcher(new AntPathMatcher("."));
+			registry.enableSimpleBroker("/queue/", "/topic/");
+			registry.setApplicationDestinationPrefixes("/app");
+		}
+
+		@Bean
+		public TestHandshakeHandler testHandshakeHandler() {
+			return new TestHandshakeHandler();
+		}
+	}
+
+	@Test
+	public void defaultPatternMatcher()
+			throws Exception {
+		loadConfig(DefaultPatternMatcherConfig.class);
+
+		clientInboundChannel().send(message("/app/a/b"));
+
+		try {
+			clientInboundChannel().send(message("/app/a/b/c"));
+			fail("Expected Exception");
+		}
+		catch (MessageDeliveryException expected) {
+			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class DefaultPatternMatcherConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry
+				.addEndpoint("/other")
+				.setHandshakeHandler(testHandshakeHandler());
+		}
+
+
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+			messages
+				.simpDestMatchers("/app/a/*").permitAll()
+				.anyMessage().denyAll();
+		}
+
+
+		@Override
+		public void configureMessageBroker(MessageBrokerRegistry registry) {
+			registry.enableSimpleBroker("/queue/", "/topic/");
+			registry.setApplicationDestinationPrefixes("/app");
+		}
+
+		@Bean
+		public TestHandshakeHandler testHandshakeHandler() {
+			return new TestHandshakeHandler();
+		}
+	}
+
+	private void assertHandshake(HttpServletRequest request) {
+		TestHandshakeHandler handshakeHandler = context
+				.getBean(TestHandshakeHandler.class);
+		assertThat(handshakeHandler.attributes.get(CsrfToken.class.getName())).isSameAs(
+				token);
+		assertThat(handshakeHandler.attributes.get(sessionAttr)).isEqualTo(
+				request.getSession().getAttribute(sessionAttr));
+	}
+
+	private HttpRequestHandler handler(HttpServletRequest request) throws Exception {
+		HandlerMapping handlerMapping = context.getBean(HandlerMapping.class);
+		return (HttpRequestHandler) handlerMapping.getHandler(request).getHandler();
+	}
+
+	private MockHttpServletRequest websocketHttpRequest(String mapping) {
+		MockHttpServletRequest request = sockjsHttpRequest(mapping);
+		request.setRequestURI(mapping);
+		return request;
+	}
+
+	private MockHttpServletRequest sockjsHttpRequest(String mapping) {
+		MockHttpServletRequest request = new MockHttpServletRequest();
+		request.setMethod("GET");
+		request.setAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE,
+				"/289/tpyx6mde/websocket");
+		request.setRequestURI(mapping + "/289/tpyx6mde/websocket");
+		request.getSession().setAttribute(sessionAttr, "sessionValue");
+
+		request.setAttribute(CsrfToken.class.getName(), token);
+		return request;
+	}
+
+	private Message<String> message(String destination) {
+		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create();
+		return message(headers, destination);
+	}
+
+	private Message<String> message(SimpMessageHeaderAccessor headers, String destination) {
+		headers.setSessionId("123");
+		headers.setSessionAttributes(new HashMap<String, Object>());
+		if (destination != null) {
+			headers.setDestination(destination);
+		}
+		if (messageUser != null) {
+			headers.setUser(messageUser);
+		}
+		return new GenericMessage<String>("hi", headers.getMessageHeaders());
+	}
+
+	private MessageChannel clientInboundChannel() {
+		return context.getBean("clientInboundChannel", MessageChannel.class);
+	}
+
+	private void loadConfig(Class<?>... configs) {
+		context = new AnnotationConfigWebApplicationContext();
+		context.register(configs);
+		context.setServletConfig(new MockServletConfig());
+		context.refresh();
+	}
+
+	@Controller
+	static class MyController {
+
+		String authenticationPrincipal;
+		MyCustomArgument myCustomArgument;
+
+		@MessageMapping("/authentication")
+		public void authentication(@AuthenticationPrincipal String un) {
+			this.authenticationPrincipal = un;
+		}
+
+		@MessageMapping("/myCustom")
+		public void myCustom(MyCustomArgument myCustomArgument) {
+			this.myCustomArgument = myCustomArgument;
+		}
+	}
+
+	static class MyCustomArgument {
+		MyCustomArgument(String notDefaultConstr) {
+		}
+	}
+
+	static class MyCustomArgumentResolver implements HandlerMethodArgumentResolver {
+
+		public boolean supportsParameter(MethodParameter parameter) {
+			return parameter.getParameterType().isAssignableFrom(MyCustomArgument.class);
+		}
+
+		public Object resolveArgument(MethodParameter parameter, Message<?> message)
+				throws Exception {
+			return new MyCustomArgument("");
+		}
+	}
+
+	static class TestHandshakeHandler implements HandshakeHandler {
+		Map<String, Object> attributes;
+
+		public boolean doHandshake(ServerHttpRequest request,
+				ServerHttpResponse response, WebSocketHandler wsHandler,
+				Map<String, Object> attributes) throws HandshakeFailureException {
+			this.attributes = attributes;
+			if (wsHandler instanceof SockJsWebSocketHandler) {
+
+				SockJsWebSocketHandler sockJs = (SockJsWebSocketHandler) wsHandler;
+				WebSocketServerSockJsSession session = (WebSocketServerSockJsSession) ReflectionTestUtils
+						.getField(sockJs, "sockJsSession");
+				this.attributes = session.getAttributes();
+			}
+			return true;
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class SockJsSecurityConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry.addEndpoint("/other").setHandshakeHandler(testHandshakeHandler())
+					.withSockJS().setInterceptors(new HttpSessionHandshakeInterceptor());
+
+			registry.addEndpoint("/chat").setHandshakeHandler(testHandshakeHandler())
+					.withSockJS().setInterceptors(new HttpSessionHandshakeInterceptor());
+		}
+
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+			messages
+				.simpDestMatchers("/permitAll/**").permitAll()
+				.anyMessage().denyAll();
+		}
+
+
+		@Override
+		public void configureMessageBroker(MessageBrokerRegistry registry) {
+			registry.enableSimpleBroker("/queue/", "/topic/");
+			registry.setApplicationDestinationPrefixes("/permitAll", "/denyAll");
+		}
+
+		@Bean
+		public MyController myController() {
+			return new MyController();
+		}
+
+		@Bean
+		public TestHandshakeHandler testHandshakeHandler() {
+			return new TestHandshakeHandler();
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class NoInboundSecurityConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry.addEndpoint("/other").withSockJS()
+					.setInterceptors(new HttpSessionHandshakeInterceptor());
+
+			registry.addEndpoint("/chat").withSockJS()
+					.setInterceptors(new HttpSessionHandshakeInterceptor());
+		}
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+		}
+
+		@Override
+		public void configureMessageBroker(MessageBrokerRegistry registry) {
+			registry.enableSimpleBroker("/queue/", "/topic/");
+			registry.setApplicationDestinationPrefixes("/permitAll", "/denyAll");
+		}
+
+		@Bean
+		public MyController myController() {
+			return new MyController();
+		}
+	}
+
+	@Configuration
+	static class CsrfDisabledSockJsSecurityConfig extends SockJsSecurityConfig {
+
+		@Override
+		protected boolean sameOriginDisabled() {
+			return true;
+		}
+	}
+
+	@Configuration
+	@EnableWebSocketMessageBroker
+	@Import(SyncExecutorConfig.class)
+	static class WebSocketSecurityConfig extends
+			AbstractSecurityWebSocketMessageBrokerConfigurer {
+
+		public void registerStompEndpoints(StompEndpointRegistry registry) {
+			registry.addEndpoint("/websocket")
+					.setHandshakeHandler(testHandshakeHandler())
+					.addInterceptors(new HttpSessionHandshakeInterceptor());
+		}
+
+
+		@Override
+		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
+			messages
+				.simpDestMatchers("/permitAll/**").permitAll()
+				.anyMessage().denyAll();
+		}
+
+
+		@Bean
+		public TestHandshakeHandler testHandshakeHandler() {
+			return new TestHandshakeHandler();
+		}
+	}
+
+	@Configuration
+	static class SyncExecutorConfig {
+		@Bean
+		public static SyncExecutorSubscribableChannelPostProcessor postProcessor() {
+			return new SyncExecutorSubscribableChannelPostProcessor();
+		}
+	}
+}
+<code block>
+
+package org.springframework.security.messaging.access.expression;
+
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.expression.Expression;
+import org.springframework.messaging.Message;
+import org.springframework.security.access.ConfigAttribute;
+import org.springframework.security.access.expression.SecurityExpressionHandler;
+import org.springframework.security.messaging.access.intercept.DefaultMessageSecurityMetadataSource;
+import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
+import org.springframework.security.messaging.util.matcher.MessageMatcher;
+
+
+public final class ExpressionBasedMessageSecurityMetadataSourceFactory {
+
+
+	public static MessageSecurityMetadataSource createExpressionMessageMetadataSource(
+			LinkedHashMap<MessageMatcher<?>, String> matcherToExpression) {
+		return createExpressionMessageMetadataSource(matcherToExpression, new DefaultMessageSecurityExpressionHandler<Object>());
+	}
+
+
+	public static MessageSecurityMetadataSource createExpressionMessageMetadataSource(
+			LinkedHashMap<MessageMatcher<?>, String> matcherToExpression, SecurityExpressionHandler<Message<Object>> handler) {
+
+		LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>> matcherToAttrs = new LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>>();
+
+		for (Map.Entry<MessageMatcher<?>, String> entry : matcherToExpression.entrySet()) {
+			MessageMatcher<?> matcher = entry.getKey();
+			String rawExpression = entry.getValue();
+			Expression expression = handler.getExpressionParser().parseExpression(
+					rawExpression);
+			ConfigAttribute attribute = new MessageExpressionConfigAttribute(expression);
+			matcherToAttrs.put(matcher, Arrays.asList(attribute));
+		}
+		return new DefaultMessageSecurityMetadataSource(matcherToAttrs);
+	}
+
+	private ExpressionBasedMessageSecurityMetadataSourceFactory() {
+	}
+}
+<code block>
+
+package org.springframework.security.messaging.access.expression;
+
+import org.springframework.messaging.Message;
+import org.springframework.security.access.expression.SecurityExpressionRoot;
+import org.springframework.security.core.Authentication;
+
+
+public class MessageSecurityExpressionRoot extends SecurityExpressionRoot {
+
+	public final Message<?> message;
+
+	public MessageSecurityExpressionRoot(Authentication authentication, Message<?> message) {
+		super(authentication);
+		this.message = message;
+	}
+}
+
+<code block>
+
 package org.springframework.security.config.annotation.web.messaging;
 
 import java.util.ArrayList;
@@ -422,17 +1560,17 @@ public class MessageSecurityMetadataSourceRegistry {
 
 	private boolean defaultPathMatcher = true;
 
-	
+
 	public Constraint anyMessage() {
 		return matchers(MessageMatcher.ANY_MESSAGE);
 	}
 
-	
+
 	public Constraint nullDestMatcher() {
 		return matchers(SimpDestinationMessageMatcher.NULL_DESTINATION_MATCHER);
 	}
 
-	
+
 	public Constraint simpTypeMatchers(SimpMessageType... typesToMatch) {
 		MessageMatcher<?>[] typeMatchers = new MessageMatcher<?>[typesToMatch.length];
 		for (int i = 0; i < typesToMatch.length; i++) {
@@ -442,22 +1580,22 @@ public class MessageSecurityMetadataSourceRegistry {
 		return matchers(typeMatchers);
 	}
 
-	
+
 	public Constraint simpDestMatchers(String... patterns) {
 		return simpDestMatchers(null, patterns);
 	}
 
-	
+
 	public Constraint simpMessageDestMatchers(String... patterns) {
 		return simpDestMatchers(SimpMessageType.MESSAGE, patterns);
 	}
 
-	
+
 	public Constraint simpSubscribeDestMatchers(String... patterns) {
 		return simpDestMatchers(SimpMessageType.SUBSCRIBE, patterns);
 	}
 
-	
+
 	private Constraint simpDestMatchers(SimpMessageType type, String... patterns) {
 		List<MatcherBuilder> matchers = new ArrayList<MatcherBuilder>(patterns.length);
 		for (String pattern : patterns) {
@@ -466,7 +1604,7 @@ public class MessageSecurityMetadataSourceRegistry {
 		return new Constraint(matchers);
 	}
 
-	
+
 	public MessageSecurityMetadataSourceRegistry simpDestPathMatcher(
 			PathMatcher pathMatcher) {
 		Assert.notNull(pathMatcher, "pathMatcher cannot be null");
@@ -475,12 +1613,12 @@ public class MessageSecurityMetadataSourceRegistry {
 		return this;
 	}
 
-	
+
 	protected boolean isSimpDestPathMatcherConfigured() {
 		return !this.defaultPathMatcher;
 	}
 
-	
+
 	public Constraint matchers(MessageMatcher<?>... matchers) {
 		List<MatcherBuilder> builders = new ArrayList<MatcherBuilder>(matchers.length);
 		for (MessageMatcher<?> matcher : matchers) {
@@ -489,14 +1627,14 @@ public class MessageSecurityMetadataSourceRegistry {
 		return new Constraint(builders);
 	}
 
-	
+
 	public MessageSecurityMetadataSourceRegistry expressionHandler(SecurityExpressionHandler<Message<Object>> expressionHandler) {
 		Assert.notNull(expressionHandler, "expressionHandler cannot be null");
 		this.expressionHandler = expressionHandler;
 		return this;
 	}
 
-	
+
 	protected MessageSecurityMetadataSource createMetadataSource() {
 		LinkedHashMap<MessageMatcher<?>, String> matcherToExpression = new LinkedHashMap<MessageMatcher<?>, String>();
 		for (Map.Entry<MatcherBuilder, String> entry : this.matcherToExpression
@@ -507,74 +1645,74 @@ public class MessageSecurityMetadataSourceRegistry {
 				.createExpressionMessageMetadataSource(matcherToExpression, expressionHandler);
 	}
 
-	
+
 	protected boolean containsMapping() {
 		return !this.matcherToExpression.isEmpty();
 	}
 
-	
+
 	public class Constraint {
 		private final List<? extends MatcherBuilder> messageMatchers;
 
-		
+
 		private Constraint(List<? extends MatcherBuilder> messageMatchers) {
 			Assert.notEmpty(messageMatchers, "messageMatchers cannot be null or empty");
 			this.messageMatchers = messageMatchers;
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry hasRole(String role) {
 			return access(MessageSecurityMetadataSourceRegistry.hasRole(role));
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry hasAnyRole(String... roles) {
 			return access(MessageSecurityMetadataSourceRegistry.hasAnyRole(roles));
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry hasAuthority(String authority) {
 			return access(MessageSecurityMetadataSourceRegistry.hasAuthority(authority));
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry hasAnyAuthority(
 				String... authorities) {
 			return access(MessageSecurityMetadataSourceRegistry
 					.hasAnyAuthority(authorities));
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry permitAll() {
 			return access(permitAll);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry anonymous() {
 			return access(anonymous);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry rememberMe() {
 			return access(rememberMe);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry denyAll() {
 			return access(denyAll);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry authenticated() {
 			return access(authenticated);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry fullyAuthenticated() {
 			return access(fullyAuthenticated);
 		}
 
-		
+
 		public MessageSecurityMetadataSourceRegistry access(String attribute) {
 			for (MatcherBuilder messageMatcher : messageMatchers) {
 				matcherToExpression.put(messageMatcher, attribute);
@@ -769,12 +1907,12 @@ public abstract class AbstractSecurityWebSocketMessageBrokerConfigurer extends
 		}
 	}
 
-	
+
 	protected boolean sameOriginDisabled() {
 		return false;
 	}
 
-	
+
 	protected void customizeClientInboundChannel(ChannelRegistration registration) {
 	}
 
@@ -814,7 +1952,7 @@ public abstract class AbstractSecurityWebSocketMessageBrokerConfigurer extends
 		return inboundRegistry.createMetadataSource();
 	}
 
-	
+
 	protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 	}
 
@@ -901,6 +2039,324 @@ public abstract class AbstractSecurityWebSocketMessageBrokerConfigurer extends
 		if (inboundRegistry.containsMapping() && !inboundRegistry.isSimpDestPathMatcherConfigured()) {
 			PathMatcher pathMatcher = getDefaultPathMatcher();
 			inboundRegistry.simpDestPathMatcher(pathMatcher);
+		}
+	}
+}
+<code block>
+
+package org.springframework.security.config.websocket;
+
+import static org.springframework.security.config.Elements.*;
+
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.BeansException;
+import org.springframework.beans.PropertyValue;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.beans.factory.config.BeanReference;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.config.RuntimeBeanReference;
+import org.springframework.beans.factory.support.BeanDefinitionBuilder;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
+import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
+import org.springframework.beans.factory.support.ManagedList;
+import org.springframework.beans.factory.support.ManagedMap;
+import org.springframework.beans.factory.support.RootBeanDefinition;
+import org.springframework.beans.factory.xml.BeanDefinitionParser;
+import org.springframework.beans.factory.xml.ParserContext;
+import org.springframework.beans.factory.xml.XmlReaderContext;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.messaging.simp.annotation.support.SimpAnnotationMethodMessageHandler;
+import org.springframework.security.access.vote.ConsensusBased;
+import org.springframework.security.config.Elements;
+import org.springframework.security.messaging.access.expression.ExpressionBasedMessageSecurityMetadataSourceFactory;
+import org.springframework.security.messaging.access.expression.MessageExpressionVoter;
+import org.springframework.security.messaging.access.intercept.ChannelSecurityInterceptor;
+import org.springframework.security.messaging.context.AuthenticationPrincipalArgumentResolver;
+import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
+import org.springframework.security.messaging.util.matcher.SimpDestinationMessageMatcher;
+import org.springframework.security.messaging.util.matcher.SimpMessageTypeMatcher;
+import org.springframework.security.messaging.web.csrf.CsrfChannelInterceptor;
+import org.springframework.security.messaging.web.socket.server.CsrfTokenHandshakeInterceptor;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.util.PathMatcher;
+import org.springframework.util.StringUtils;
+import org.springframework.util.xml.DomUtils;
+import org.w3c.dom.Element;
+
+
+public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
+		BeanDefinitionParser {
+	private static final String ID_ATTR = "id";
+
+	private static final String DISABLED_ATTR = "same-origin-disabled";
+
+	private static final String PATTERN_ATTR = "pattern";
+
+	private static final String ACCESS_ATTR = "access";
+
+	private static final String TYPE_ATTR = "type";
+
+	private static final String PATH_MATCHER_BEAN_NAME = "springSecurityMessagePathMatcher";
+
+
+	public BeanDefinition parse(Element element, ParserContext parserContext) {
+		BeanDefinitionRegistry registry = parserContext.getRegistry();
+		XmlReaderContext context = parserContext.getReaderContext();
+
+		ManagedMap<BeanDefinition, String> matcherToExpression = new ManagedMap<BeanDefinition, String>();
+
+		String id = element.getAttribute(ID_ATTR);
+		Element expressionHandlerElt = DomUtils.getChildElementByTagName(element,
+				EXPRESSION_HANDLER);
+		String expressionHandlerRef = expressionHandlerElt == null ? null : expressionHandlerElt.getAttribute("ref");
+		boolean expressionHandlerDefined = StringUtils.hasText(expressionHandlerRef);
+
+		boolean sameOriginDisabled = Boolean.parseBoolean(element
+				.getAttribute(DISABLED_ATTR));
+
+		List<Element> interceptMessages = DomUtils.getChildElementsByTagName(element,
+				Elements.INTERCEPT_MESSAGE);
+		for (Element interceptMessage : interceptMessages) {
+			String matcherPattern = interceptMessage.getAttribute(PATTERN_ATTR);
+			String accessExpression = interceptMessage.getAttribute(ACCESS_ATTR);
+			String messageType = interceptMessage.getAttribute(TYPE_ATTR);
+
+			BeanDefinition matcher = createMatcher(matcherPattern, messageType,
+					parserContext, interceptMessage);
+			matcherToExpression.put(matcher, accessExpression);
+		}
+
+		BeanDefinitionBuilder mds = BeanDefinitionBuilder
+				.rootBeanDefinition(ExpressionBasedMessageSecurityMetadataSourceFactory.class);
+		mds.setFactoryMethod("createExpressionMessageMetadataSource");
+		mds.addConstructorArgValue(matcherToExpression);
+		if(expressionHandlerDefined) {
+			mds.addConstructorArgReference(expressionHandlerRef);
+		}
+
+		String mdsId = context.registerWithGeneratedName(mds.getBeanDefinition());
+
+		ManagedList<BeanDefinition> voters = new ManagedList<BeanDefinition>();
+		BeanDefinitionBuilder messageExpressionVoterBldr = BeanDefinitionBuilder.rootBeanDefinition(MessageExpressionVoter.class);
+		if(expressionHandlerDefined) {
+			messageExpressionVoterBldr.addPropertyReference("expressionHandler", expressionHandlerRef);
+		}
+		voters.add(messageExpressionVoterBldr.getBeanDefinition());
+		BeanDefinitionBuilder adm = BeanDefinitionBuilder
+				.rootBeanDefinition(ConsensusBased.class);
+		adm.addConstructorArgValue(voters);
+
+		BeanDefinitionBuilder inboundChannelSecurityInterceptor = BeanDefinitionBuilder
+				.rootBeanDefinition(ChannelSecurityInterceptor.class);
+		inboundChannelSecurityInterceptor.addConstructorArgValue(registry
+				.getBeanDefinition(mdsId));
+		inboundChannelSecurityInterceptor.addPropertyValue("accessDecisionManager",
+				adm.getBeanDefinition());
+		String inSecurityInterceptorName = context
+				.registerWithGeneratedName(inboundChannelSecurityInterceptor
+						.getBeanDefinition());
+
+		if (StringUtils.hasText(id)) {
+			registry.registerAlias(inSecurityInterceptorName, id);
+
+			if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
+				registry.registerBeanDefinition(PATH_MATCHER_BEAN_NAME, new RootBeanDefinition(AntPathMatcher.class));
+			}
+		}
+		else {
+			BeanDefinitionBuilder mspp = BeanDefinitionBuilder
+					.rootBeanDefinition(MessageSecurityPostProcessor.class);
+			mspp.addConstructorArgValue(inSecurityInterceptorName);
+			mspp.addConstructorArgValue(sameOriginDisabled);
+			context.registerWithGeneratedName(mspp.getBeanDefinition());
+		}
+
+		return null;
+	}
+
+	private BeanDefinition createMatcher(String matcherPattern, String messageType,
+			ParserContext parserContext, Element interceptMessage) {
+		boolean hasPattern = StringUtils.hasText(matcherPattern);
+		boolean hasMessageType = StringUtils.hasText(messageType);
+		if (!hasPattern) {
+			BeanDefinitionBuilder matcher = BeanDefinitionBuilder
+					.rootBeanDefinition(SimpMessageTypeMatcher.class);
+			matcher.addConstructorArgValue(messageType);
+			return matcher.getBeanDefinition();
+		}
+
+		String factoryName = null;
+		if (hasPattern && hasMessageType) {
+			SimpMessageType type = SimpMessageType.valueOf(messageType);
+			if (SimpMessageType.MESSAGE == type) {
+				factoryName = "createMessageMatcher";
+			}
+			else if (SimpMessageType.SUBSCRIBE == type) {
+				factoryName = "createSubscribeMatcher";
+			}
+			else {
+				parserContext
+						.getReaderContext()
+						.error("Cannot use intercept-websocket@message-type="
+								+ messageType
+								+ " with a pattern because the type does not have a destination.",
+								interceptMessage);
+			}
+		}
+
+		BeanDefinitionBuilder matcher = BeanDefinitionBuilder
+				.rootBeanDefinition(SimpDestinationMessageMatcher.class);
+		matcher.setFactoryMethod(factoryName);
+		matcher.addConstructorArgValue(matcherPattern);
+		matcher.addConstructorArgValue(new RuntimeBeanReference("springSecurityMessagePathMatcher"));
+		return matcher.getBeanDefinition();
+	}
+
+	static class MessageSecurityPostProcessor implements
+			BeanDefinitionRegistryPostProcessor {
+
+
+		private static final String WEB_SOCKET_AMMH_CLASS_NAME = "org.springframework.web.socket.messaging.WebSocketAnnotationMethodMessageHandler";
+
+		private static final String CLIENT_INBOUND_CHANNEL_BEAN_ID = "clientInboundChannel";
+
+		private static final String INTERCEPTORS_PROP = "interceptors";
+
+		private static final String CUSTOM_ARG_RESOLVERS_PROP = "customArgumentResolvers";
+
+		private final String inboundSecurityInterceptorId;
+
+		private final boolean sameOriginDisabled;
+
+		public MessageSecurityPostProcessor(String inboundSecurityInterceptorId,
+				boolean sameOriginDisabled) {
+			this.inboundSecurityInterceptorId = inboundSecurityInterceptorId;
+			this.sameOriginDisabled = sameOriginDisabled;
+		}
+
+		public void postProcessBeanDefinitionRegistry(BeanDefinitionRegistry registry)
+				throws BeansException {
+			String[] beanNames = registry.getBeanDefinitionNames();
+			for (String beanName : beanNames) {
+				BeanDefinition bd = registry.getBeanDefinition(beanName);
+				String beanClassName = bd.getBeanClassName();
+				if (beanClassName.equals(SimpAnnotationMethodMessageHandler.class
+						.getName()) || beanClassName.equals(WEB_SOCKET_AMMH_CLASS_NAME)) {
+					PropertyValue current = bd.getPropertyValues().getPropertyValue(
+							CUSTOM_ARG_RESOLVERS_PROP);
+					ManagedList<Object> argResolvers = new ManagedList<Object>();
+					if (current != null) {
+						argResolvers.addAll((ManagedList<?>) current.getValue());
+					}
+					argResolvers.add(new RootBeanDefinition(
+							AuthenticationPrincipalArgumentResolver.class));
+					bd.getPropertyValues().add(CUSTOM_ARG_RESOLVERS_PROP, argResolvers);
+
+					if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
+						PropertyValue pathMatcherProp = bd.getPropertyValues().getPropertyValue("pathMatcher");
+						Object pathMatcher = pathMatcherProp == null ? null : pathMatcherProp.getValue();
+						if(pathMatcher instanceof BeanReference) {
+							registry.registerAlias(((BeanReference) pathMatcher).getBeanName(), PATH_MATCHER_BEAN_NAME);
+						}
+					}
+				}
+				else if (beanClassName
+						.equals("org.springframework.web.socket.server.support.WebSocketHttpRequestHandler")) {
+					addCsrfTokenHandshakeInterceptor(bd);
+				}
+				else if (beanClassName
+						.equals("org.springframework.web.socket.sockjs.transport.TransportHandlingSockJsService")) {
+					addCsrfTokenHandshakeInterceptor(bd);
+				}
+				else if (beanClassName
+						.equals("org.springframework.web.socket.sockjs.transport.handler.DefaultSockJsService")) {
+					addCsrfTokenHandshakeInterceptor(bd);
+				}
+			}
+
+			if (!registry.containsBeanDefinition(CLIENT_INBOUND_CHANNEL_BEAN_ID)) {
+				return;
+			}
+			ManagedList<Object> interceptors = new ManagedList();
+			interceptors.add(new RootBeanDefinition(
+					SecurityContextChannelInterceptor.class));
+			if (!sameOriginDisabled) {
+				interceptors.add(new RootBeanDefinition(CsrfChannelInterceptor.class));
+			}
+			interceptors.add(registry.getBeanDefinition(inboundSecurityInterceptorId));
+
+			BeanDefinition inboundChannel = registry
+					.getBeanDefinition(CLIENT_INBOUND_CHANNEL_BEAN_ID);
+			PropertyValue currentInterceptorsPv = inboundChannel.getPropertyValues()
+					.getPropertyValue(INTERCEPTORS_PROP);
+			if (currentInterceptorsPv != null) {
+				ManagedList<?> currentInterceptors = (ManagedList<?>) currentInterceptorsPv
+						.getValue();
+				interceptors.addAll(currentInterceptors);
+			}
+
+			inboundChannel.getPropertyValues().add(INTERCEPTORS_PROP, interceptors);
+
+			if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
+				registry.registerBeanDefinition(PATH_MATCHER_BEAN_NAME, new RootBeanDefinition(AntPathMatcher.class));
+			}
+		}
+
+		private void addCsrfTokenHandshakeInterceptor(BeanDefinition bd) {
+			if (sameOriginDisabled) {
+				return;
+			}
+			String interceptorPropertyName = "handshakeInterceptors";
+			ManagedList<? super Object> interceptors = new ManagedList<Object>();
+			interceptors.add(new RootBeanDefinition(CsrfTokenHandshakeInterceptor.class));
+			interceptors.addAll((ManagedList<Object>) bd.getPropertyValues().get(
+					interceptorPropertyName));
+			bd.getPropertyValues().add(interceptorPropertyName, interceptors);
+		}
+
+		public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory)
+				throws BeansException {
+
+		}
+	}
+
+	static class DelegatingPathMatcher implements PathMatcher {
+
+		private PathMatcher delegate = new AntPathMatcher();
+
+		public boolean isPattern(String path) {
+			return delegate.isPattern(path);
+		}
+
+		public boolean match(String pattern, String path) {
+			return delegate.match(pattern, path);
+		}
+
+		public boolean matchStart(String pattern, String path) {
+			return delegate.matchStart(pattern, path);
+		}
+
+		public String extractPathWithinPattern(String pattern, String path) {
+			return delegate.extractPathWithinPattern(pattern, path);
+		}
+
+		public Map<String, String> extractUriTemplateVariables(String pattern, String path) {
+			return delegate.extractUriTemplateVariables(pattern, path);
+		}
+
+		public Comparator<String> getPatternComparator(String path) {
+			return delegate.getPatternComparator(path);
+		}
+
+		public String combine(String pattern1, String pattern2) {
+			return delegate.combine(pattern1, pattern2);
+		}
+
+		void setPathMatcher(PathMatcher pathMatcher) {
+			this.delegate = pathMatcher;
 		}
 	}
 }
@@ -1153,22 +2609,22 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 	static class MsmsRegistryCustomPatternMatcherConfig extends
 			AbstractSecurityWebSocketMessageBrokerConfigurer {
 
-		
+
 		public void registerStompEndpoints(StompEndpointRegistry registry) {
 			registry
 				.addEndpoint("/other")
 				.setHandshakeHandler(testHandshakeHandler());
 		}
-		
 
-		
+
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
 				.simpDestMatchers("/app/a.*").permitAll()
 				.anyMessage().denyAll();
 		}
-		
+
 
 		@Override
 		public void configureMessageBroker(MessageBrokerRegistry registry) {
@@ -1205,16 +2661,16 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 	static class OverrideMsmsRegistryCustomPatternMatcherConfig extends
 			AbstractSecurityWebSocketMessageBrokerConfigurer {
 
-		
+
 		public void registerStompEndpoints(StompEndpointRegistry registry) {
 			registry
 				.addEndpoint("/other")
 				.setHandshakeHandler(testHandshakeHandler());
 		}
-		
 
 
-		
+
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
@@ -1222,7 +2678,7 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 				.simpDestMatchers("/app/a/*").permitAll()
 				.anyMessage().denyAll();
 		}
-		
+
 
 		@Override
 		public void configureMessageBroker(MessageBrokerRegistry registry) {
@@ -1259,22 +2715,22 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 	static class DefaultPatternMatcherConfig extends
 			AbstractSecurityWebSocketMessageBrokerConfigurer {
 
-		
+
 		public void registerStompEndpoints(StompEndpointRegistry registry) {
 			registry
 				.addEndpoint("/other")
 				.setHandshakeHandler(testHandshakeHandler());
 		}
-		
 
-		
+
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
 				.simpDestMatchers("/app/a/*").permitAll()
 				.anyMessage().denyAll();
 		}
-		
+
 
 		@Override
 		public void configureMessageBroker(MessageBrokerRegistry registry) {
@@ -1311,21 +2767,21 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 	static class CustomExpressionConfig extends
 			AbstractSecurityWebSocketMessageBrokerConfigurer {
 
-		
+
 		public void registerStompEndpoints(StompEndpointRegistry registry) {
 			registry
 				.addEndpoint("/other")
 				.setHandshakeHandler(testHandshakeHandler());
 		}
-		
 
-		
+
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
 				.anyMessage().access("denyRob()");
 		}
-		
+
 
 		@Bean
 		public SecurityExpressionHandler<Message<Object>> messageSecurityExpressionHandler() {
@@ -1458,7 +2914,7 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 				Map<String, Object> attributes) throws HandshakeFailureException {
 			this.attributes = attributes;
 			if (wsHandler instanceof SockJsWebSocketHandler) {
-				
+
 				SockJsWebSocketHandler sockJs = (SockJsWebSocketHandler) wsHandler;
 				WebSocketServerSockJsSession session = (WebSocketServerSockJsSession) ReflectionTestUtils
 						.getField(sockJs, "sockJsSession");
@@ -1482,14 +2938,14 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 					.withSockJS().setInterceptors(new HttpSessionHandshakeInterceptor());
 		}
 
-		
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
 				.simpDestMatchers("/permitAll/**").permitAll()
 				.anyMessage().denyAll();
 		}
-		
+
 
 		@Override
 		public void configureMessageBroker(MessageBrokerRegistry registry) {
@@ -1559,7 +3015,7 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 					.addInterceptors(new HttpSessionHandshakeInterceptor());
 		}
 
-		
+
 		@Override
 		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
 			messages
@@ -1567,1463 +3023,7 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 				.simpDestMatchers("/customExpression/**").access("denyRob")
 				.anyMessage().denyAll();
 		}
-		
 
-		@Bean
-		public TestHandshakeHandler testHandshakeHandler() {
-			return new TestHandshakeHandler();
-		}
-	}
-
-	@Configuration
-	static class SyncExecutorConfig {
-		@Bean
-		public static SyncExecutorSubscribableChannelPostProcessor postProcessor() {
-			return new SyncExecutorSubscribableChannelPostProcessor();
-		}
-	}
-}
-<code block>
-
-package org.springframework.security.messaging.access.expression;
-
-import org.springframework.messaging.Message;
-import org.springframework.security.access.expression.SecurityExpressionRoot;
-import org.springframework.security.core.Authentication;
-
-
-public final class MessageSecurityExpressionRoot extends SecurityExpressionRoot {
-
-	public final Message<?> message;
-
-	public MessageSecurityExpressionRoot(Authentication authentication, Message<?> message) {
-		super(authentication);
-		this.message = message;
-	}
-}
-
-<code block>
-
-package org.springframework.security.messaging.access.expression;
-
-import org.springframework.expression.Expression;
-import org.springframework.security.access.ConfigAttribute;
-import org.springframework.security.messaging.access.intercept.DefaultMessageSecurityMetadataSource;
-import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
-import org.springframework.security.messaging.util.matcher.MessageMatcher;
-
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.Map;
-
-
-public final class ExpressionBasedMessageSecurityMetadataSourceFactory {
-
-	
-	public static MessageSecurityMetadataSource createExpressionMessageMetadataSource(
-			LinkedHashMap<MessageMatcher<?>, String> matcherToExpression) {
-		DefaultMessageSecurityExpressionHandler<Object> handler = new DefaultMessageSecurityExpressionHandler<Object>();
-
-		LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>> matcherToAttrs = new LinkedHashMap<MessageMatcher<?>, Collection<ConfigAttribute>>();
-
-		for (Map.Entry<MessageMatcher<?>, String> entry : matcherToExpression.entrySet()) {
-			MessageMatcher<?> matcher = entry.getKey();
-			String rawExpression = entry.getValue();
-			Expression expression = handler.getExpressionParser().parseExpression(
-					rawExpression);
-			ConfigAttribute attribute = new MessageExpressionConfigAttribute(expression);
-			matcherToAttrs.put(matcher, Arrays.asList(attribute));
-		}
-		return new DefaultMessageSecurityMetadataSource(matcherToAttrs);
-	}
-
-	private ExpressionBasedMessageSecurityMetadataSourceFactory() {
-	}
-}
-<code block>
-
-package org.springframework.security.config.websocket;
-
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-
-import org.springframework.beans.BeansException;
-import org.springframework.beans.PropertyValue;
-import org.springframework.beans.factory.config.BeanDefinition;
-import org.springframework.beans.factory.config.BeanReference;
-import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.beans.factory.config.RuntimeBeanReference;
-import org.springframework.beans.factory.support.BeanDefinitionBuilder;
-import org.springframework.beans.factory.support.BeanDefinitionRegistry;
-import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
-import org.springframework.beans.factory.support.ManagedList;
-import org.springframework.beans.factory.support.ManagedMap;
-import org.springframework.beans.factory.support.RootBeanDefinition;
-import org.springframework.beans.factory.xml.BeanDefinitionParser;
-import org.springframework.beans.factory.xml.ParserContext;
-import org.springframework.beans.factory.xml.XmlReaderContext;
-import org.springframework.messaging.simp.SimpMessageType;
-import org.springframework.messaging.simp.annotation.support.SimpAnnotationMethodMessageHandler;
-import org.springframework.security.access.vote.ConsensusBased;
-import org.springframework.security.config.Elements;
-import org.springframework.security.messaging.access.expression.ExpressionBasedMessageSecurityMetadataSourceFactory;
-import org.springframework.security.messaging.access.expression.MessageExpressionVoter;
-import org.springframework.security.messaging.access.intercept.ChannelSecurityInterceptor;
-import org.springframework.security.messaging.context.AuthenticationPrincipalArgumentResolver;
-import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
-import org.springframework.security.messaging.util.matcher.SimpDestinationMessageMatcher;
-import org.springframework.security.messaging.util.matcher.SimpMessageTypeMatcher;
-import org.springframework.security.messaging.web.csrf.CsrfChannelInterceptor;
-import org.springframework.security.messaging.web.socket.server.CsrfTokenHandshakeInterceptor;
-import org.springframework.util.AntPathMatcher;
-import org.springframework.util.PathMatcher;
-import org.springframework.util.StringUtils;
-import org.springframework.util.xml.DomUtils;
-import org.w3c.dom.Element;
-
-
-public final class WebSocketMessageBrokerSecurityBeanDefinitionParser implements
-		BeanDefinitionParser {
-	private static final String ID_ATTR = "id";
-
-	private static final String DISABLED_ATTR = "same-origin-disabled";
-
-	private static final String PATTERN_ATTR = "pattern";
-
-	private static final String ACCESS_ATTR = "access";
-
-	private static final String TYPE_ATTR = "type";
-
-	private static final String PATH_MATCHER_BEAN_NAME = "springSecurityMessagePathMatcher";
-
-	
-	public BeanDefinition parse(Element element, ParserContext parserContext) {
-		BeanDefinitionRegistry registry = parserContext.getRegistry();
-		XmlReaderContext context = parserContext.getReaderContext();
-
-		ManagedMap<BeanDefinition, String> matcherToExpression = new ManagedMap<BeanDefinition, String>();
-
-		String id = element.getAttribute(ID_ATTR);
-		boolean sameOriginDisabled = Boolean.parseBoolean(element
-				.getAttribute(DISABLED_ATTR));
-
-		List<Element> interceptMessages = DomUtils.getChildElementsByTagName(element,
-				Elements.INTERCEPT_MESSAGE);
-		for (Element interceptMessage : interceptMessages) {
-			String matcherPattern = interceptMessage.getAttribute(PATTERN_ATTR);
-			String accessExpression = interceptMessage.getAttribute(ACCESS_ATTR);
-			String messageType = interceptMessage.getAttribute(TYPE_ATTR);
-
-			BeanDefinition matcher = createMatcher(matcherPattern, messageType,
-					parserContext, interceptMessage);
-			matcherToExpression.put(matcher, accessExpression);
-		}
-
-		BeanDefinitionBuilder mds = BeanDefinitionBuilder
-				.rootBeanDefinition(ExpressionBasedMessageSecurityMetadataSourceFactory.class);
-		mds.setFactoryMethod("createExpressionMessageMetadataSource");
-		mds.addConstructorArgValue(matcherToExpression);
-
-		String mdsId = context.registerWithGeneratedName(mds.getBeanDefinition());
-
-		ManagedList<BeanDefinition> voters = new ManagedList<BeanDefinition>();
-		voters.add(new RootBeanDefinition(MessageExpressionVoter.class));
-		BeanDefinitionBuilder adm = BeanDefinitionBuilder
-				.rootBeanDefinition(ConsensusBased.class);
-		adm.addConstructorArgValue(voters);
-
-		BeanDefinitionBuilder inboundChannelSecurityInterceptor = BeanDefinitionBuilder
-				.rootBeanDefinition(ChannelSecurityInterceptor.class);
-		inboundChannelSecurityInterceptor.addConstructorArgValue(registry
-				.getBeanDefinition(mdsId));
-		inboundChannelSecurityInterceptor.addPropertyValue("accessDecisionManager",
-				adm.getBeanDefinition());
-		String inSecurityInterceptorName = context
-				.registerWithGeneratedName(inboundChannelSecurityInterceptor
-						.getBeanDefinition());
-
-		if (StringUtils.hasText(id)) {
-			registry.registerAlias(inSecurityInterceptorName, id);
-
-			if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
-				registry.registerBeanDefinition(PATH_MATCHER_BEAN_NAME, new RootBeanDefinition(AntPathMatcher.class));
-			}
-		}
-		else {
-			BeanDefinitionBuilder mspp = BeanDefinitionBuilder
-					.rootBeanDefinition(MessageSecurityPostProcessor.class);
-			mspp.addConstructorArgValue(inSecurityInterceptorName);
-			mspp.addConstructorArgValue(sameOriginDisabled);
-			context.registerWithGeneratedName(mspp.getBeanDefinition());
-		}
-
-		return null;
-	}
-
-	private BeanDefinition createMatcher(String matcherPattern, String messageType,
-			ParserContext parserContext, Element interceptMessage) {
-		boolean hasPattern = StringUtils.hasText(matcherPattern);
-		boolean hasMessageType = StringUtils.hasText(messageType);
-		if (!hasPattern) {
-			BeanDefinitionBuilder matcher = BeanDefinitionBuilder
-					.rootBeanDefinition(SimpMessageTypeMatcher.class);
-			matcher.addConstructorArgValue(messageType);
-			return matcher.getBeanDefinition();
-		}
-
-		String factoryName = null;
-		if (hasPattern && hasMessageType) {
-			SimpMessageType type = SimpMessageType.valueOf(messageType);
-			if (SimpMessageType.MESSAGE == type) {
-				factoryName = "createMessageMatcher";
-			}
-			else if (SimpMessageType.SUBSCRIBE == type) {
-				factoryName = "createSubscribeMatcher";
-			}
-			else {
-				parserContext
-						.getReaderContext()
-						.error("Cannot use intercept-websocket@message-type="
-								+ messageType
-								+ " with a pattern because the type does not have a destination.",
-								interceptMessage);
-			}
-		}
-
-		BeanDefinitionBuilder matcher = BeanDefinitionBuilder
-				.rootBeanDefinition(SimpDestinationMessageMatcher.class);
-		matcher.setFactoryMethod(factoryName);
-		matcher.addConstructorArgValue(matcherPattern);
-		matcher.addConstructorArgValue(new RuntimeBeanReference("springSecurityMessagePathMatcher"));
-		return matcher.getBeanDefinition();
-	}
-
-	static class MessageSecurityPostProcessor implements
-			BeanDefinitionRegistryPostProcessor {
-
-		
-		private static final String WEB_SOCKET_AMMH_CLASS_NAME = "org.springframework.web.socket.messaging.WebSocketAnnotationMethodMessageHandler";
-
-		private static final String CLIENT_INBOUND_CHANNEL_BEAN_ID = "clientInboundChannel";
-
-		private static final String INTERCEPTORS_PROP = "interceptors";
-
-		private static final String CUSTOM_ARG_RESOLVERS_PROP = "customArgumentResolvers";
-
-		private final String inboundSecurityInterceptorId;
-
-		private final boolean sameOriginDisabled;
-
-		public MessageSecurityPostProcessor(String inboundSecurityInterceptorId,
-				boolean sameOriginDisabled) {
-			this.inboundSecurityInterceptorId = inboundSecurityInterceptorId;
-			this.sameOriginDisabled = sameOriginDisabled;
-		}
-
-		public void postProcessBeanDefinitionRegistry(BeanDefinitionRegistry registry)
-				throws BeansException {
-			String[] beanNames = registry.getBeanDefinitionNames();
-			for (String beanName : beanNames) {
-				BeanDefinition bd = registry.getBeanDefinition(beanName);
-				String beanClassName = bd.getBeanClassName();
-				if (beanClassName.equals(SimpAnnotationMethodMessageHandler.class
-						.getName()) || beanClassName.equals(WEB_SOCKET_AMMH_CLASS_NAME)) {
-					PropertyValue current = bd.getPropertyValues().getPropertyValue(
-							CUSTOM_ARG_RESOLVERS_PROP);
-					ManagedList<Object> argResolvers = new ManagedList<Object>();
-					if (current != null) {
-						argResolvers.addAll((ManagedList<?>) current.getValue());
-					}
-					argResolvers.add(new RootBeanDefinition(
-							AuthenticationPrincipalArgumentResolver.class));
-					bd.getPropertyValues().add(CUSTOM_ARG_RESOLVERS_PROP, argResolvers);
-
-					if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
-						PropertyValue pathMatcherProp = bd.getPropertyValues().getPropertyValue("pathMatcher");
-						Object pathMatcher = pathMatcherProp == null ? null : pathMatcherProp.getValue();
-						if(pathMatcher instanceof BeanReference) {
-							registry.registerAlias(((BeanReference) pathMatcher).getBeanName(), PATH_MATCHER_BEAN_NAME);
-						}
-					}
-				}
-				else if (beanClassName
-						.equals("org.springframework.web.socket.server.support.WebSocketHttpRequestHandler")) {
-					addCsrfTokenHandshakeInterceptor(bd);
-				}
-				else if (beanClassName
-						.equals("org.springframework.web.socket.sockjs.transport.TransportHandlingSockJsService")) {
-					addCsrfTokenHandshakeInterceptor(bd);
-				}
-				else if (beanClassName
-						.equals("org.springframework.web.socket.sockjs.transport.handler.DefaultSockJsService")) {
-					addCsrfTokenHandshakeInterceptor(bd);
-				}
-			}
-
-			if (!registry.containsBeanDefinition(CLIENT_INBOUND_CHANNEL_BEAN_ID)) {
-				return;
-			}
-			ManagedList<Object> interceptors = new ManagedList();
-			interceptors.add(new RootBeanDefinition(
-					SecurityContextChannelInterceptor.class));
-			if (!sameOriginDisabled) {
-				interceptors.add(new RootBeanDefinition(CsrfChannelInterceptor.class));
-			}
-			interceptors.add(registry.getBeanDefinition(inboundSecurityInterceptorId));
-
-			BeanDefinition inboundChannel = registry
-					.getBeanDefinition(CLIENT_INBOUND_CHANNEL_BEAN_ID);
-			PropertyValue currentInterceptorsPv = inboundChannel.getPropertyValues()
-					.getPropertyValue(INTERCEPTORS_PROP);
-			if (currentInterceptorsPv != null) {
-				ManagedList<?> currentInterceptors = (ManagedList<?>) currentInterceptorsPv
-						.getValue();
-				interceptors.addAll(currentInterceptors);
-			}
-
-			inboundChannel.getPropertyValues().add(INTERCEPTORS_PROP, interceptors);
-
-			if(!registry.containsBeanDefinition(PATH_MATCHER_BEAN_NAME)) {
-				registry.registerBeanDefinition(PATH_MATCHER_BEAN_NAME, new RootBeanDefinition(AntPathMatcher.class));
-			}
-		}
-
-		private void addCsrfTokenHandshakeInterceptor(BeanDefinition bd) {
-			if (sameOriginDisabled) {
-				return;
-			}
-			String interceptorPropertyName = "handshakeInterceptors";
-			ManagedList<? super Object> interceptors = new ManagedList<Object>();
-			interceptors.add(new RootBeanDefinition(CsrfTokenHandshakeInterceptor.class));
-			interceptors.addAll((ManagedList<Object>) bd.getPropertyValues().get(
-					interceptorPropertyName));
-			bd.getPropertyValues().add(interceptorPropertyName, interceptors);
-		}
-
-		public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory)
-				throws BeansException {
-
-		}
-	}
-
-	static class DelegatingPathMatcher implements PathMatcher {
-
-		private PathMatcher delegate = new AntPathMatcher();
-
-		public boolean isPattern(String path) {
-			return delegate.isPattern(path);
-		}
-
-		public boolean match(String pattern, String path) {
-			return delegate.match(pattern, path);
-		}
-
-		public boolean matchStart(String pattern, String path) {
-			return delegate.matchStart(pattern, path);
-		}
-
-		public String extractPathWithinPattern(String pattern, String path) {
-			return delegate.extractPathWithinPattern(pattern, path);
-		}
-
-		public Map<String, String> extractUriTemplateVariables(String pattern, String path) {
-			return delegate.extractUriTemplateVariables(pattern, path);
-		}
-
-		public Comparator<String> getPatternComparator(String path) {
-			return delegate.getPatternComparator(path);
-		}
-
-		public String combine(String pattern1, String pattern2) {
-			return delegate.combine(pattern1, pattern2);
-		}
-
-		void setPathMatcher(PathMatcher pathMatcher) {
-			this.delegate = pathMatcher;
-		}
-	}
-}
-<code block>
-
-package org.springframework.security.config.annotation.web.messaging;
-
-import org.springframework.messaging.Message;
-import org.springframework.messaging.simp.SimpMessageType;
-import org.springframework.security.config.annotation.web.configurers.RememberMeConfigurer;
-import org.springframework.security.messaging.access.expression.ExpressionBasedMessageSecurityMetadataSourceFactory;
-import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
-import org.springframework.security.messaging.util.matcher.MessageMatcher;
-import org.springframework.security.messaging.util.matcher.SimpDestinationMessageMatcher;
-import org.springframework.security.messaging.util.matcher.SimpMessageTypeMatcher;
-import org.springframework.util.AntPathMatcher;
-import org.springframework.util.Assert;
-import org.springframework.util.PathMatcher;
-import org.springframework.util.StringUtils;
-
-import java.util.*;
-
-
-public class MessageSecurityMetadataSourceRegistry {
-	private static final String permitAll = "permitAll";
-	private static final String denyAll = "denyAll";
-	private static final String anonymous = "anonymous";
-	private static final String authenticated = "authenticated";
-	private static final String fullyAuthenticated = "fullyAuthenticated";
-	private static final String rememberMe = "rememberMe";
-
-	private final LinkedHashMap<MatcherBuilder, String> matcherToExpression = new LinkedHashMap<MatcherBuilder, String>();
-
-	private DelegatingPathMatcher pathMatcher = new DelegatingPathMatcher();
-
-	private boolean defaultPathMatcher = true;
-
-	
-	public Constraint anyMessage() {
-		return matchers(MessageMatcher.ANY_MESSAGE);
-	}
-
-	
-	public Constraint nullDestMatcher() {
-		return matchers(SimpDestinationMessageMatcher.NULL_DESTINATION_MATCHER);
-	}
-
-	
-	public Constraint simpTypeMatchers(SimpMessageType... typesToMatch) {
-		MessageMatcher<?>[] typeMatchers = new MessageMatcher<?>[typesToMatch.length];
-		for (int i = 0; i < typesToMatch.length; i++) {
-			SimpMessageType typeToMatch = typesToMatch[i];
-			typeMatchers[i] = new SimpMessageTypeMatcher(typeToMatch);
-		}
-		return matchers(typeMatchers);
-	}
-
-	
-	public Constraint simpDestMatchers(String... patterns) {
-		return simpDestMatchers(null, patterns);
-	}
-
-	
-	public Constraint simpMessageDestMatchers(String... patterns) {
-		return simpDestMatchers(SimpMessageType.MESSAGE, patterns);
-	}
-
-	
-	public Constraint simpSubscribeDestMatchers(String... patterns) {
-		return simpDestMatchers(SimpMessageType.SUBSCRIBE, patterns);
-	}
-
-	
-	private Constraint simpDestMatchers(SimpMessageType type, String... patterns) {
-		List<MatcherBuilder> matchers = new ArrayList<MatcherBuilder>(patterns.length);
-		for (String pattern : patterns) {
-			matchers.add(new PathMatcherMessageMatcherBuilder(pattern, type));
-		}
-		return new Constraint(matchers);
-	}
-
-	
-	public MessageSecurityMetadataSourceRegistry simpDestPathMatcher(
-			PathMatcher pathMatcher) {
-		Assert.notNull(pathMatcher, "pathMatcher cannot be null");
-		this.pathMatcher.setPathMatcher(pathMatcher);
-		this.defaultPathMatcher = false;
-		return this;
-	}
-
-	
-	protected boolean isSimpDestPathMatcherConfigured() {
-		return !this.defaultPathMatcher;
-	}
-
-	
-	public Constraint matchers(MessageMatcher<?>... matchers) {
-		List<MatcherBuilder> builders = new ArrayList<MatcherBuilder>(matchers.length);
-		for (MessageMatcher<?> matcher : matchers) {
-			builders.add(new PreBuiltMatcherBuilder(matcher));
-		}
-		return new Constraint(builders);
-	}
-
-	
-	protected MessageSecurityMetadataSource createMetadataSource() {
-		LinkedHashMap<MessageMatcher<?>, String> matcherToExpression = new LinkedHashMap<MessageMatcher<?>, String>();
-		for (Map.Entry<MatcherBuilder, String> entry : this.matcherToExpression
-				.entrySet()) {
-			matcherToExpression.put(entry.getKey().build(), entry.getValue());
-		}
-		return ExpressionBasedMessageSecurityMetadataSourceFactory
-				.createExpressionMessageMetadataSource(matcherToExpression);
-	}
-
-	
-	protected boolean containsMapping() {
-		return !this.matcherToExpression.isEmpty();
-	}
-
-	
-	public class Constraint {
-		private final List<? extends MatcherBuilder> messageMatchers;
-
-		
-		private Constraint(List<? extends MatcherBuilder> messageMatchers) {
-			Assert.notEmpty(messageMatchers, "messageMatchers cannot be null or empty");
-			this.messageMatchers = messageMatchers;
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry hasRole(String role) {
-			return access(MessageSecurityMetadataSourceRegistry.hasRole(role));
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry hasAnyRole(String... roles) {
-			return access(MessageSecurityMetadataSourceRegistry.hasAnyRole(roles));
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry hasAuthority(String authority) {
-			return access(MessageSecurityMetadataSourceRegistry.hasAuthority(authority));
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry hasAnyAuthority(
-				String... authorities) {
-			return access(MessageSecurityMetadataSourceRegistry
-					.hasAnyAuthority(authorities));
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry permitAll() {
-			return access(permitAll);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry anonymous() {
-			return access(anonymous);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry rememberMe() {
-			return access(rememberMe);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry denyAll() {
-			return access(denyAll);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry authenticated() {
-			return access(authenticated);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry fullyAuthenticated() {
-			return access(fullyAuthenticated);
-		}
-
-		
-		public MessageSecurityMetadataSourceRegistry access(String attribute) {
-			for (MatcherBuilder messageMatcher : messageMatchers) {
-				matcherToExpression.put(messageMatcher, attribute);
-			}
-			return MessageSecurityMetadataSourceRegistry.this;
-		}
-	}
-
-	private static String hasAnyRole(String... authorities) {
-		String anyAuthorities = StringUtils.arrayToDelimitedString(authorities,
-				"','ROLE_");
-		return "hasAnyRole('ROLE_" + anyAuthorities + "')";
-	}
-
-	private static String hasRole(String role) {
-		Assert.notNull(role, "role cannot be null");
-		if (role.startsWith("ROLE_")) {
-			throw new IllegalArgumentException(
-					"role should not start with 'ROLE_' since it is automatically inserted. Got '"
-							+ role + "'");
-		}
-		return "hasRole('ROLE_" + role + "')";
-	}
-
-	private static String hasAuthority(String authority) {
-		return "hasAuthority('" + authority + "')";
-	}
-
-	private static String hasAnyAuthority(String... authorities) {
-		String anyAuthorities = StringUtils.arrayToDelimitedString(authorities, "','");
-		return "hasAnyAuthority('" + anyAuthorities + "')";
-	}
-
-	private static class PreBuiltMatcherBuilder implements MatcherBuilder {
-		private MessageMatcher<?> matcher;
-
-		private PreBuiltMatcherBuilder(MessageMatcher<?> matcher) {
-			this.matcher = matcher;
-		}
-
-		public MessageMatcher<?> build() {
-			return matcher;
-		}
-	}
-
-	private class PathMatcherMessageMatcherBuilder implements MatcherBuilder {
-		private final String pattern;
-		private final SimpMessageType type;
-
-		private PathMatcherMessageMatcherBuilder(String pattern, SimpMessageType type) {
-			this.pattern = pattern;
-			this.type = type;
-		}
-
-		public MessageMatcher<?> build() {
-			if (type == null) {
-				return new SimpDestinationMessageMatcher(pattern, pathMatcher);
-			}
-			else if (SimpMessageType.MESSAGE == type) {
-				return SimpDestinationMessageMatcher.createMessageMatcher(pattern,
-						pathMatcher);
-			}
-			else if (SimpMessageType.SUBSCRIBE == type) {
-				return SimpDestinationMessageMatcher.createSubscribeMatcher(pattern,
-						pathMatcher);
-			}
-			throw new IllegalStateException(type
-					+ " is not supported since it does not have a destination");
-		}
-	}
-
-	private interface MatcherBuilder {
-		MessageMatcher<?> build();
-	}
-
-
-	static class DelegatingPathMatcher implements PathMatcher {
-
-		private PathMatcher delegate = new AntPathMatcher();
-
-		public boolean isPattern(String path) {
-			return delegate.isPattern(path);
-		}
-
-		public boolean match(String pattern, String path) {
-			return delegate.match(pattern, path);
-		}
-
-		public boolean matchStart(String pattern, String path) {
-			return delegate.matchStart(pattern, path);
-		}
-
-		public String extractPathWithinPattern(String pattern, String path) {
-			return delegate.extractPathWithinPattern(pattern, path);
-		}
-
-		public Map<String, String> extractUriTemplateVariables(String pattern, String path) {
-			return delegate.extractUriTemplateVariables(pattern, path);
-		}
-
-		public Comparator<String> getPatternComparator(String path) {
-			return delegate.getPatternComparator(path);
-		}
-
-		public String combine(String pattern1, String pattern2) {
-			return delegate.combine(pattern1, pattern2);
-		}
-
-		void setPathMatcher(PathMatcher pathMatcher) {
-			this.delegate = pathMatcher;
-		}
-	}
-}
-
-<code block>
-
-package org.springframework.security.config.annotation.web.socket;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
-import org.springframework.beans.factory.SmartInitializingSingleton;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.annotation.Bean;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
-import org.springframework.messaging.simp.annotation.support.SimpAnnotationMethodMessageHandler;
-import org.springframework.messaging.simp.config.ChannelRegistration;
-import org.springframework.security.access.AccessDecisionVoter;
-import org.springframework.security.access.vote.AffirmativeBased;
-import org.springframework.security.config.annotation.web.messaging.MessageSecurityMetadataSourceRegistry;
-import org.springframework.security.messaging.access.expression.MessageExpressionVoter;
-import org.springframework.security.messaging.access.intercept.ChannelSecurityInterceptor;
-import org.springframework.security.messaging.access.intercept.MessageSecurityMetadataSource;
-import org.springframework.security.messaging.context.AuthenticationPrincipalArgumentResolver;
-import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
-import org.springframework.security.messaging.web.csrf.CsrfChannelInterceptor;
-import org.springframework.security.messaging.web.socket.server.CsrfTokenHandshakeInterceptor;
-import org.springframework.util.AntPathMatcher;
-import org.springframework.util.PathMatcher;
-import org.springframework.web.servlet.handler.SimpleUrlHandlerMapping;
-import org.springframework.web.socket.config.annotation.AbstractWebSocketMessageBrokerConfigurer;
-import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
-import org.springframework.web.socket.server.HandshakeInterceptor;
-import org.springframework.web.socket.server.support.WebSocketHttpRequestHandler;
-import org.springframework.web.socket.sockjs.SockJsService;
-import org.springframework.web.socket.sockjs.support.SockJsHttpRequestHandler;
-import org.springframework.web.socket.sockjs.transport.TransportHandlingSockJsService;
-
-
-@Order(Ordered.HIGHEST_PRECEDENCE + 100)
-public abstract class AbstractSecurityWebSocketMessageBrokerConfigurer extends
-		AbstractWebSocketMessageBrokerConfigurer implements SmartInitializingSingleton {
-	private final WebSocketMessageSecurityMetadataSourceRegistry inboundRegistry = new WebSocketMessageSecurityMetadataSourceRegistry();
-
-	private ApplicationContext context;
-
-	public void registerStompEndpoints(StompEndpointRegistry registry) {
-	}
-
-	@Override
-	public void addArgumentResolvers(List<HandlerMethodArgumentResolver> argumentResolvers) {
-		argumentResolvers.add(new AuthenticationPrincipalArgumentResolver());
-	}
-
-	@Override
-	public final void configureClientInboundChannel(ChannelRegistration registration) {
-		ChannelSecurityInterceptor inboundChannelSecurity = inboundChannelSecurity();
-		registration.setInterceptors(securityContextChannelInterceptor());
-		if (!sameOriginDisabled()) {
-			registration.setInterceptors(csrfChannelInterceptor());
-		}
-		if (inboundRegistry.containsMapping()) {
-			registration.setInterceptors(inboundChannelSecurity);
-		}
-		customizeClientInboundChannel(registration);
-	}
-
-	private PathMatcher getDefaultPathMatcher() {
-		try {
-			return context.getBean(SimpAnnotationMethodMessageHandler.class).getPathMatcher();
-		} catch(NoSuchBeanDefinitionException e) {
-			return new AntPathMatcher();
-		}
-	}
-
-	
-	protected boolean sameOriginDisabled() {
-		return false;
-	}
-
-	
-	protected void customizeClientInboundChannel(ChannelRegistration registration) {
-	}
-
-	@Bean
-	public CsrfChannelInterceptor csrfChannelInterceptor() {
-		return new CsrfChannelInterceptor();
-	}
-
-	@Bean
-	public ChannelSecurityInterceptor inboundChannelSecurity() {
-		ChannelSecurityInterceptor channelSecurityInterceptor = new ChannelSecurityInterceptor(
-				inboundMessageSecurityMetadataSource());
-		List<AccessDecisionVoter<? extends Object>> voters = new ArrayList<AccessDecisionVoter<? extends Object>>();
-		voters.add(new MessageExpressionVoter<Object>());
-		AffirmativeBased manager = new AffirmativeBased(voters);
-		channelSecurityInterceptor.setAccessDecisionManager(manager);
-		return channelSecurityInterceptor;
-	}
-
-	@Bean
-	public SecurityContextChannelInterceptor securityContextChannelInterceptor() {
-		return new SecurityContextChannelInterceptor();
-	}
-
-	@Bean
-	public MessageSecurityMetadataSource inboundMessageSecurityMetadataSource() {
-		configureInbound(inboundRegistry);
-		return inboundRegistry.createMetadataSource();
-	}
-
-	
-	protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-	}
-
-	private static class WebSocketMessageSecurityMetadataSourceRegistry extends
-			MessageSecurityMetadataSourceRegistry {
-		@Override
-		public MessageSecurityMetadataSource createMetadataSource() {
-			return super.createMetadataSource();
-		}
-
-		@Override
-		protected boolean containsMapping() {
-			return super.containsMapping();
-		}
-
-		@Override
-		protected boolean isSimpDestPathMatcherConfigured() {
-			return super.isSimpDestPathMatcherConfigured();
-		}
-	}
-
-	@Autowired
-	public void setApplicationContext(ApplicationContext context) {
-		this.context = context;
-	}
-
-	public void afterSingletonsInstantiated() {
-		if (sameOriginDisabled()) {
-			return;
-		}
-
-		String beanName = "stompWebSocketHandlerMapping";
-		SimpleUrlHandlerMapping mapping = context.getBean(beanName,
-				SimpleUrlHandlerMapping.class);
-		Map<String, Object> mappings = mapping.getHandlerMap();
-		for (Object object : mappings.values()) {
-			if (object instanceof SockJsHttpRequestHandler) {
-				SockJsHttpRequestHandler sockjsHandler = (SockJsHttpRequestHandler) object;
-				SockJsService sockJsService = sockjsHandler.getSockJsService();
-				if (!(sockJsService instanceof TransportHandlingSockJsService)) {
-					throw new IllegalStateException(
-							"sockJsService must be instance of TransportHandlingSockJsService got "
-									+ sockJsService);
-				}
-
-				TransportHandlingSockJsService transportHandlingSockJsService = (TransportHandlingSockJsService) sockJsService;
-				List<HandshakeInterceptor> handshakeInterceptors = transportHandlingSockJsService
-						.getHandshakeInterceptors();
-				List<HandshakeInterceptor> interceptorsToSet = new ArrayList<HandshakeInterceptor>(
-						handshakeInterceptors.size() + 1);
-				interceptorsToSet.add(new CsrfTokenHandshakeInterceptor());
-				interceptorsToSet.addAll(handshakeInterceptors);
-
-				transportHandlingSockJsService
-						.setHandshakeInterceptors(interceptorsToSet);
-			}
-			else if (object instanceof WebSocketHttpRequestHandler) {
-				WebSocketHttpRequestHandler handler = (WebSocketHttpRequestHandler) object;
-				List<HandshakeInterceptor> handshakeInterceptors = handler
-						.getHandshakeInterceptors();
-				List<HandshakeInterceptor> interceptorsToSet = new ArrayList<HandshakeInterceptor>(
-						handshakeInterceptors.size() + 1);
-				interceptorsToSet.add(new CsrfTokenHandshakeInterceptor());
-				interceptorsToSet.addAll(handshakeInterceptors);
-
-				handler.setHandshakeInterceptors(interceptorsToSet);
-			}
-			else {
-				throw new IllegalStateException(
-						"Bean "
-								+ beanName
-								+ " is expected to contain mappings to either a SockJsHttpRequestHandler or a WebSocketHttpRequestHandler but got "
-								+ object);
-			}
-		}
-
-		if (inboundRegistry.containsMapping() && !inboundRegistry.isSimpDestPathMatcherConfigured()) {
-			PathMatcher pathMatcher = getDefaultPathMatcher();
-			inboundRegistry.simpDestPathMatcher(pathMatcher);
-		}
-	}
-}
-<code block>
-
-package org.springframework.security.config.annotation.web.socket;
-
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Import;
-import org.springframework.core.MethodParameter;
-import org.springframework.http.server.ServerHttpRequest;
-import org.springframework.http.server.ServerHttpResponse;
-import org.springframework.messaging.Message;
-import org.springframework.messaging.MessageChannel;
-import org.springframework.messaging.MessageDeliveryException;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
-import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.messaging.simp.SimpMessageType;
-import org.springframework.messaging.simp.config.MessageBrokerRegistry;
-import org.springframework.messaging.support.GenericMessage;
-import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.mock.web.MockHttpServletResponse;
-import org.springframework.mock.web.MockServletConfig;
-import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.authentication.TestingAuthenticationToken;
-import org.springframework.security.config.annotation.web.messaging.MessageSecurityMetadataSourceRegistry;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.web.csrf.CsrfToken;
-import org.springframework.security.web.csrf.DefaultCsrfToken;
-import org.springframework.security.web.csrf.MissingCsrfTokenException;
-import org.springframework.stereotype.Controller;
-import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.util.AntPathMatcher;
-import org.springframework.web.HttpRequestHandler;
-import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
-import org.springframework.web.servlet.HandlerMapping;
-import org.springframework.web.socket.WebSocketHandler;
-import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
-import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
-import org.springframework.web.socket.server.HandshakeFailureException;
-import org.springframework.web.socket.server.HandshakeHandler;
-import org.springframework.web.socket.server.support.HttpSessionHandshakeInterceptor;
-import org.springframework.web.socket.sockjs.transport.handler.SockJsWebSocketHandler;
-import org.springframework.web.socket.sockjs.transport.session.WebSocketServerSockJsSession;
-
-import javax.servlet.http.HttpServletRequest;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.fest.assertions.Assertions.assertThat;
-import static org.junit.Assert.fail;
-
-public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
-	AnnotationConfigWebApplicationContext context;
-
-	TestingAuthenticationToken messageUser;
-
-	CsrfToken token;
-
-	String sessionAttr;
-
-	@Before
-	public void setup() {
-		token = new DefaultCsrfToken("header", "param", "token");
-		sessionAttr = "sessionAttr";
-		messageUser = new TestingAuthenticationToken("user", "pass", "ROLE_USER");
-	}
-
-	@After
-	public void cleanup() {
-		if (context != null) {
-			context.close();
-		}
-	}
-
-	@Test
-	public void simpleRegistryMappings() {
-		loadConfig(SockJsSecurityConfig.class);
-
-		clientInboundChannel().send(message("/permitAll"));
-
-		try {
-			clientInboundChannel().send(message("/denyAll"));
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException expected) {
-			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
-		}
-	}
-
-	@Test
-	public void annonymousSupported() {
-		loadConfig(SockJsSecurityConfig.class);
-
-		messageUser = null;
-		clientInboundChannel().send(message("/permitAll"));
-	}
-
-	@Test
-	public void addsAuthenticationPrincipalResolver() throws InterruptedException {
-		loadConfig(SockJsSecurityConfig.class);
-
-		MessageChannel messageChannel = clientInboundChannel();
-		Message<String> message = message("/permitAll/authentication");
-		messageChannel.send(message);
-
-		assertThat(context.getBean(MyController.class).authenticationPrincipal)
-				.isEqualTo((String) messageUser.getPrincipal());
-	}
-
-	@Test
-	public void addsAuthenticationPrincipalResolverWhenNoAuthorization()
-			throws InterruptedException {
-		loadConfig(NoInboundSecurityConfig.class);
-
-		MessageChannel messageChannel = clientInboundChannel();
-		Message<String> message = message("/permitAll/authentication");
-		messageChannel.send(message);
-
-		assertThat(context.getBean(MyController.class).authenticationPrincipal)
-				.isEqualTo((String) messageUser.getPrincipal());
-	}
-
-	@Test
-	public void addsCsrfProtectionWhenNoAuthorization() throws InterruptedException {
-		loadConfig(NoInboundSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/authentication");
-		MessageChannel messageChannel = clientInboundChannel();
-
-		try {
-			messageChannel.send(message);
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException success) {
-			assertThat(success.getCause()).isInstanceOf(MissingCsrfTokenException.class);
-		}
-	}
-
-	@Test
-	public void csrfProtectionForConnect() throws InterruptedException {
-		loadConfig(SockJsSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/authentication");
-		MessageChannel messageChannel = clientInboundChannel();
-
-		try {
-			messageChannel.send(message);
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException success) {
-			assertThat(success.getCause()).isInstanceOf(MissingCsrfTokenException.class);
-		}
-	}
-
-	@Test
-	public void csrfProtectionDisabledForConnect() throws InterruptedException {
-		loadConfig(CsrfDisabledSockJsSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/permitAll/connect");
-		MessageChannel messageChannel = clientInboundChannel();
-
-		messageChannel.send(message);
-	}
-
-	@Test
-	public void messagesConnectUseCsrfTokenHandshakeInterceptor() throws Exception {
-
-		loadConfig(SockJsSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/authentication");
-		MockHttpServletRequest request = sockjsHttpRequest("/chat");
-		HttpRequestHandler handler = handler(request);
-
-		handler.handleRequest(request, new MockHttpServletResponse());
-
-		assertHandshake(request);
-	}
-
-	@Test
-	public void messagesConnectUseCsrfTokenHandshakeInterceptorMultipleMappings()
-			throws Exception {
-		loadConfig(SockJsSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/authentication");
-		MockHttpServletRequest request = sockjsHttpRequest("/other");
-		HttpRequestHandler handler = handler(request);
-
-		handler.handleRequest(request, new MockHttpServletResponse());
-
-		assertHandshake(request);
-	}
-
-	@Test
-	public void messagesConnectWebSocketUseCsrfTokenHandshakeInterceptor()
-			throws Exception {
-		loadConfig(WebSocketSecurityConfig.class);
-
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor
-				.create(SimpMessageType.CONNECT);
-		Message<?> message = message(headers, "/authentication");
-		MockHttpServletRequest request = websocketHttpRequest("/websocket");
-		HttpRequestHandler handler = handler(request);
-
-		handler.handleRequest(request, new MockHttpServletResponse());
-
-		assertHandshake(request);
-	}
-
-	@Test
-	public void msmsRegistryCustomPatternMatcher()
-			throws Exception {
-		loadConfig(MsmsRegistryCustomPatternMatcherConfig.class);
-
-		clientInboundChannel().send(message("/app/a.b"));
-
-		try {
-			clientInboundChannel().send(message("/app/a.b.c"));
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException expected) {
-			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class MsmsRegistryCustomPatternMatcherConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry
-				.addEndpoint("/other")
-				.setHandshakeHandler(testHandshakeHandler());
-		}
-		
-
-		
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-			messages
-				.simpDestMatchers("/app/a.*").permitAll()
-				.anyMessage().denyAll();
-		}
-		
-
-		@Override
-		public void configureMessageBroker(MessageBrokerRegistry registry) {
-			registry.setPathMatcher(new AntPathMatcher("."));
-			registry.enableSimpleBroker("/queue/", "/topic/");
-			registry.setApplicationDestinationPrefixes("/app");
-		}
-
-		@Bean
-		public TestHandshakeHandler testHandshakeHandler() {
-			return new TestHandshakeHandler();
-		}
-	}
-
-	@Test
-	public void overrideMsmsRegistryCustomPatternMatcher()
-			throws Exception {
-		loadConfig(OverrideMsmsRegistryCustomPatternMatcherConfig.class);
-
-		clientInboundChannel().send(message("/app/a/b"));
-
-		try {
-			clientInboundChannel().send(message("/app/a/b/c"));
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException expected) {
-			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class OverrideMsmsRegistryCustomPatternMatcherConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry
-				.addEndpoint("/other")
-				.setHandshakeHandler(testHandshakeHandler());
-		}
-		
-
-
-		
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-			messages
-				.simpDestPathMatcher(new AntPathMatcher())
-				.simpDestMatchers("/app/a/*").permitAll()
-				.anyMessage().denyAll();
-		}
-		
-
-		@Override
-		public void configureMessageBroker(MessageBrokerRegistry registry) {
-			registry.setPathMatcher(new AntPathMatcher("."));
-			registry.enableSimpleBroker("/queue/", "/topic/");
-			registry.setApplicationDestinationPrefixes("/app");
-		}
-
-		@Bean
-		public TestHandshakeHandler testHandshakeHandler() {
-			return new TestHandshakeHandler();
-		}
-	}
-
-	@Test
-	public void defaultPatternMatcher()
-			throws Exception {
-		loadConfig(DefaultPatternMatcherConfig.class);
-
-		clientInboundChannel().send(message("/app/a/b"));
-
-		try {
-			clientInboundChannel().send(message("/app/a/b/c"));
-			fail("Expected Exception");
-		}
-		catch (MessageDeliveryException expected) {
-			assertThat(expected.getCause()).isInstanceOf(AccessDeniedException.class);
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class DefaultPatternMatcherConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry
-				.addEndpoint("/other")
-				.setHandshakeHandler(testHandshakeHandler());
-		}
-		
-
-		
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-			messages
-				.simpDestMatchers("/app/a/*").permitAll()
-				.anyMessage().denyAll();
-		}
-		
-
-		@Override
-		public void configureMessageBroker(MessageBrokerRegistry registry) {
-			registry.enableSimpleBroker("/queue/", "/topic/");
-			registry.setApplicationDestinationPrefixes("/app");
-		}
-
-		@Bean
-		public TestHandshakeHandler testHandshakeHandler() {
-			return new TestHandshakeHandler();
-		}
-	}
-
-	private void assertHandshake(HttpServletRequest request) {
-		TestHandshakeHandler handshakeHandler = context
-				.getBean(TestHandshakeHandler.class);
-		assertThat(handshakeHandler.attributes.get(CsrfToken.class.getName())).isSameAs(
-				token);
-		assertThat(handshakeHandler.attributes.get(sessionAttr)).isEqualTo(
-				request.getSession().getAttribute(sessionAttr));
-	}
-
-	private HttpRequestHandler handler(HttpServletRequest request) throws Exception {
-		HandlerMapping handlerMapping = context.getBean(HandlerMapping.class);
-		return (HttpRequestHandler) handlerMapping.getHandler(request).getHandler();
-	}
-
-	private MockHttpServletRequest websocketHttpRequest(String mapping) {
-		MockHttpServletRequest request = sockjsHttpRequest(mapping);
-		request.setRequestURI(mapping);
-		return request;
-	}
-
-	private MockHttpServletRequest sockjsHttpRequest(String mapping) {
-		MockHttpServletRequest request = new MockHttpServletRequest();
-		request.setMethod("GET");
-		request.setAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE,
-				"/289/tpyx6mde/websocket");
-		request.setRequestURI(mapping + "/289/tpyx6mde/websocket");
-		request.getSession().setAttribute(sessionAttr, "sessionValue");
-
-		request.setAttribute(CsrfToken.class.getName(), token);
-		return request;
-	}
-
-	private Message<String> message(String destination) {
-		SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create();
-		return message(headers, destination);
-	}
-
-	private Message<String> message(SimpMessageHeaderAccessor headers, String destination) {
-		headers.setSessionId("123");
-		headers.setSessionAttributes(new HashMap<String, Object>());
-		if (destination != null) {
-			headers.setDestination(destination);
-		}
-		if (messageUser != null) {
-			headers.setUser(messageUser);
-		}
-		return new GenericMessage<String>("hi", headers.getMessageHeaders());
-	}
-
-	private MessageChannel clientInboundChannel() {
-		return context.getBean("clientInboundChannel", MessageChannel.class);
-	}
-
-	private void loadConfig(Class<?>... configs) {
-		context = new AnnotationConfigWebApplicationContext();
-		context.register(configs);
-		context.setServletConfig(new MockServletConfig());
-		context.refresh();
-	}
-
-	@Controller
-	static class MyController {
-
-		String authenticationPrincipal;
-		MyCustomArgument myCustomArgument;
-
-		@MessageMapping("/authentication")
-		public void authentication(@AuthenticationPrincipal String un) {
-			this.authenticationPrincipal = un;
-		}
-
-		@MessageMapping("/myCustom")
-		public void myCustom(MyCustomArgument myCustomArgument) {
-			this.myCustomArgument = myCustomArgument;
-		}
-	}
-
-	static class MyCustomArgument {
-		MyCustomArgument(String notDefaultConstr) {
-		}
-	}
-
-	static class MyCustomArgumentResolver implements HandlerMethodArgumentResolver {
-
-		public boolean supportsParameter(MethodParameter parameter) {
-			return parameter.getParameterType().isAssignableFrom(MyCustomArgument.class);
-		}
-
-		public Object resolveArgument(MethodParameter parameter, Message<?> message)
-				throws Exception {
-			return new MyCustomArgument("");
-		}
-	}
-
-	static class TestHandshakeHandler implements HandshakeHandler {
-		Map<String, Object> attributes;
-
-		public boolean doHandshake(ServerHttpRequest request,
-				ServerHttpResponse response, WebSocketHandler wsHandler,
-				Map<String, Object> attributes) throws HandshakeFailureException {
-			this.attributes = attributes;
-			if (wsHandler instanceof SockJsWebSocketHandler) {
-				
-				SockJsWebSocketHandler sockJs = (SockJsWebSocketHandler) wsHandler;
-				WebSocketServerSockJsSession session = (WebSocketServerSockJsSession) ReflectionTestUtils
-						.getField(sockJs, "sockJsSession");
-				this.attributes = session.getAttributes();
-			}
-			return true;
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class SockJsSecurityConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry.addEndpoint("/other").setHandshakeHandler(testHandshakeHandler())
-					.withSockJS().setInterceptors(new HttpSessionHandshakeInterceptor());
-
-			registry.addEndpoint("/chat").setHandshakeHandler(testHandshakeHandler())
-					.withSockJS().setInterceptors(new HttpSessionHandshakeInterceptor());
-		}
-
-		
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-			messages
-				.simpDestMatchers("/permitAll/**").permitAll()
-				.anyMessage().denyAll();
-		}
-		
-
-		@Override
-		public void configureMessageBroker(MessageBrokerRegistry registry) {
-			registry.enableSimpleBroker("/queue/", "/topic/");
-			registry.setApplicationDestinationPrefixes("/permitAll", "/denyAll");
-		}
-
-		@Bean
-		public MyController myController() {
-			return new MyController();
-		}
-
-		@Bean
-		public TestHandshakeHandler testHandshakeHandler() {
-			return new TestHandshakeHandler();
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class NoInboundSecurityConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry.addEndpoint("/other").withSockJS()
-					.setInterceptors(new HttpSessionHandshakeInterceptor());
-
-			registry.addEndpoint("/chat").withSockJS()
-					.setInterceptors(new HttpSessionHandshakeInterceptor());
-		}
-
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-		}
-
-		@Override
-		public void configureMessageBroker(MessageBrokerRegistry registry) {
-			registry.enableSimpleBroker("/queue/", "/topic/");
-			registry.setApplicationDestinationPrefixes("/permitAll", "/denyAll");
-		}
-
-		@Bean
-		public MyController myController() {
-			return new MyController();
-		}
-	}
-
-	@Configuration
-	static class CsrfDisabledSockJsSecurityConfig extends SockJsSecurityConfig {
-
-		@Override
-		protected boolean sameOriginDisabled() {
-			return true;
-		}
-	}
-
-	@Configuration
-	@EnableWebSocketMessageBroker
-	@Import(SyncExecutorConfig.class)
-	static class WebSocketSecurityConfig extends
-			AbstractSecurityWebSocketMessageBrokerConfigurer {
-
-		public void registerStompEndpoints(StompEndpointRegistry registry) {
-			registry.addEndpoint("/websocket")
-					.setHandshakeHandler(testHandshakeHandler())
-					.addInterceptors(new HttpSessionHandshakeInterceptor());
-		}
-
-		
-		@Override
-		protected void configureInbound(MessageSecurityMetadataSourceRegistry messages) {
-			messages
-				.simpDestMatchers("/permitAll/**").permitAll()
-				.anyMessage().denyAll();
-		}
-		
 
 		@Bean
 		public TestHandshakeHandler testHandshakeHandler() {
@@ -3043,7 +3043,13 @@ public class AbstractSecurityWebSocketMessageBrokerConfigurerTests {
 
 package org.springframework.security.web.context;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.Locale;
+
+import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletResponseWrapper;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -3051,35 +3057,77 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 
-public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
-        OnCommittedResponseWrapper {
+public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends HttpServletResponseWrapper {
     private final Log logger = LogFactory.getLog(getClass());
 
+    private boolean disableSaveOnResponseCommitted;
 
     private boolean contextSaved = false;
-    
+
     private final boolean disableUrlRewriting;
 
-    
-    public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response,
-            boolean disableUrlRewriting) {
+
+    public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response, boolean disableUrlRewriting) {
         super(response);
         this.disableUrlRewriting = disableUrlRewriting;
     }
 
-    
+
     public void disableSaveOnResponseCommitted() {
-        disableOnResponseCommitted();
+        this.disableSaveOnResponseCommitted = true;
     }
 
-    
+
     protected abstract void saveContext(SecurityContext context);
 
-    
+
     @Override
-    protected void onResponseCommitted() {
-        saveContext(SecurityContextHolder.getContext());
-        contextSaved = true;
+    public final void sendError(int sc) throws IOException {
+        doSaveContext();
+        super.sendError(sc);
+    }
+
+
+    @Override
+    public final void sendError(int sc, String msg) throws IOException {
+        doSaveContext();
+        super.sendError(sc, msg);
+    }
+
+
+    @Override
+    public final void sendRedirect(String location) throws IOException {
+        doSaveContext();
+        super.sendRedirect(location);
+    }
+
+
+    @Override
+    public ServletOutputStream getOutputStream() throws IOException {
+        return new SaveContextServletOutputStream(super.getOutputStream());
+    }
+
+
+    @Override
+    public PrintWriter getWriter() throws IOException {
+        return new SaveContextPrintWriter(super.getWriter());
+    }
+
+
+    @Override
+    public void flushBuffer() throws IOException {
+        doSaveContext();
+        super.flushBuffer();
+    }
+
+
+    private void doSaveContext() {
+        if(!disableSaveOnResponseCommitted) {
+            saveContext(SecurityContextHolder.getContext());
+            contextSaved = true;
+        } else if(logger.isDebugEnabled()){
+            logger.debug("Skip saving SecurityContext since saving on response commited is disabled");
+        }
     }
 
     @Override
@@ -3114,9 +3162,272 @@ public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
         return super.encodeURL(url);
     }
 
-    
+
     public final boolean isContextSaved() {
         return contextSaved;
+    }
+
+
+    private class SaveContextPrintWriter extends PrintWriter {
+        private final PrintWriter delegate;
+
+        public SaveContextPrintWriter(PrintWriter delegate) {
+            super(delegate);
+            this.delegate = delegate;
+        }
+
+        public void flush() {
+            doSaveContext();
+            delegate.flush();
+        }
+
+        public void close() {
+            doSaveContext();
+            delegate.close();
+        }
+
+        public int hashCode() {
+            return delegate.hashCode();
+        }
+
+        public boolean equals(Object obj) {
+            return delegate.equals(obj);
+        }
+
+        public String toString() {
+            return getClass().getName() + "[delegate=" + delegate.toString() + "]";
+        }
+
+        public boolean checkError() {
+            return delegate.checkError();
+        }
+
+        public void write(int c) {
+            delegate.write(c);
+        }
+
+        public void write(char[] buf, int off, int len) {
+            delegate.write(buf, off, len);
+        }
+
+        public void write(char[] buf) {
+            delegate.write(buf);
+        }
+
+        public void write(String s, int off, int len) {
+            delegate.write(s, off, len);
+        }
+
+        public void write(String s) {
+            delegate.write(s);
+        }
+
+        public void print(boolean b) {
+            delegate.print(b);
+        }
+
+        public void print(char c) {
+            delegate.print(c);
+        }
+
+        public void print(int i) {
+            delegate.print(i);
+        }
+
+        public void print(long l) {
+            delegate.print(l);
+        }
+
+        public void print(float f) {
+            delegate.print(f);
+        }
+
+        public void print(double d) {
+            delegate.print(d);
+        }
+
+        public void print(char[] s) {
+            delegate.print(s);
+        }
+
+        public void print(String s) {
+            delegate.print(s);
+        }
+
+        public void print(Object obj) {
+            delegate.print(obj);
+        }
+
+        public void println() {
+            delegate.println();
+        }
+
+        public void println(boolean x) {
+            delegate.println(x);
+        }
+
+        public void println(char x) {
+            delegate.println(x);
+        }
+
+        public void println(int x) {
+            delegate.println(x);
+        }
+
+        public void println(long x) {
+            delegate.println(x);
+        }
+
+        public void println(float x) {
+            delegate.println(x);
+        }
+
+        public void println(double x) {
+            delegate.println(x);
+        }
+
+        public void println(char[] x) {
+            delegate.println(x);
+        }
+
+        public void println(String x) {
+            delegate.println(x);
+        }
+
+        public void println(Object x) {
+            delegate.println(x);
+        }
+
+        public PrintWriter printf(String format, Object... args) {
+            return delegate.printf(format, args);
+        }
+
+        public PrintWriter printf(Locale l, String format, Object... args) {
+            return delegate.printf(l, format, args);
+        }
+
+        public PrintWriter format(String format, Object... args) {
+            return delegate.format(format, args);
+        }
+
+        public PrintWriter format(Locale l, String format, Object... args) {
+            return delegate.format(l, format, args);
+        }
+
+        public PrintWriter append(CharSequence csq) {
+            return delegate.append(csq);
+        }
+
+        public PrintWriter append(CharSequence csq, int start, int end) {
+            return delegate.append(csq, start, end);
+        }
+
+        public PrintWriter append(char c) {
+            return delegate.append(c);
+        }
+    }
+
+
+    private class SaveContextServletOutputStream extends ServletOutputStream {
+        private final ServletOutputStream delegate;
+
+        public SaveContextServletOutputStream(ServletOutputStream delegate) {
+            this.delegate = delegate;
+        }
+
+        public void write(int b) throws IOException {
+            this.delegate.write(b);
+        }
+
+        public void flush() throws IOException {
+            doSaveContext();
+            delegate.flush();
+        }
+
+        public void close() throws IOException {
+            doSaveContext();
+            delegate.close();
+        }
+
+        public int hashCode() {
+            return delegate.hashCode();
+        }
+
+        public boolean equals(Object obj) {
+            return delegate.equals(obj);
+        }
+
+        public void print(boolean b) throws IOException {
+            delegate.print(b);
+        }
+
+        public void print(char c) throws IOException {
+            delegate.print(c);
+        }
+
+        public void print(double d) throws IOException {
+            delegate.print(d);
+        }
+
+        public void print(float f) throws IOException {
+            delegate.print(f);
+        }
+
+        public void print(int i) throws IOException {
+            delegate.print(i);
+        }
+
+        public void print(long l) throws IOException {
+            delegate.print(l);
+        }
+
+        public void print(String arg0) throws IOException {
+            delegate.print(arg0);
+        }
+
+        public void println() throws IOException {
+            delegate.println();
+        }
+
+        public void println(boolean b) throws IOException {
+            delegate.println(b);
+        }
+
+        public void println(char c) throws IOException {
+            delegate.println(c);
+        }
+
+        public void println(double d) throws IOException {
+            delegate.println(d);
+        }
+
+        public void println(float f) throws IOException {
+            delegate.println(f);
+        }
+
+        public void println(int i) throws IOException {
+            delegate.println(i);
+        }
+
+        public void println(long l) throws IOException {
+            delegate.println(l);
+        }
+
+        public void println(String s) throws IOException {
+            delegate.println(s);
+        }
+
+        public void write(byte[] b) throws IOException {
+            delegate.write(b);
+        }
+
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+        }
+
+        public String toString() {
+            return getClass().getName() + "[delegate=" + delegate.toString() + "]";
+        }
     }
 }
 
@@ -3140,13 +3451,13 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 
     private boolean disableOnCommitted;
 
-    
+
     private long contentLength;
 
-    
+
     private long contentWritten;
 
-    
+
     public OnCommittedResponseWrapper(HttpServletResponse response) {
         super(response);
     }
@@ -3170,48 +3481,48 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
         checkContentLength(0);
     }
 
-    
+
     public void disableOnResponseCommitted() {
         this.disableOnCommitted = true;
     }
 
-    
+
     protected abstract void onResponseCommitted();
 
-    
+
     @Override
     public final void sendError(int sc) throws IOException {
         doOnResponseCommitted();
         super.sendError(sc);
     }
 
-    
+
     @Override
     public final void sendError(int sc, String msg) throws IOException {
         doOnResponseCommitted();
         super.sendError(sc, msg);
     }
 
-    
+
     @Override
     public final void sendRedirect(String location) throws IOException {
         doOnResponseCommitted();
         super.sendRedirect(location);
     }
 
-    
+
     @Override
     public ServletOutputStream getOutputStream() throws IOException {
         return new SaveContextServletOutputStream(super.getOutputStream());
     }
 
-    
+
     @Override
     public PrintWriter getWriter() throws IOException {
         return new SaveContextPrintWriter(super.getWriter());
     }
 
-    
+
     @Override
     public void flushBuffer() throws IOException {
         doOnResponseCommitted();
@@ -3258,7 +3569,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
         checkContentLength(content.length());
     }
 
-    
+
     private void checkContentLength(long contentLengthToWrite) {
         contentWritten += contentLengthToWrite;
         boolean isBodyFullyWritten = contentLength > 0  && contentWritten >= contentLength;
@@ -3269,7 +3580,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
         }
     }
 
-    
+
     private void doOnResponseCommitted() {
         if(!disableOnCommitted) {
             onResponseCommitted();
@@ -3279,7 +3590,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
         }
     }
 
-    
+
     private class SaveContextPrintWriter extends PrintWriter {
         private final PrintWriter delegate;
 
@@ -3475,7 +3786,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
         }
     }
 
-    
+
     private class SaveContextServletOutputStream extends ServletOutputStream {
         private final ServletOutputStream delegate;
 
@@ -3607,6 +3918,87 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 
 package org.springframework.security.web.context;
 
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+
+public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
+        OnCommittedResponseWrapper {
+    private final Log logger = LogFactory.getLog(getClass());
+
+
+    private boolean contextSaved = false;
+
+    private final boolean disableUrlRewriting;
+
+
+    public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response,
+            boolean disableUrlRewriting) {
+        super(response);
+        this.disableUrlRewriting = disableUrlRewriting;
+    }
+
+
+    public void disableSaveOnResponseCommitted() {
+        disableOnResponseCommitted();
+    }
+
+
+    protected abstract void saveContext(SecurityContext context);
+
+
+    @Override
+    protected void onResponseCommitted() {
+        saveContext(SecurityContextHolder.getContext());
+        contextSaved = true;
+    }
+
+    @Override
+    public final String encodeRedirectUrl(String url) {
+        if (disableUrlRewriting) {
+            return url;
+        }
+        return super.encodeRedirectUrl(url);
+    }
+
+    @Override
+    public final String encodeRedirectURL(String url) {
+        if (disableUrlRewriting) {
+            return url;
+        }
+        return super.encodeRedirectURL(url);
+    }
+
+    @Override
+    public final String encodeUrl(String url) {
+        if (disableUrlRewriting) {
+            return url;
+        }
+        return super.encodeUrl(url);
+    }
+
+    @Override
+    public final String encodeURL(String url) {
+        if (disableUrlRewriting) {
+            return url;
+        }
+        return super.encodeURL(url);
+    }
+
+
+    public final boolean isContextSaved() {
+        return contextSaved;
+    }
+}
+
+<code block>
+
+package org.springframework.security.web.context;
+
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Locale;
@@ -3652,7 +4044,7 @@ public class OnCommittedResponseWrapperTests {
     }
 
 
-    
+
 
     @Test
     public void printWriterHashCode() throws Exception {
@@ -3960,7 +4352,7 @@ public class OnCommittedResponseWrapperTests {
         verify(writer).append(x);
     }
 
-    
+
 
 
     @Test
@@ -4132,8 +4524,8 @@ public class OnCommittedResponseWrapperTests {
         verify(out).println(x);
     }
 
-    
-    
+
+
 
     @Test
     public void contentLengthPrintWriterWriteIntCommits() throws Exception {
@@ -4489,7 +4881,7 @@ public class OnCommittedResponseWrapperTests {
         assertThat(committed).isTrue();
     }
 
-    
+
     @Test
     public void contentLengthPlus1OutputStreamWriteByteArrayMultiDigitCommits() throws Exception {
         String expected = "{\n" +
@@ -4730,421 +5122,80 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 
-public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends HttpServletResponseWrapper {
-    private final Log logger = LogFactory.getLog(getClass());
-
-    private boolean disableSaveOnResponseCommitted;
-
-    private boolean contextSaved = false;
-    
-    private final boolean disableUrlRewriting;
-
-    
-    public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response, boolean disableUrlRewriting) {
-        super(response);
-        this.disableUrlRewriting = disableUrlRewriting;
-    }
-
-    
-    public void disableSaveOnResponseCommitted() {
-        this.disableSaveOnResponseCommitted = true;
-    }
-
-    
-    protected abstract void saveContext(SecurityContext context);
-
-    
-    @Override
-    public final void sendError(int sc) throws IOException {
-        doSaveContext();
-        super.sendError(sc);
-    }
-
-    
-    @Override
-    public final void sendError(int sc, String msg) throws IOException {
-        doSaveContext();
-        super.sendError(sc, msg);
-    }
-
-    
-    @Override
-    public final void sendRedirect(String location) throws IOException {
-        doSaveContext();
-        super.sendRedirect(location);
-    }
-
-    
-    @Override
-    public ServletOutputStream getOutputStream() throws IOException {
-        return new SaveContextServletOutputStream(super.getOutputStream());
-    }
-
-    
-    @Override
-    public PrintWriter getWriter() throws IOException {
-        return new SaveContextPrintWriter(super.getWriter());
-    }
-
-    
-    @Override
-    public void flushBuffer() throws IOException {
-        doSaveContext();
-        super.flushBuffer();
-    }
-
-    
-    private void doSaveContext() {
-        if(!disableSaveOnResponseCommitted) {
-            saveContext(SecurityContextHolder.getContext());
-            contextSaved = true;
-        } else if(logger.isDebugEnabled()){
-            logger.debug("Skip saving SecurityContext since saving on response commited is disabled");
-        }
-    }
-
-    @Override
-    public final String encodeRedirectUrl(String url) {
-        if (disableUrlRewriting) {
-            return url;
-        }
-        return super.encodeRedirectUrl(url);
-    }
-
-    @Override
-    public final String encodeRedirectURL(String url) {
-        if (disableUrlRewriting) {
-            return url;
-        }
-        return super.encodeRedirectURL(url);
-    }
-
-    @Override
-    public final String encodeUrl(String url) {
-        if (disableUrlRewriting) {
-            return url;
-        }
-        return super.encodeUrl(url);
-    }
-
-    @Override
-    public final String encodeURL(String url) {
-        if (disableUrlRewriting) {
-            return url;
-        }
-        return super.encodeURL(url);
-    }
-
-    
-    public final boolean isContextSaved() {
-        return contextSaved;
-    }
-
-    
-    private class SaveContextPrintWriter extends PrintWriter {
-        private final PrintWriter delegate;
-
-        public SaveContextPrintWriter(PrintWriter delegate) {
-            super(delegate);
-            this.delegate = delegate;
-        }
-
-        public void flush() {
-            doSaveContext();
-            delegate.flush();
-        }
-
-        public void close() {
-            doSaveContext();
-            delegate.close();
-        }
-
-        public int hashCode() {
-            return delegate.hashCode();
-        }
-
-        public boolean equals(Object obj) {
-            return delegate.equals(obj);
-        }
-
-        public String toString() {
-            return getClass().getName() + "[delegate=" + delegate.toString() + "]";
-        }
-
-        public boolean checkError() {
-            return delegate.checkError();
-        }
-
-        public void write(int c) {
-            delegate.write(c);
-        }
-
-        public void write(char[] buf, int off, int len) {
-            delegate.write(buf, off, len);
-        }
-
-        public void write(char[] buf) {
-            delegate.write(buf);
-        }
-
-        public void write(String s, int off, int len) {
-            delegate.write(s, off, len);
-        }
-
-        public void write(String s) {
-            delegate.write(s);
-        }
-
-        public void print(boolean b) {
-            delegate.print(b);
-        }
-
-        public void print(char c) {
-            delegate.print(c);
-        }
-
-        public void print(int i) {
-            delegate.print(i);
-        }
-
-        public void print(long l) {
-            delegate.print(l);
-        }
-
-        public void print(float f) {
-            delegate.print(f);
-        }
-
-        public void print(double d) {
-            delegate.print(d);
-        }
-
-        public void print(char[] s) {
-            delegate.print(s);
-        }
-
-        public void print(String s) {
-            delegate.print(s);
-        }
-
-        public void print(Object obj) {
-            delegate.print(obj);
-        }
-
-        public void println() {
-            delegate.println();
-        }
-
-        public void println(boolean x) {
-            delegate.println(x);
-        }
-
-        public void println(char x) {
-            delegate.println(x);
-        }
-
-        public void println(int x) {
-            delegate.println(x);
-        }
-
-        public void println(long x) {
-            delegate.println(x);
-        }
-
-        public void println(float x) {
-            delegate.println(x);
-        }
-
-        public void println(double x) {
-            delegate.println(x);
-        }
-
-        public void println(char[] x) {
-            delegate.println(x);
-        }
-
-        public void println(String x) {
-            delegate.println(x);
-        }
-
-        public void println(Object x) {
-            delegate.println(x);
-        }
-
-        public PrintWriter printf(String format, Object... args) {
-            return delegate.printf(format, args);
-        }
-
-        public PrintWriter printf(Locale l, String format, Object... args) {
-            return delegate.printf(l, format, args);
-        }
-
-        public PrintWriter format(String format, Object... args) {
-            return delegate.format(format, args);
-        }
-
-        public PrintWriter format(Locale l, String format, Object... args) {
-            return delegate.format(l, format, args);
-        }
-
-        public PrintWriter append(CharSequence csq) {
-            return delegate.append(csq);
-        }
-
-        public PrintWriter append(CharSequence csq, int start, int end) {
-            return delegate.append(csq, start, end);
-        }
-
-        public PrintWriter append(char c) {
-            return delegate.append(c);
-        }
-    }
-
-    
-    private class SaveContextServletOutputStream extends ServletOutputStream {
-        private final ServletOutputStream delegate;
-
-        public SaveContextServletOutputStream(ServletOutputStream delegate) {
-            this.delegate = delegate;
-        }
-
-        public void write(int b) throws IOException {
-            this.delegate.write(b);
-        }
-
-        public void flush() throws IOException {
-            doSaveContext();
-            delegate.flush();
-        }
-
-        public void close() throws IOException {
-            doSaveContext();
-            delegate.close();
-        }
-
-        public int hashCode() {
-            return delegate.hashCode();
-        }
-
-        public boolean equals(Object obj) {
-            return delegate.equals(obj);
-        }
-
-        public void print(boolean b) throws IOException {
-            delegate.print(b);
-        }
-
-        public void print(char c) throws IOException {
-            delegate.print(c);
-        }
-
-        public void print(double d) throws IOException {
-            delegate.print(d);
-        }
-
-        public void print(float f) throws IOException {
-            delegate.print(f);
-        }
-
-        public void print(int i) throws IOException {
-            delegate.print(i);
-        }
-
-        public void print(long l) throws IOException {
-            delegate.print(l);
-        }
-
-        public void print(String arg0) throws IOException {
-            delegate.print(arg0);
-        }
-
-        public void println() throws IOException {
-            delegate.println();
-        }
-
-        public void println(boolean b) throws IOException {
-            delegate.println(b);
-        }
-
-        public void println(char c) throws IOException {
-            delegate.println(c);
-        }
-
-        public void println(double d) throws IOException {
-            delegate.println(d);
-        }
-
-        public void println(float f) throws IOException {
-            delegate.println(f);
-        }
-
-        public void println(int i) throws IOException {
-            delegate.println(i);
-        }
-
-        public void println(long l) throws IOException {
-            delegate.println(l);
-        }
-
-        public void println(String s) throws IOException {
-            delegate.println(s);
-        }
-
-        public void write(byte[] b) throws IOException {
-            delegate.write(b);
-        }
-
-        public void write(byte[] b, int off, int len) throws IOException {
-            delegate.write(b, off, len);
-        }
-
-        public String toString() {
-            return getClass().getName() + "[delegate=" + delegate.toString() + "]";
-        }
-    }
-}
-
-<code block>
-
-package org.springframework.security.web.context;
-
-import javax.servlet.http.HttpServletResponse;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-
-
 public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
-		OnCommittedResponseWrapper {
+		HttpServletResponseWrapper {
 	private final Log logger = LogFactory.getLog(getClass());
 
+	private boolean disableSaveOnResponseCommitted;
 
 	private boolean contextSaved = false;
-	
+
 	private final boolean disableUrlRewriting;
 
-	
+
 	public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response,
 			boolean disableUrlRewriting) {
 		super(response);
 		this.disableUrlRewriting = disableUrlRewriting;
 	}
 
-	
+
 	public void disableSaveOnResponseCommitted() {
-		disableOnResponseCommitted();
+		this.disableSaveOnResponseCommitted = true;
 	}
 
-	
+
 	protected abstract void saveContext(SecurityContext context);
 
-	
+
 	@Override
-	protected void onResponseCommitted() {
-		saveContext(SecurityContextHolder.getContext());
-		contextSaved = true;
+	public final void sendError(int sc) throws IOException {
+		doSaveContext();
+		super.sendError(sc);
+	}
+
+
+	@Override
+	public final void sendError(int sc, String msg) throws IOException {
+		doSaveContext();
+		super.sendError(sc, msg);
+	}
+
+
+	@Override
+	public final void sendRedirect(String location) throws IOException {
+		doSaveContext();
+		super.sendRedirect(location);
+	}
+
+
+	@Override
+	public ServletOutputStream getOutputStream() throws IOException {
+		return new SaveContextServletOutputStream(super.getOutputStream());
+	}
+
+
+	@Override
+	public PrintWriter getWriter() throws IOException {
+		return new SaveContextPrintWriter(super.getWriter());
+	}
+
+
+	@Override
+	public void flushBuffer() throws IOException {
+		doSaveContext();
+		super.flushBuffer();
+	}
+
+
+	private void doSaveContext() {
+		if (!disableSaveOnResponseCommitted) {
+			saveContext(SecurityContextHolder.getContext());
+			contextSaved = true;
+		}
+		else if (logger.isDebugEnabled()) {
+			logger.debug("Skip saving SecurityContext since saving on response commited is disabled");
+		}
 	}
 
 	@Override
@@ -5179,9 +5230,272 @@ public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
 		return super.encodeURL(url);
 	}
 
-	
+
 	public final boolean isContextSaved() {
 		return contextSaved;
+	}
+
+
+	private class SaveContextPrintWriter extends PrintWriter {
+		private final PrintWriter delegate;
+
+		public SaveContextPrintWriter(PrintWriter delegate) {
+			super(delegate);
+			this.delegate = delegate;
+		}
+
+		public void flush() {
+			doSaveContext();
+			delegate.flush();
+		}
+
+		public void close() {
+			doSaveContext();
+			delegate.close();
+		}
+
+		public int hashCode() {
+			return delegate.hashCode();
+		}
+
+		public boolean equals(Object obj) {
+			return delegate.equals(obj);
+		}
+
+		public String toString() {
+			return getClass().getName() + "[delegate=" + delegate.toString() + "]";
+		}
+
+		public boolean checkError() {
+			return delegate.checkError();
+		}
+
+		public void write(int c) {
+			delegate.write(c);
+		}
+
+		public void write(char[] buf, int off, int len) {
+			delegate.write(buf, off, len);
+		}
+
+		public void write(char[] buf) {
+			delegate.write(buf);
+		}
+
+		public void write(String s, int off, int len) {
+			delegate.write(s, off, len);
+		}
+
+		public void write(String s) {
+			delegate.write(s);
+		}
+
+		public void print(boolean b) {
+			delegate.print(b);
+		}
+
+		public void print(char c) {
+			delegate.print(c);
+		}
+
+		public void print(int i) {
+			delegate.print(i);
+		}
+
+		public void print(long l) {
+			delegate.print(l);
+		}
+
+		public void print(float f) {
+			delegate.print(f);
+		}
+
+		public void print(double d) {
+			delegate.print(d);
+		}
+
+		public void print(char[] s) {
+			delegate.print(s);
+		}
+
+		public void print(String s) {
+			delegate.print(s);
+		}
+
+		public void print(Object obj) {
+			delegate.print(obj);
+		}
+
+		public void println() {
+			delegate.println();
+		}
+
+		public void println(boolean x) {
+			delegate.println(x);
+		}
+
+		public void println(char x) {
+			delegate.println(x);
+		}
+
+		public void println(int x) {
+			delegate.println(x);
+		}
+
+		public void println(long x) {
+			delegate.println(x);
+		}
+
+		public void println(float x) {
+			delegate.println(x);
+		}
+
+		public void println(double x) {
+			delegate.println(x);
+		}
+
+		public void println(char[] x) {
+			delegate.println(x);
+		}
+
+		public void println(String x) {
+			delegate.println(x);
+		}
+
+		public void println(Object x) {
+			delegate.println(x);
+		}
+
+		public PrintWriter printf(String format, Object... args) {
+			return delegate.printf(format, args);
+		}
+
+		public PrintWriter printf(Locale l, String format, Object... args) {
+			return delegate.printf(l, format, args);
+		}
+
+		public PrintWriter format(String format, Object... args) {
+			return delegate.format(format, args);
+		}
+
+		public PrintWriter format(Locale l, String format, Object... args) {
+			return delegate.format(l, format, args);
+		}
+
+		public PrintWriter append(CharSequence csq) {
+			return delegate.append(csq);
+		}
+
+		public PrintWriter append(CharSequence csq, int start, int end) {
+			return delegate.append(csq, start, end);
+		}
+
+		public PrintWriter append(char c) {
+			return delegate.append(c);
+		}
+	}
+
+
+	private class SaveContextServletOutputStream extends ServletOutputStream {
+		private final ServletOutputStream delegate;
+
+		public SaveContextServletOutputStream(ServletOutputStream delegate) {
+			this.delegate = delegate;
+		}
+
+		public void write(int b) throws IOException {
+			this.delegate.write(b);
+		}
+
+		public void flush() throws IOException {
+			doSaveContext();
+			delegate.flush();
+		}
+
+		public void close() throws IOException {
+			doSaveContext();
+			delegate.close();
+		}
+
+		public int hashCode() {
+			return delegate.hashCode();
+		}
+
+		public boolean equals(Object obj) {
+			return delegate.equals(obj);
+		}
+
+		public void print(boolean b) throws IOException {
+			delegate.print(b);
+		}
+
+		public void print(char c) throws IOException {
+			delegate.print(c);
+		}
+
+		public void print(double d) throws IOException {
+			delegate.print(d);
+		}
+
+		public void print(float f) throws IOException {
+			delegate.print(f);
+		}
+
+		public void print(int i) throws IOException {
+			delegate.print(i);
+		}
+
+		public void print(long l) throws IOException {
+			delegate.print(l);
+		}
+
+		public void print(String arg0) throws IOException {
+			delegate.print(arg0);
+		}
+
+		public void println() throws IOException {
+			delegate.println();
+		}
+
+		public void println(boolean b) throws IOException {
+			delegate.println(b);
+		}
+
+		public void println(char c) throws IOException {
+			delegate.println(c);
+		}
+
+		public void println(double d) throws IOException {
+			delegate.println(d);
+		}
+
+		public void println(float f) throws IOException {
+			delegate.println(f);
+		}
+
+		public void println(int i) throws IOException {
+			delegate.println(i);
+		}
+
+		public void println(long l) throws IOException {
+			delegate.println(l);
+		}
+
+		public void println(String s) throws IOException {
+			delegate.println(s);
+		}
+
+		public void write(byte[] b) throws IOException {
+			delegate.write(b);
+		}
+
+		public void write(byte[] b, int off, int len) throws IOException {
+			delegate.write(b, off, len);
+		}
+
+		public String toString() {
+			return getClass().getName() + "[delegate=" + delegate.toString() + "]";
+		}
 	}
 }
 
@@ -5205,13 +5519,13 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 
 	private boolean disableOnCommitted;
 
-	
+
 	private long contentLength;
 
-	
+
 	private long contentWritten;
 
-	
+
 	public OnCommittedResponseWrapper(HttpServletResponse response) {
 		super(response);
 	}
@@ -5235,48 +5549,48 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 		checkContentLength(0);
 	}
 
-	
+
 	public void disableOnResponseCommitted() {
 		this.disableOnCommitted = true;
 	}
 
-	
+
 	protected abstract void onResponseCommitted();
 
-	
+
 	@Override
 	public final void sendError(int sc) throws IOException {
 		doOnResponseCommitted();
 		super.sendError(sc);
 	}
 
-	
+
 	@Override
 	public final void sendError(int sc, String msg) throws IOException {
 		doOnResponseCommitted();
 		super.sendError(sc, msg);
 	}
 
-	
+
 	@Override
 	public final void sendRedirect(String location) throws IOException {
 		doOnResponseCommitted();
 		super.sendRedirect(location);
 	}
 
-	
+
 	@Override
 	public ServletOutputStream getOutputStream() throws IOException {
 		return new SaveContextServletOutputStream(super.getOutputStream());
 	}
 
-	
+
 	@Override
 	public PrintWriter getWriter() throws IOException {
 		return new SaveContextPrintWriter(super.getWriter());
 	}
 
-	
+
 	@Override
 	public void flushBuffer() throws IOException {
 		doOnResponseCommitted();
@@ -5323,7 +5637,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 		checkContentLength(content.length());
 	}
 
-	
+
 	private void checkContentLength(long contentLengthToWrite) {
 		contentWritten += contentLengthToWrite;
 		boolean isBodyFullyWritten = contentLength > 0  && contentWritten >= contentLength;
@@ -5334,7 +5648,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 		}
 	}
 
-	
+
 	private void doOnResponseCommitted() {
 		if(!disableOnCommitted) {
 			onResponseCommitted();
@@ -5344,7 +5658,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 		}
 	}
 
-	
+
 	private class SaveContextPrintWriter extends PrintWriter {
 		private final PrintWriter delegate;
 
@@ -5540,7 +5854,7 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 		}
 	}
 
-	
+
 	private class SaveContextServletOutputStream extends ServletOutputStream {
 		private final ServletOutputStream delegate;
 
@@ -5672,6 +5986,87 @@ abstract class OnCommittedResponseWrapper extends HttpServletResponseWrapper {
 
 package org.springframework.security.web.context;
 
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+
+public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
+		OnCommittedResponseWrapper {
+	private final Log logger = LogFactory.getLog(getClass());
+
+
+	private boolean contextSaved = false;
+
+	private final boolean disableUrlRewriting;
+
+
+	public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response,
+			boolean disableUrlRewriting) {
+		super(response);
+		this.disableUrlRewriting = disableUrlRewriting;
+	}
+
+
+	public void disableSaveOnResponseCommitted() {
+		disableOnResponseCommitted();
+	}
+
+
+	protected abstract void saveContext(SecurityContext context);
+
+
+	@Override
+	protected void onResponseCommitted() {
+		saveContext(SecurityContextHolder.getContext());
+		contextSaved = true;
+	}
+
+	@Override
+	public final String encodeRedirectUrl(String url) {
+		if (disableUrlRewriting) {
+			return url;
+		}
+		return super.encodeRedirectUrl(url);
+	}
+
+	@Override
+	public final String encodeRedirectURL(String url) {
+		if (disableUrlRewriting) {
+			return url;
+		}
+		return super.encodeRedirectURL(url);
+	}
+
+	@Override
+	public final String encodeUrl(String url) {
+		if (disableUrlRewriting) {
+			return url;
+		}
+		return super.encodeUrl(url);
+	}
+
+	@Override
+	public final String encodeURL(String url) {
+		if (disableUrlRewriting) {
+			return url;
+		}
+		return super.encodeURL(url);
+	}
+
+
+	public final boolean isContextSaved() {
+		return contextSaved;
+	}
+}
+
+<code block>
+
+package org.springframework.security.web.context;
+
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Locale;
@@ -5717,7 +6112,7 @@ public class OnCommittedResponseWrapperTests {
 	}
 
 
-	
+
 
 	@Test
 	public void printWriterHashCode() throws Exception {
@@ -6025,7 +6420,7 @@ public class OnCommittedResponseWrapperTests {
 		verify(writer).append(x);
 	}
 
-	
+
 
 
 	@Test
@@ -6197,8 +6592,8 @@ public class OnCommittedResponseWrapperTests {
 		verify(out).println(x);
 	}
 
-	
-	
+
+
 
 	@Test
 	public void contentLengthPrintWriterWriteIntCommits() throws Exception {
@@ -6554,7 +6949,7 @@ public class OnCommittedResponseWrapperTests {
 		assertThat(committed).isTrue();
 	}
 
-	
+
 	@Test
 	public void contentLengthPlus1OutputStreamWriteByteArrayMultiDigitCommits() throws Exception {
 		String expected = "{\n" +
@@ -6775,399 +7170,5 @@ public class OnCommittedResponseWrapperTests {
 		response.getWriter().write(expected);
 
 		assertThat(committed).isFalse();
-	}
-}
-<code block>
-
-package org.springframework.security.web.context;
-
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.util.Locale;
-
-import javax.servlet.ServletOutputStream;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpServletResponseWrapper;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-
-
-public abstract class SaveContextOnUpdateOrErrorResponseWrapper extends
-		HttpServletResponseWrapper {
-	private final Log logger = LogFactory.getLog(getClass());
-
-	private boolean disableSaveOnResponseCommitted;
-
-	private boolean contextSaved = false;
-	
-	private final boolean disableUrlRewriting;
-
-	
-	public SaveContextOnUpdateOrErrorResponseWrapper(HttpServletResponse response,
-			boolean disableUrlRewriting) {
-		super(response);
-		this.disableUrlRewriting = disableUrlRewriting;
-	}
-
-	
-	public void disableSaveOnResponseCommitted() {
-		this.disableSaveOnResponseCommitted = true;
-	}
-
-	
-	protected abstract void saveContext(SecurityContext context);
-
-	
-	@Override
-	public final void sendError(int sc) throws IOException {
-		doSaveContext();
-		super.sendError(sc);
-	}
-
-	
-	@Override
-	public final void sendError(int sc, String msg) throws IOException {
-		doSaveContext();
-		super.sendError(sc, msg);
-	}
-
-	
-	@Override
-	public final void sendRedirect(String location) throws IOException {
-		doSaveContext();
-		super.sendRedirect(location);
-	}
-
-	
-	@Override
-	public ServletOutputStream getOutputStream() throws IOException {
-		return new SaveContextServletOutputStream(super.getOutputStream());
-	}
-
-	
-	@Override
-	public PrintWriter getWriter() throws IOException {
-		return new SaveContextPrintWriter(super.getWriter());
-	}
-
-	
-	@Override
-	public void flushBuffer() throws IOException {
-		doSaveContext();
-		super.flushBuffer();
-	}
-
-	
-	private void doSaveContext() {
-		if (!disableSaveOnResponseCommitted) {
-			saveContext(SecurityContextHolder.getContext());
-			contextSaved = true;
-		}
-		else if (logger.isDebugEnabled()) {
-			logger.debug("Skip saving SecurityContext since saving on response commited is disabled");
-		}
-	}
-
-	@Override
-	public final String encodeRedirectUrl(String url) {
-		if (disableUrlRewriting) {
-			return url;
-		}
-		return super.encodeRedirectUrl(url);
-	}
-
-	@Override
-	public final String encodeRedirectURL(String url) {
-		if (disableUrlRewriting) {
-			return url;
-		}
-		return super.encodeRedirectURL(url);
-	}
-
-	@Override
-	public final String encodeUrl(String url) {
-		if (disableUrlRewriting) {
-			return url;
-		}
-		return super.encodeUrl(url);
-	}
-
-	@Override
-	public final String encodeURL(String url) {
-		if (disableUrlRewriting) {
-			return url;
-		}
-		return super.encodeURL(url);
-	}
-
-	
-	public final boolean isContextSaved() {
-		return contextSaved;
-	}
-
-	
-	private class SaveContextPrintWriter extends PrintWriter {
-		private final PrintWriter delegate;
-
-		public SaveContextPrintWriter(PrintWriter delegate) {
-			super(delegate);
-			this.delegate = delegate;
-		}
-
-		public void flush() {
-			doSaveContext();
-			delegate.flush();
-		}
-
-		public void close() {
-			doSaveContext();
-			delegate.close();
-		}
-
-		public int hashCode() {
-			return delegate.hashCode();
-		}
-
-		public boolean equals(Object obj) {
-			return delegate.equals(obj);
-		}
-
-		public String toString() {
-			return getClass().getName() + "[delegate=" + delegate.toString() + "]";
-		}
-
-		public boolean checkError() {
-			return delegate.checkError();
-		}
-
-		public void write(int c) {
-			delegate.write(c);
-		}
-
-		public void write(char[] buf, int off, int len) {
-			delegate.write(buf, off, len);
-		}
-
-		public void write(char[] buf) {
-			delegate.write(buf);
-		}
-
-		public void write(String s, int off, int len) {
-			delegate.write(s, off, len);
-		}
-
-		public void write(String s) {
-			delegate.write(s);
-		}
-
-		public void print(boolean b) {
-			delegate.print(b);
-		}
-
-		public void print(char c) {
-			delegate.print(c);
-		}
-
-		public void print(int i) {
-			delegate.print(i);
-		}
-
-		public void print(long l) {
-			delegate.print(l);
-		}
-
-		public void print(float f) {
-			delegate.print(f);
-		}
-
-		public void print(double d) {
-			delegate.print(d);
-		}
-
-		public void print(char[] s) {
-			delegate.print(s);
-		}
-
-		public void print(String s) {
-			delegate.print(s);
-		}
-
-		public void print(Object obj) {
-			delegate.print(obj);
-		}
-
-		public void println() {
-			delegate.println();
-		}
-
-		public void println(boolean x) {
-			delegate.println(x);
-		}
-
-		public void println(char x) {
-			delegate.println(x);
-		}
-
-		public void println(int x) {
-			delegate.println(x);
-		}
-
-		public void println(long x) {
-			delegate.println(x);
-		}
-
-		public void println(float x) {
-			delegate.println(x);
-		}
-
-		public void println(double x) {
-			delegate.println(x);
-		}
-
-		public void println(char[] x) {
-			delegate.println(x);
-		}
-
-		public void println(String x) {
-			delegate.println(x);
-		}
-
-		public void println(Object x) {
-			delegate.println(x);
-		}
-
-		public PrintWriter printf(String format, Object... args) {
-			return delegate.printf(format, args);
-		}
-
-		public PrintWriter printf(Locale l, String format, Object... args) {
-			return delegate.printf(l, format, args);
-		}
-
-		public PrintWriter format(String format, Object... args) {
-			return delegate.format(format, args);
-		}
-
-		public PrintWriter format(Locale l, String format, Object... args) {
-			return delegate.format(l, format, args);
-		}
-
-		public PrintWriter append(CharSequence csq) {
-			return delegate.append(csq);
-		}
-
-		public PrintWriter append(CharSequence csq, int start, int end) {
-			return delegate.append(csq, start, end);
-		}
-
-		public PrintWriter append(char c) {
-			return delegate.append(c);
-		}
-	}
-
-	
-	private class SaveContextServletOutputStream extends ServletOutputStream {
-		private final ServletOutputStream delegate;
-
-		public SaveContextServletOutputStream(ServletOutputStream delegate) {
-			this.delegate = delegate;
-		}
-
-		public void write(int b) throws IOException {
-			this.delegate.write(b);
-		}
-
-		public void flush() throws IOException {
-			doSaveContext();
-			delegate.flush();
-		}
-
-		public void close() throws IOException {
-			doSaveContext();
-			delegate.close();
-		}
-
-		public int hashCode() {
-			return delegate.hashCode();
-		}
-
-		public boolean equals(Object obj) {
-			return delegate.equals(obj);
-		}
-
-		public void print(boolean b) throws IOException {
-			delegate.print(b);
-		}
-
-		public void print(char c) throws IOException {
-			delegate.print(c);
-		}
-
-		public void print(double d) throws IOException {
-			delegate.print(d);
-		}
-
-		public void print(float f) throws IOException {
-			delegate.print(f);
-		}
-
-		public void print(int i) throws IOException {
-			delegate.print(i);
-		}
-
-		public void print(long l) throws IOException {
-			delegate.print(l);
-		}
-
-		public void print(String arg0) throws IOException {
-			delegate.print(arg0);
-		}
-
-		public void println() throws IOException {
-			delegate.println();
-		}
-
-		public void println(boolean b) throws IOException {
-			delegate.println(b);
-		}
-
-		public void println(char c) throws IOException {
-			delegate.println(c);
-		}
-
-		public void println(double d) throws IOException {
-			delegate.println(d);
-		}
-
-		public void println(float f) throws IOException {
-			delegate.println(f);
-		}
-
-		public void println(int i) throws IOException {
-			delegate.println(i);
-		}
-
-		public void println(long l) throws IOException {
-			delegate.println(l);
-		}
-
-		public void println(String s) throws IOException {
-			delegate.println(s);
-		}
-
-		public void write(byte[] b) throws IOException {
-			delegate.write(b);
-		}
-
-		public void write(byte[] b, int off, int len) throws IOException {
-			delegate.write(b, off, len);
-		}
-
-		public String toString() {
-			return getClass().getName() + "[delegate=" + delegate.toString() + "]";
-		}
 	}
 }

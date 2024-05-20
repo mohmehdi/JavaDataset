@@ -1,4 +1,4 @@
-Java_Projects/cas/cas-7fb0d1ce/curr/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/authentication/principal/SpnegoCredential.java
-Java_Projects/cas/cas-7fb0d1ce/curr/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/util/SpnegoConstants.java
-Java_Projects/cas/cas-7fb0d1ce/prev/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/authentication/principal/SpnegoCredential.java
 Java_Projects/cas/cas-7fb0d1ce/prev/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/util/SpnegoConstants.java
+Java_Projects/cas/cas-7fb0d1ce/prev/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/authentication/principal/SpnegoCredential.java
+Java_Projects/cas/cas-7fb0d1ce/curr/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/util/SpnegoConstants.java
+Java_Projects/cas/cas-7fb0d1ce/curr/cas-server-support-spnego/src/main/java/org/jasig/cas/support/spnego/authentication/principal/SpnegoCredential.java

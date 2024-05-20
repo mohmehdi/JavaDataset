@@ -2,81 +2,6 @@
 
 package com.loopj.android.http;
 
-import org.apache.http.Header;
-import org.apache.http.HttpResponse;
-
-import java.io.IOException;
-import java.net.URI;
-
-
-public interface ResponseHandlerInterface {
-
-    
-    void sendResponseMessage(HttpResponse response) throws IOException;
-
-    
-    void sendStartMessage();
-
-    
-    void sendFinishMessage();
-
-    
-    void sendProgressMessage(long bytesWritten, long bytesTotal);
-
-    
-    void sendCancelMessage();
-
-    
-    void sendSuccessMessage(int statusCode, Header[] headers, byte[] responseBody);
-
-    
-    void sendFailureMessage(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
-
-    
-    void sendRetryMessage(int retryNo);
-
-    
-    URI getRequestURI();
-
-    
-    Header[] getRequestHeaders();
-
-    
-    void setRequestURI(URI requestURI);
-
-    
-    void setRequestHeaders(Header[] requestHeaders);
-
-    
-    void setUseSynchronousMode(boolean useSynchronousMode);
-
-    
-    boolean getUseSynchronousMode();
-
-    
-    void setUsePoolThread(boolean usePoolThread);
-
-    
-    boolean getUsePoolThread();
-
-    
-    void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
-
-    
-    void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
-
-    
-    void setTag(Object TAG);
-
-    
-    Object getTag();
-}
-
-<code block>
-
-
-package com.loopj.android.http;
-
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpRequestRetryHandler;
 import org.apache.http.client.methods.HttpUriRequest;
@@ -107,14 +32,14 @@ public class AsyncHttpRequest implements Runnable {
         this.responseHandler = Utils.notNull(responseHandler, "responseHandler");
     }
 
-    
+
     public void onPreProcessRequest(AsyncHttpRequest request) {
-        
+
     }
 
-    
+
     public void onPostProcessRequest(AsyncHttpRequest request) {
-        
+
     }
 
     @Override
@@ -123,7 +48,7 @@ public class AsyncHttpRequest implements Runnable {
             return;
         }
 
-        
+
         if (!isRequestPreProcessed) {
             isRequestPreProcessed = true;
             onPreProcessRequest(this);
@@ -159,7 +84,7 @@ public class AsyncHttpRequest implements Runnable {
             return;
         }
 
-        
+
         onPostProcessRequest(this);
 
         isFinished = true;
@@ -170,9 +95,9 @@ public class AsyncHttpRequest implements Runnable {
             return;
         }
 
-        
+
         if (request.getURI().getScheme() == null) {
-            
+
             throw new MalformedURLException("No valid URI scheme was provided");
         }
 
@@ -186,21 +111,21 @@ public class AsyncHttpRequest implements Runnable {
             return;
         }
 
-        
+
         responseHandler.onPreProcessResponse(responseHandler, response);
 
         if (isCancelled()) {
             return;
         }
 
-        
+
         responseHandler.sendResponseMessage(response);
 
         if (isCancelled()) {
             return;
         }
 
-        
+
         responseHandler.onPostProcessResponse(responseHandler, response);
     }
 
@@ -214,20 +139,20 @@ public class AsyncHttpRequest implements Runnable {
                     makeRequest();
                     return;
                 } catch (UnknownHostException e) {
-                    
-                    
-                    
+
+
+
                     cause = new IOException("UnknownHostException exception: " + e.getMessage());
                     retry = (executionCount > 0) && retryHandler.retryRequest(e, ++executionCount, context);
                 } catch (NullPointerException e) {
-                    
-                    
-                    
+
+
+
                     cause = new IOException("NPE in HttpClient: " + e.getMessage());
                     retry = retryHandler.retryRequest(cause, ++executionCount, context);
                 } catch (IOException e) {
                     if (isCancelled()) {
-                        
+
                         return;
                     }
                     cause = e;
@@ -238,12 +163,12 @@ public class AsyncHttpRequest implements Runnable {
                 }
             }
         } catch (Exception e) {
-            
+
             AsyncHttpClient.log.e("AsyncHttpRequest", "Unhandled exception origin cause", e);
             cause = new IOException("Unhandled exception: " + e.getMessage());
         }
 
-        
+
         throw (cause);
     }
 
@@ -270,484 +195,6 @@ public class AsyncHttpRequest implements Runnable {
         isCancelled.set(true);
         request.abort();
         return isCancelled();
-    }
-
-    
-    public AsyncHttpRequest setRequestTag(Object TAG) {
-        this.responseHandler.setTag(TAG);
-        return this;
-    }
-
-    
-    public Object getTag() {
-        return this.responseHandler.getTag();
-    }
-}
-
-<code block>
-
-
-package com.loopj.android.http;
-
-import android.os.Looper;
-
-import java.lang.ref.WeakReference;
-
-
-public class RequestHandle {
-    private final WeakReference<AsyncHttpRequest> request;
-
-    public RequestHandle(AsyncHttpRequest request) {
-        this.request = new WeakReference<AsyncHttpRequest>(request);
-    }
-
-    
-    public boolean cancel(final boolean mayInterruptIfRunning) {
-        final AsyncHttpRequest _request = request.get();
-        if (_request != null) {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        _request.cancel(mayInterruptIfRunning);
-                    }
-                }).start();
-                
-                
-                return true;
-            } else {
-                return _request.cancel(mayInterruptIfRunning);
-            }
-        }
-        return false;
-    }
-
-    
-    public boolean isFinished() {
-        AsyncHttpRequest _request = request.get();
-        return _request == null || _request.isDone();
-    }
-
-    
-    public boolean isCancelled() {
-        AsyncHttpRequest _request = request.get();
-        return _request == null || _request.isCancelled();
-    }
-
-    public boolean shouldBeGarbageCollected() {
-        boolean should = isCancelled() || isFinished();
-        if (should)
-            request.clear();
-        return should;
-    }
-
-    
-    public RequestHandle setTag(Object tag) {
-        AsyncHttpRequest _request = request.get();
-        if (_request != null)
-            _request.setRequestTag(tag);
-        return this;
-    }
-
-    
-    public Object getTag() {
-        AsyncHttpRequest _request = request.get();
-        return _request == null ? null : _request.getTag();
-    }
-}
-<code block>
-
-
-package com.loopj.android.http;
-
-import android.os.Handler;
-import android.os.Looper;
-import android.os.Message;
-
-import org.apache.http.Header;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpResponse;
-import org.apache.http.StatusLine;
-import org.apache.http.client.HttpResponseException;
-import org.apache.http.util.ByteArrayBuffer;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.lang.ref.WeakReference;
-import java.net.URI;
-
-
-@SuppressWarnings("ALL")
-public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterface {
-
-    private static final String LOG_TAG = "AsyncHttpRH";
-
-    protected static final int SUCCESS_MESSAGE = 0;
-    protected static final int FAILURE_MESSAGE = 1;
-    protected static final int START_MESSAGE = 2;
-    protected static final int FINISH_MESSAGE = 3;
-    protected static final int PROGRESS_MESSAGE = 4;
-    protected static final int RETRY_MESSAGE = 5;
-    protected static final int CANCEL_MESSAGE = 6;
-
-    protected static final int BUFFER_SIZE = 4096;
-
-    public static final String DEFAULT_CHARSET = "UTF-8";
-    public static final String UTF8_BOM = "\uFEFF";
-    private String responseCharset = DEFAULT_CHARSET;
-    private Handler handler;
-    private boolean useSynchronousMode;
-    private boolean usePoolThread;
-
-    private URI requestURI = null;
-    private Header[] requestHeaders = null;
-    private Looper looper = null;
-    private WeakReference<Object> TAG = new WeakReference<Object>(null);
-
-    
-    public AsyncHttpResponseHandler() {
-        this(null);
-    }
-
-    
-    public AsyncHttpResponseHandler(Looper looper) {
-        this.looper = looper == null ? Looper.myLooper() : looper;
-
-        
-        setUseSynchronousMode(false);
-
-        
-        setUsePoolThread(false);
-    }
-
-    
-    public AsyncHttpResponseHandler(boolean usePoolThread) {
-        
-        setUsePoolThread(usePoolThread);
-
-        
-        if (!getUsePoolThread()) {
-            
-            this.looper = Looper.myLooper();
-
-            
-            setUseSynchronousMode(false);
-        }
-    }
-
-    @Override
-    public void setTag(Object TAG) {
-        this.TAG = new WeakReference<Object>(TAG);
-    }
-
-    @Override
-    public Object getTag() {
-        return this.TAG.get();
-    }
-
-    @Override
-    public URI getRequestURI() {
-        return this.requestURI;
-    }
-
-    @Override
-    public Header[] getRequestHeaders() {
-        return this.requestHeaders;
-    }
-
-    @Override
-    public void setRequestURI(URI requestURI) {
-        this.requestURI = requestURI;
-    }
-
-    @Override
-    public void setRequestHeaders(Header[] requestHeaders) {
-        this.requestHeaders = requestHeaders;
-    }
-
-    
-    private static class ResponderHandler extends Handler {
-        private final AsyncHttpResponseHandler mResponder;
-
-        ResponderHandler(AsyncHttpResponseHandler mResponder, Looper looper) {
-            super(looper);
-            this.mResponder = mResponder;
-        }
-
-        @Override
-        public void handleMessage(Message msg) {
-            mResponder.handleMessage(msg);
-        }
-    }
-
-    @Override
-    public boolean getUseSynchronousMode() {
-        return useSynchronousMode;
-    }
-
-    @Override
-    public void setUseSynchronousMode(boolean sync) {
-        
-        if (!sync && looper == null) {
-            sync = true;
-            AsyncHttpClient.log.w(LOG_TAG, "Current thread has not called Looper.prepare(). Forcing synchronous mode.");
-        }
-
-        
-        if (!sync && handler == null) {
-            
-            handler = new ResponderHandler(this, looper);
-        } else if (sync && handler != null) {
-            
-            handler = null;
-        }
-
-        useSynchronousMode = sync;
-    }
-
-    @Override
-    public boolean getUsePoolThread() {
-        return usePoolThread;
-    }
-
-    @Override
-    public void setUsePoolThread(boolean pool) {
-        
-        
-        if (pool) {
-            looper = null;
-            handler = null;
-        }
-
-        usePoolThread = pool;
-    }
-
-    
-    public void setCharset(final String charset) {
-        this.responseCharset = charset;
-    }
-
-    public String getCharset() {
-        return this.responseCharset == null ? DEFAULT_CHARSET : this.responseCharset;
-    }
-
-    
-    public void onProgress(long bytesWritten, long totalSize) {
-        AsyncHttpClient.log.v(LOG_TAG, String.format("Progress %d from %d (%2.0f%%)", bytesWritten, totalSize, (totalSize > 0) ? (bytesWritten * 1.0 / totalSize) * 100 : -1));
-    }
-
-    
-    public void onStart() {
-        
-    }
-
-    
-    public void onFinish() {
-        
-    }
-
-    @Override
-    public void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
-        
-    }
-
-    @Override
-    public void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
-        
-    }
-
-    
-    public abstract void onSuccess(int statusCode, Header[] headers, byte[] responseBody);
-
-    
-    public abstract void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
-
-    
-    public void onRetry(int retryNo) {
-        AsyncHttpClient.log.d(LOG_TAG, String.format("Request retry no. %d", retryNo));
-    }
-
-    public void onCancel() {
-        AsyncHttpClient.log.d(LOG_TAG, "Request got cancelled");
-    }
-
-    public void onUserException(Throwable error) {
-        AsyncHttpClient.log.e(LOG_TAG, "User-space exception detected!", error);
-        throw new RuntimeException(error);
-    }
-
-    @Override
-    final public void sendProgressMessage(long bytesWritten, long bytesTotal) {
-        sendMessage(obtainMessage(PROGRESS_MESSAGE, new Object[]{bytesWritten, bytesTotal}));
-    }
-
-    @Override
-    final public void sendSuccessMessage(int statusCode, Header[] headers, byte[] responseBytes) {
-        sendMessage(obtainMessage(SUCCESS_MESSAGE, new Object[]{statusCode, headers, responseBytes}));
-    }
-
-    @Override
-    final public void sendFailureMessage(int statusCode, Header[] headers, byte[] responseBody, Throwable throwable) {
-        sendMessage(obtainMessage(FAILURE_MESSAGE, new Object[]{statusCode, headers, responseBody, throwable}));
-    }
-
-    @Override
-    final public void sendStartMessage() {
-        sendMessage(obtainMessage(START_MESSAGE, null));
-    }
-
-    @Override
-    final public void sendFinishMessage() {
-        sendMessage(obtainMessage(FINISH_MESSAGE, null));
-    }
-
-    @Override
-    final public void sendRetryMessage(int retryNo) {
-        sendMessage(obtainMessage(RETRY_MESSAGE, new Object[]{retryNo}));
-    }
-
-    @Override
-    final public void sendCancelMessage() {
-        sendMessage(obtainMessage(CANCEL_MESSAGE, null));
-    }
-
-    
-    protected void handleMessage(Message message) {
-        Object[] response;
-
-        try {
-            switch (message.what) {
-                case SUCCESS_MESSAGE:
-                    response = (Object[]) message.obj;
-                    if (response != null && response.length >= 3) {
-                        onSuccess((Integer) response[0], (Header[]) response[1], (byte[]) response[2]);
-                    } else {
-                        AsyncHttpClient.log.e(LOG_TAG, "SUCCESS_MESSAGE didn't got enough params");
-                    }
-                    break;
-                case FAILURE_MESSAGE:
-                    response = (Object[]) message.obj;
-                    if (response != null && response.length >= 4) {
-                        onFailure((Integer) response[0], (Header[]) response[1], (byte[]) response[2], (Throwable) response[3]);
-                    } else {
-                        AsyncHttpClient.log.e(LOG_TAG, "FAILURE_MESSAGE didn't got enough params");
-                    }
-                    break;
-                case START_MESSAGE:
-                    onStart();
-                    break;
-                case FINISH_MESSAGE:
-                    onFinish();
-                    break;
-                case PROGRESS_MESSAGE:
-                    response = (Object[]) message.obj;
-                    if (response != null && response.length >= 2) {
-                        try {
-                            onProgress((Long) response[0], (Long) response[1]);
-                        } catch (Throwable t) {
-                            AsyncHttpClient.log.e(LOG_TAG, "custom onProgress contains an error", t);
-                        }
-                    } else {
-                        AsyncHttpClient.log.e(LOG_TAG, "PROGRESS_MESSAGE didn't got enough params");
-                    }
-                    break;
-                case RETRY_MESSAGE:
-                    response = (Object[]) message.obj;
-                    if (response != null && response.length == 1) {
-                        onRetry((Integer) response[0]);
-                    } else {
-                        AsyncHttpClient.log.e(LOG_TAG, "RETRY_MESSAGE didn't get enough params");
-                    }
-                    break;
-                case CANCEL_MESSAGE:
-                    onCancel();
-                    break;
-            }
-        } catch (Throwable error) {
-            onUserException(error);
-        }
-    }
-
-    protected void sendMessage(Message msg) {
-        if (getUseSynchronousMode() || handler == null) {
-            handleMessage(msg);
-        } else if (!Thread.currentThread().isInterrupted()) { 
-            Utils.asserts(handler != null, "handler should not be null!");
-            handler.sendMessage(msg);
-        }
-    }
-
-    
-    protected void postRunnable(Runnable runnable) {
-        if (runnable != null) {
-            if (getUseSynchronousMode() || handler == null) {
-                
-                runnable.run();
-            } else {
-                
-                handler.post(runnable);
-            }
-        }
-    }
-
-    
-    protected Message obtainMessage(int responseMessageId, Object responseMessageData) {
-        return Message.obtain(handler, responseMessageId, responseMessageData);
-    }
-
-    @Override
-    public void sendResponseMessage(HttpResponse response) throws IOException {
-        
-        if (!Thread.currentThread().isInterrupted()) {
-            StatusLine status = response.getStatusLine();
-            byte[] responseBody;
-            responseBody = getResponseData(response.getEntity());
-            
-            if (!Thread.currentThread().isInterrupted()) {
-                if (status.getStatusCode() >= 300) {
-                    sendFailureMessage(status.getStatusCode(), response.getAllHeaders(), responseBody, new HttpResponseException(status.getStatusCode(), status.getReasonPhrase()));
-                } else {
-                    sendSuccessMessage(status.getStatusCode(), response.getAllHeaders(), responseBody);
-                }
-            }
-        }
-    }
-
-    
-    byte[] getResponseData(HttpEntity entity) throws IOException {
-        byte[] responseBody = null;
-        if (entity != null) {
-            InputStream instream = entity.getContent();
-            if (instream != null) {
-                long contentLength = entity.getContentLength();
-                if (contentLength > Integer.MAX_VALUE) {
-                    throw new IllegalArgumentException("HTTP entity too large to be buffered in memory");
-                }
-                int buffersize = (contentLength <= 0) ? BUFFER_SIZE : (int) contentLength;
-                try {
-                    ByteArrayBuffer buffer = new ByteArrayBuffer(buffersize);
-                    try {
-                        byte[] tmp = new byte[BUFFER_SIZE];
-                        long count = 0;
-                        int l;
-                        
-                        while ((l = instream.read(tmp)) != -1 && !Thread.currentThread().isInterrupted()) {
-                            count += l;
-                            buffer.append(tmp, 0, l);
-                            sendProgressMessage(count, (contentLength <= 0 ? 1 : contentLength));
-                        }
-                    } finally {
-                        AsyncHttpClient.silentCloseInputStream(instream);
-                        AsyncHttpClient.endEntityViaReflection(entity);
-                    }
-                    responseBody = buffer.toByteArray();
-                } catch (OutOfMemoryError e) {
-                    System.gc();
-                    throw new IOException("File too large to fit into available memory");
-                }
-            }
-        }
-        return responseBody;
     }
 }
 
@@ -765,260 +212,59 @@ import java.net.URI;
 
 public interface ResponseHandlerInterface {
 
-    
+
     void sendResponseMessage(HttpResponse response) throws IOException;
 
-    
+
     void sendStartMessage();
 
-    
+
     void sendFinishMessage();
 
-    
+
     void sendProgressMessage(long bytesWritten, long bytesTotal);
 
-    
+
     void sendCancelMessage();
 
-    
+
     void sendSuccessMessage(int statusCode, Header[] headers, byte[] responseBody);
 
-    
+
     void sendFailureMessage(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
 
-    
+
     void sendRetryMessage(int retryNo);
 
-    
+
     URI getRequestURI();
 
-    
+
     Header[] getRequestHeaders();
 
-    
+
     void setRequestURI(URI requestURI);
 
-    
+
     void setRequestHeaders(Header[] requestHeaders);
 
-    
+
     void setUseSynchronousMode(boolean useSynchronousMode);
 
-    
+
     boolean getUseSynchronousMode();
 
-    
+
     void setUsePoolThread(boolean usePoolThread);
 
-    
+
     boolean getUsePoolThread();
 
-    
+
     void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
 
-    
+
     void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
-}
-
-<code block>
-
-
-package com.loopj.android.http;
-
-import org.apache.http.HttpResponse;
-import org.apache.http.client.HttpRequestRetryHandler;
-import org.apache.http.client.methods.HttpUriRequest;
-import org.apache.http.impl.client.AbstractHttpClient;
-import org.apache.http.protocol.HttpContext;
-
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.UnknownHostException;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-
-public class AsyncHttpRequest implements Runnable {
-    private final AbstractHttpClient client;
-    private final HttpContext context;
-    private final HttpUriRequest request;
-    private final ResponseHandlerInterface responseHandler;
-    private int executionCount;
-    private final AtomicBoolean isCancelled = new AtomicBoolean();
-    private boolean cancelIsNotified;
-    private volatile boolean isFinished;
-    private boolean isRequestPreProcessed;
-
-    public AsyncHttpRequest(AbstractHttpClient client, HttpContext context, HttpUriRequest request, ResponseHandlerInterface responseHandler) {
-        this.client = Utils.notNull(client, "client");
-        this.context = Utils.notNull(context, "context");
-        this.request = Utils.notNull(request, "request");
-        this.responseHandler = Utils.notNull(responseHandler, "responseHandler");
-    }
-
-    
-    public void onPreProcessRequest(AsyncHttpRequest request) {
-        
-    }
-
-    
-    public void onPostProcessRequest(AsyncHttpRequest request) {
-        
-    }
-
-    @Override
-    public void run() {
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        if (!isRequestPreProcessed) {
-            isRequestPreProcessed = true;
-            onPreProcessRequest(this);
-        }
-
-        if (isCancelled()) {
-            return;
-        }
-
-        responseHandler.sendStartMessage();
-
-        if (isCancelled()) {
-            return;
-        }
-
-        try {
-            makeRequestWithRetries();
-        } catch (IOException e) {
-            if (!isCancelled()) {
-                responseHandler.sendFailureMessage(0, null, null, e);
-            } else {
-                AsyncHttpClient.log.e("AsyncHttpRequest", "makeRequestWithRetries returned error", e);
-            }
-        }
-
-        if (isCancelled()) {
-            return;
-        }
-
-        responseHandler.sendFinishMessage();
-
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        onPostProcessRequest(this);
-
-        isFinished = true;
-    }
-
-    private void makeRequest() throws IOException {
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        if (request.getURI().getScheme() == null) {
-            
-            throw new MalformedURLException("No valid URI scheme was provided");
-        }
-
-        if (responseHandler instanceof RangeFileAsyncHttpResponseHandler) {
-            ((RangeFileAsyncHttpResponseHandler) responseHandler).updateRequestHeaders(request);
-        }
-
-        HttpResponse response = client.execute(request, context);
-
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        responseHandler.onPreProcessResponse(responseHandler, response);
-
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        responseHandler.sendResponseMessage(response);
-
-        if (isCancelled()) {
-            return;
-        }
-
-        
-        responseHandler.onPostProcessResponse(responseHandler, response);
-    }
-
-    private void makeRequestWithRetries() throws IOException {
-        boolean retry = true;
-        IOException cause = null;
-        HttpRequestRetryHandler retryHandler = client.getHttpRequestRetryHandler();
-        try {
-            while (retry) {
-                try {
-                    makeRequest();
-                    return;
-                } catch (UnknownHostException e) {
-                    
-                    
-                    
-                    cause = new IOException("UnknownHostException exception: " + e.getMessage());
-                    retry = (executionCount > 0) && retryHandler.retryRequest(e, ++executionCount, context);
-                } catch (NullPointerException e) {
-                    
-                    
-                    
-                    cause = new IOException("NPE in HttpClient: " + e.getMessage());
-                    retry = retryHandler.retryRequest(cause, ++executionCount, context);
-                } catch (IOException e) {
-                    if (isCancelled()) {
-                        
-                        return;
-                    }
-                    cause = e;
-                    retry = retryHandler.retryRequest(cause, ++executionCount, context);
-                }
-                if (retry) {
-                    responseHandler.sendRetryMessage(executionCount);
-                }
-            }
-        } catch (Exception e) {
-            
-            AsyncHttpClient.log.e("AsyncHttpRequest", "Unhandled exception origin cause", e);
-            cause = new IOException("Unhandled exception: " + e.getMessage());
-        }
-
-        
-        throw (cause);
-    }
-
-    public boolean isCancelled() {
-        boolean cancelled = isCancelled.get();
-        if (cancelled) {
-            sendCancelNotification();
-        }
-        return cancelled;
-    }
-
-    private synchronized void sendCancelNotification() {
-        if (!isFinished && isCancelled.get() && !cancelIsNotified) {
-            cancelIsNotified = true;
-            responseHandler.sendCancelMessage();
-        }
-    }
-
-    public boolean isDone() {
-        return isCancelled() || isFinished;
-    }
-
-    public boolean cancel(boolean mayInterruptIfRunning) {
-        isCancelled.set(true);
-        request.abort();
-        return isCancelled();
-    }
 }
 
 <code block>
@@ -1039,7 +285,7 @@ public class RequestHandle {
         this.request = new WeakReference<AsyncHttpRequest>(request);
     }
 
-    
+
     public boolean cancel(final boolean mayInterruptIfRunning) {
         final AsyncHttpRequest _request = request.get();
         if (_request != null) {
@@ -1050,8 +296,8 @@ public class RequestHandle {
                         _request.cancel(mayInterruptIfRunning);
                     }
                 }).start();
-                
-                
+
+
                 return true;
             } else {
                 return _request.cancel(mayInterruptIfRunning);
@@ -1060,13 +306,13 @@ public class RequestHandle {
         return false;
     }
 
-    
+
     public boolean isFinished() {
         AsyncHttpRequest _request = request.get();
         return _request == null || _request.isDone();
     }
 
-    
+
     public boolean isCancelled() {
         AsyncHttpRequest _request = request.get();
         return _request == null || _request.isCancelled();
@@ -1079,13 +325,13 @@ public class RequestHandle {
         return should;
     }
 
-    
+
     public RequestHandle setTag(Object tag) {
         TAG = new WeakReference<Object>(tag);
         return this;
     }
 
-    
+
     public Object getTag() {
         return TAG.get();
     }
@@ -1137,33 +383,33 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
     private Header[] requestHeaders = null;
     private Looper looper = null;
 
-    
+
     public AsyncHttpResponseHandler() {
         this(null);
     }
 
-    
+
     public AsyncHttpResponseHandler(Looper looper) {
         this.looper = looper == null ? Looper.myLooper() : looper;
 
-        
+
         setUseSynchronousMode(false);
 
-        
+
         setUsePoolThread(false);
     }
 
-    
+
     public AsyncHttpResponseHandler(boolean usePoolThread) {
-        
+
         setUsePoolThread(usePoolThread);
 
-        
+
         if (!getUsePoolThread()) {
-            
+
             this.looper = Looper.myLooper();
 
-            
+
             setUseSynchronousMode(false);
         }
     }
@@ -1188,7 +434,7 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         this.requestHeaders = requestHeaders;
     }
 
-    
+
     private static class ResponderHandler extends Handler {
         private final AsyncHttpResponseHandler mResponder;
 
@@ -1210,18 +456,18 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
 
     @Override
     public void setUseSynchronousMode(boolean sync) {
-        
+
         if (!sync && looper == null) {
             sync = true;
             AsyncHttpClient.log.w(LOG_TAG, "Current thread has not called Looper.prepare(). Forcing synchronous mode.");
         }
 
-        
+
         if (!sync && handler == null) {
-            
+
             handler = new ResponderHandler(this, looper);
         } else if (sync && handler != null) {
-            
+
             handler = null;
         }
 
@@ -1235,8 +481,8 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
 
     @Override
     public void setUsePoolThread(boolean pool) {
-        
-        
+
+
         if (pool) {
             looper = null;
             handler = null;
@@ -1245,7 +491,7 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         usePoolThread = pool;
     }
 
-    
+
     public void setCharset(final String charset) {
         this.responseCharset = charset;
     }
@@ -1254,38 +500,38 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         return this.responseCharset == null ? DEFAULT_CHARSET : this.responseCharset;
     }
 
-    
+
     public void onProgress(long bytesWritten, long totalSize) {
         AsyncHttpClient.log.v(LOG_TAG, String.format("Progress %d from %d (%2.0f%%)", bytesWritten, totalSize, (totalSize > 0) ? (bytesWritten * 1.0 / totalSize) * 100 : -1));
     }
 
-    
+
     public void onStart() {
-        
+
     }
 
-    
+
     public void onFinish() {
-        
+
     }
 
     @Override
     public void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
-        
+
     }
 
     @Override
     public void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
-        
+
     }
 
-    
+
     public abstract void onSuccess(int statusCode, Header[] headers, byte[] responseBody);
 
-    
+
     public abstract void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
 
-    
+
     public void onRetry(int retryNo) {
         AsyncHttpClient.log.d(LOG_TAG, String.format("Request retry no. %d", retryNo));
     }
@@ -1334,7 +580,7 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         sendMessage(obtainMessage(CANCEL_MESSAGE, null));
     }
 
-    
+
     protected void handleMessage(Message message) {
         Object[] response;
 
@@ -1400,32 +646,32 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         }
     }
 
-    
+
     protected void postRunnable(Runnable runnable) {
         if (runnable != null) {
             if (getUseSynchronousMode() || handler == null) {
-                
+
                 runnable.run();
             } else {
-                
+
                 handler.post(runnable);
             }
         }
     }
 
-    
+
     protected Message obtainMessage(int responseMessageId, Object responseMessageData) {
         return Message.obtain(handler, responseMessageId, responseMessageData);
     }
 
     @Override
     public void sendResponseMessage(HttpResponse response) throws IOException {
-        
+
         if (!Thread.currentThread().isInterrupted()) {
             StatusLine status = response.getStatusLine();
             byte[] responseBody;
             responseBody = getResponseData(response.getEntity());
-            
+
             if (!Thread.currentThread().isInterrupted()) {
                 if (status.getStatusCode() >= 300) {
                     sendFailureMessage(status.getStatusCode(), response.getAllHeaders(), responseBody, new HttpResponseException(status.getStatusCode(), status.getReasonPhrase()));
@@ -1436,7 +682,7 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
         }
     }
 
-    
+
     byte[] getResponseData(HttpEntity entity) throws IOException {
         byte[] responseBody = null;
         if (entity != null) {
@@ -1453,7 +699,761 @@ public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterfa
                         byte[] tmp = new byte[BUFFER_SIZE];
                         long count = 0;
                         int l;
-                        
+
+                        while ((l = instream.read(tmp)) != -1 && !Thread.currentThread().isInterrupted()) {
+                            count += l;
+                            buffer.append(tmp, 0, l);
+                            sendProgressMessage(count, (contentLength <= 0 ? 1 : contentLength));
+                        }
+                    } finally {
+                        AsyncHttpClient.silentCloseInputStream(instream);
+                        AsyncHttpClient.endEntityViaReflection(entity);
+                    }
+                    responseBody = buffer.toByteArray();
+                } catch (OutOfMemoryError e) {
+                    System.gc();
+                    throw new IOException("File too large to fit into available memory");
+                }
+            }
+        }
+        return responseBody;
+    }
+}
+
+<code block>
+
+
+package com.loopj.android.http;
+
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpRequestRetryHandler;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.impl.client.AbstractHttpClient;
+import org.apache.http.protocol.HttpContext;
+
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.UnknownHostException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+
+public class AsyncHttpRequest implements Runnable {
+    private final AbstractHttpClient client;
+    private final HttpContext context;
+    private final HttpUriRequest request;
+    private final ResponseHandlerInterface responseHandler;
+    private int executionCount;
+    private final AtomicBoolean isCancelled = new AtomicBoolean();
+    private boolean cancelIsNotified;
+    private volatile boolean isFinished;
+    private boolean isRequestPreProcessed;
+
+    public AsyncHttpRequest(AbstractHttpClient client, HttpContext context, HttpUriRequest request, ResponseHandlerInterface responseHandler) {
+        this.client = Utils.notNull(client, "client");
+        this.context = Utils.notNull(context, "context");
+        this.request = Utils.notNull(request, "request");
+        this.responseHandler = Utils.notNull(responseHandler, "responseHandler");
+    }
+
+
+    public void onPreProcessRequest(AsyncHttpRequest request) {
+
+    }
+
+
+    public void onPostProcessRequest(AsyncHttpRequest request) {
+
+    }
+
+    @Override
+    public void run() {
+        if (isCancelled()) {
+            return;
+        }
+
+
+        if (!isRequestPreProcessed) {
+            isRequestPreProcessed = true;
+            onPreProcessRequest(this);
+        }
+
+        if (isCancelled()) {
+            return;
+        }
+
+        responseHandler.sendStartMessage();
+
+        if (isCancelled()) {
+            return;
+        }
+
+        try {
+            makeRequestWithRetries();
+        } catch (IOException e) {
+            if (!isCancelled()) {
+                responseHandler.sendFailureMessage(0, null, null, e);
+            } else {
+                AsyncHttpClient.log.e("AsyncHttpRequest", "makeRequestWithRetries returned error", e);
+            }
+        }
+
+        if (isCancelled()) {
+            return;
+        }
+
+        responseHandler.sendFinishMessage();
+
+        if (isCancelled()) {
+            return;
+        }
+
+
+        onPostProcessRequest(this);
+
+        isFinished = true;
+    }
+
+    private void makeRequest() throws IOException {
+        if (isCancelled()) {
+            return;
+        }
+
+
+        if (request.getURI().getScheme() == null) {
+
+            throw new MalformedURLException("No valid URI scheme was provided");
+        }
+
+        if (responseHandler instanceof RangeFileAsyncHttpResponseHandler) {
+            ((RangeFileAsyncHttpResponseHandler) responseHandler).updateRequestHeaders(request);
+        }
+
+        HttpResponse response = client.execute(request, context);
+
+        if (isCancelled()) {
+            return;
+        }
+
+
+        responseHandler.onPreProcessResponse(responseHandler, response);
+
+        if (isCancelled()) {
+            return;
+        }
+
+
+        responseHandler.sendResponseMessage(response);
+
+        if (isCancelled()) {
+            return;
+        }
+
+
+        responseHandler.onPostProcessResponse(responseHandler, response);
+    }
+
+    private void makeRequestWithRetries() throws IOException {
+        boolean retry = true;
+        IOException cause = null;
+        HttpRequestRetryHandler retryHandler = client.getHttpRequestRetryHandler();
+        try {
+            while (retry) {
+                try {
+                    makeRequest();
+                    return;
+                } catch (UnknownHostException e) {
+
+
+
+                    cause = new IOException("UnknownHostException exception: " + e.getMessage());
+                    retry = (executionCount > 0) && retryHandler.retryRequest(e, ++executionCount, context);
+                } catch (NullPointerException e) {
+
+
+
+                    cause = new IOException("NPE in HttpClient: " + e.getMessage());
+                    retry = retryHandler.retryRequest(cause, ++executionCount, context);
+                } catch (IOException e) {
+                    if (isCancelled()) {
+
+                        return;
+                    }
+                    cause = e;
+                    retry = retryHandler.retryRequest(cause, ++executionCount, context);
+                }
+                if (retry) {
+                    responseHandler.sendRetryMessage(executionCount);
+                }
+            }
+        } catch (Exception e) {
+
+            AsyncHttpClient.log.e("AsyncHttpRequest", "Unhandled exception origin cause", e);
+            cause = new IOException("Unhandled exception: " + e.getMessage());
+        }
+
+
+        throw (cause);
+    }
+
+    public boolean isCancelled() {
+        boolean cancelled = isCancelled.get();
+        if (cancelled) {
+            sendCancelNotification();
+        }
+        return cancelled;
+    }
+
+    private synchronized void sendCancelNotification() {
+        if (!isFinished && isCancelled.get() && !cancelIsNotified) {
+            cancelIsNotified = true;
+            responseHandler.sendCancelMessage();
+        }
+    }
+
+    public boolean isDone() {
+        return isCancelled() || isFinished;
+    }
+
+    public boolean cancel(boolean mayInterruptIfRunning) {
+        isCancelled.set(true);
+        request.abort();
+        return isCancelled();
+    }
+
+
+    public AsyncHttpRequest setRequestTag(Object TAG) {
+        this.responseHandler.setTag(TAG);
+        return this;
+    }
+
+
+    public Object getTag() {
+        return this.responseHandler.getTag();
+    }
+}
+
+<code block>
+
+
+package com.loopj.android.http;
+
+import org.apache.http.Header;
+import org.apache.http.HttpResponse;
+
+import java.io.IOException;
+import java.net.URI;
+
+
+public interface ResponseHandlerInterface {
+
+
+    void sendResponseMessage(HttpResponse response) throws IOException;
+
+
+    void sendStartMessage();
+
+
+    void sendFinishMessage();
+
+
+    void sendProgressMessage(long bytesWritten, long bytesTotal);
+
+
+    void sendCancelMessage();
+
+
+    void sendSuccessMessage(int statusCode, Header[] headers, byte[] responseBody);
+
+
+    void sendFailureMessage(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
+
+
+    void sendRetryMessage(int retryNo);
+
+
+    URI getRequestURI();
+
+
+    Header[] getRequestHeaders();
+
+
+    void setRequestURI(URI requestURI);
+
+
+    void setRequestHeaders(Header[] requestHeaders);
+
+
+    void setUseSynchronousMode(boolean useSynchronousMode);
+
+
+    boolean getUseSynchronousMode();
+
+
+    void setUsePoolThread(boolean usePoolThread);
+
+
+    boolean getUsePoolThread();
+
+
+    void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
+
+
+    void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response);
+
+
+    void setTag(Object TAG);
+
+
+    Object getTag();
+}
+
+<code block>
+
+
+package com.loopj.android.http;
+
+import android.os.Looper;
+
+import java.lang.ref.WeakReference;
+
+
+public class RequestHandle {
+    private final WeakReference<AsyncHttpRequest> request;
+
+    public RequestHandle(AsyncHttpRequest request) {
+        this.request = new WeakReference<AsyncHttpRequest>(request);
+    }
+
+
+    public boolean cancel(final boolean mayInterruptIfRunning) {
+        final AsyncHttpRequest _request = request.get();
+        if (_request != null) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        _request.cancel(mayInterruptIfRunning);
+                    }
+                }).start();
+
+
+                return true;
+            } else {
+                return _request.cancel(mayInterruptIfRunning);
+            }
+        }
+        return false;
+    }
+
+
+    public boolean isFinished() {
+        AsyncHttpRequest _request = request.get();
+        return _request == null || _request.isDone();
+    }
+
+
+    public boolean isCancelled() {
+        AsyncHttpRequest _request = request.get();
+        return _request == null || _request.isCancelled();
+    }
+
+    public boolean shouldBeGarbageCollected() {
+        boolean should = isCancelled() || isFinished();
+        if (should)
+            request.clear();
+        return should;
+    }
+
+
+    public RequestHandle setTag(Object tag) {
+        AsyncHttpRequest _request = request.get();
+        if (_request != null)
+            _request.setRequestTag(tag);
+        return this;
+    }
+
+
+    public Object getTag() {
+        AsyncHttpRequest _request = request.get();
+        return _request == null ? null : _request.getTag();
+    }
+}
+<code block>
+
+
+package com.loopj.android.http;
+
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
+
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.StatusLine;
+import org.apache.http.client.HttpResponseException;
+import org.apache.http.util.ByteArrayBuffer;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.ref.WeakReference;
+import java.net.URI;
+
+
+@SuppressWarnings("ALL")
+public abstract class AsyncHttpResponseHandler implements ResponseHandlerInterface {
+
+    private static final String LOG_TAG = "AsyncHttpRH";
+
+    protected static final int SUCCESS_MESSAGE = 0;
+    protected static final int FAILURE_MESSAGE = 1;
+    protected static final int START_MESSAGE = 2;
+    protected static final int FINISH_MESSAGE = 3;
+    protected static final int PROGRESS_MESSAGE = 4;
+    protected static final int RETRY_MESSAGE = 5;
+    protected static final int CANCEL_MESSAGE = 6;
+
+    protected static final int BUFFER_SIZE = 4096;
+
+    public static final String DEFAULT_CHARSET = "UTF-8";
+    public static final String UTF8_BOM = "\uFEFF";
+    private String responseCharset = DEFAULT_CHARSET;
+    private Handler handler;
+    private boolean useSynchronousMode;
+    private boolean usePoolThread;
+
+    private URI requestURI = null;
+    private Header[] requestHeaders = null;
+    private Looper looper = null;
+    private WeakReference<Object> TAG = new WeakReference<Object>(null);
+
+
+    public AsyncHttpResponseHandler() {
+        this(null);
+    }
+
+
+    public AsyncHttpResponseHandler(Looper looper) {
+        this.looper = looper == null ? Looper.myLooper() : looper;
+
+
+        setUseSynchronousMode(false);
+
+
+        setUsePoolThread(false);
+    }
+
+
+    public AsyncHttpResponseHandler(boolean usePoolThread) {
+
+        setUsePoolThread(usePoolThread);
+
+
+        if (!getUsePoolThread()) {
+
+            this.looper = Looper.myLooper();
+
+
+            setUseSynchronousMode(false);
+        }
+    }
+
+    @Override
+    public void setTag(Object TAG) {
+        this.TAG = new WeakReference<Object>(TAG);
+    }
+
+    @Override
+    public Object getTag() {
+        return this.TAG.get();
+    }
+
+    @Override
+    public URI getRequestURI() {
+        return this.requestURI;
+    }
+
+    @Override
+    public Header[] getRequestHeaders() {
+        return this.requestHeaders;
+    }
+
+    @Override
+    public void setRequestURI(URI requestURI) {
+        this.requestURI = requestURI;
+    }
+
+    @Override
+    public void setRequestHeaders(Header[] requestHeaders) {
+        this.requestHeaders = requestHeaders;
+    }
+
+
+    private static class ResponderHandler extends Handler {
+        private final AsyncHttpResponseHandler mResponder;
+
+        ResponderHandler(AsyncHttpResponseHandler mResponder, Looper looper) {
+            super(looper);
+            this.mResponder = mResponder;
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            mResponder.handleMessage(msg);
+        }
+    }
+
+    @Override
+    public boolean getUseSynchronousMode() {
+        return useSynchronousMode;
+    }
+
+    @Override
+    public void setUseSynchronousMode(boolean sync) {
+
+        if (!sync && looper == null) {
+            sync = true;
+            AsyncHttpClient.log.w(LOG_TAG, "Current thread has not called Looper.prepare(). Forcing synchronous mode.");
+        }
+
+
+        if (!sync && handler == null) {
+
+            handler = new ResponderHandler(this, looper);
+        } else if (sync && handler != null) {
+
+            handler = null;
+        }
+
+        useSynchronousMode = sync;
+    }
+
+    @Override
+    public boolean getUsePoolThread() {
+        return usePoolThread;
+    }
+
+    @Override
+    public void setUsePoolThread(boolean pool) {
+
+
+        if (pool) {
+            looper = null;
+            handler = null;
+        }
+
+        usePoolThread = pool;
+    }
+
+
+    public void setCharset(final String charset) {
+        this.responseCharset = charset;
+    }
+
+    public String getCharset() {
+        return this.responseCharset == null ? DEFAULT_CHARSET : this.responseCharset;
+    }
+
+
+    public void onProgress(long bytesWritten, long totalSize) {
+        AsyncHttpClient.log.v(LOG_TAG, String.format("Progress %d from %d (%2.0f%%)", bytesWritten, totalSize, (totalSize > 0) ? (bytesWritten * 1.0 / totalSize) * 100 : -1));
+    }
+
+
+    public void onStart() {
+
+    }
+
+
+    public void onFinish() {
+
+    }
+
+    @Override
+    public void onPreProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
+
+    }
+
+    @Override
+    public void onPostProcessResponse(ResponseHandlerInterface instance, HttpResponse response) {
+
+    }
+
+
+    public abstract void onSuccess(int statusCode, Header[] headers, byte[] responseBody);
+
+
+    public abstract void onFailure(int statusCode, Header[] headers, byte[] responseBody, Throwable error);
+
+
+    public void onRetry(int retryNo) {
+        AsyncHttpClient.log.d(LOG_TAG, String.format("Request retry no. %d", retryNo));
+    }
+
+    public void onCancel() {
+        AsyncHttpClient.log.d(LOG_TAG, "Request got cancelled");
+    }
+
+    public void onUserException(Throwable error) {
+        AsyncHttpClient.log.e(LOG_TAG, "User-space exception detected!", error);
+        throw new RuntimeException(error);
+    }
+
+    @Override
+    final public void sendProgressMessage(long bytesWritten, long bytesTotal) {
+        sendMessage(obtainMessage(PROGRESS_MESSAGE, new Object[]{bytesWritten, bytesTotal}));
+    }
+
+    @Override
+    final public void sendSuccessMessage(int statusCode, Header[] headers, byte[] responseBytes) {
+        sendMessage(obtainMessage(SUCCESS_MESSAGE, new Object[]{statusCode, headers, responseBytes}));
+    }
+
+    @Override
+    final public void sendFailureMessage(int statusCode, Header[] headers, byte[] responseBody, Throwable throwable) {
+        sendMessage(obtainMessage(FAILURE_MESSAGE, new Object[]{statusCode, headers, responseBody, throwable}));
+    }
+
+    @Override
+    final public void sendStartMessage() {
+        sendMessage(obtainMessage(START_MESSAGE, null));
+    }
+
+    @Override
+    final public void sendFinishMessage() {
+        sendMessage(obtainMessage(FINISH_MESSAGE, null));
+    }
+
+    @Override
+    final public void sendRetryMessage(int retryNo) {
+        sendMessage(obtainMessage(RETRY_MESSAGE, new Object[]{retryNo}));
+    }
+
+    @Override
+    final public void sendCancelMessage() {
+        sendMessage(obtainMessage(CANCEL_MESSAGE, null));
+    }
+
+
+    protected void handleMessage(Message message) {
+        Object[] response;
+
+        try {
+            switch (message.what) {
+                case SUCCESS_MESSAGE:
+                    response = (Object[]) message.obj;
+                    if (response != null && response.length >= 3) {
+                        onSuccess((Integer) response[0], (Header[]) response[1], (byte[]) response[2]);
+                    } else {
+                        AsyncHttpClient.log.e(LOG_TAG, "SUCCESS_MESSAGE didn't got enough params");
+                    }
+                    break;
+                case FAILURE_MESSAGE:
+                    response = (Object[]) message.obj;
+                    if (response != null && response.length >= 4) {
+                        onFailure((Integer) response[0], (Header[]) response[1], (byte[]) response[2], (Throwable) response[3]);
+                    } else {
+                        AsyncHttpClient.log.e(LOG_TAG, "FAILURE_MESSAGE didn't got enough params");
+                    }
+                    break;
+                case START_MESSAGE:
+                    onStart();
+                    break;
+                case FINISH_MESSAGE:
+                    onFinish();
+                    break;
+                case PROGRESS_MESSAGE:
+                    response = (Object[]) message.obj;
+                    if (response != null && response.length >= 2) {
+                        try {
+                            onProgress((Long) response[0], (Long) response[1]);
+                        } catch (Throwable t) {
+                            AsyncHttpClient.log.e(LOG_TAG, "custom onProgress contains an error", t);
+                        }
+                    } else {
+                        AsyncHttpClient.log.e(LOG_TAG, "PROGRESS_MESSAGE didn't got enough params");
+                    }
+                    break;
+                case RETRY_MESSAGE:
+                    response = (Object[]) message.obj;
+                    if (response != null && response.length == 1) {
+                        onRetry((Integer) response[0]);
+                    } else {
+                        AsyncHttpClient.log.e(LOG_TAG, "RETRY_MESSAGE didn't get enough params");
+                    }
+                    break;
+                case CANCEL_MESSAGE:
+                    onCancel();
+                    break;
+            }
+        } catch (Throwable error) {
+            onUserException(error);
+        }
+    }
+
+    protected void sendMessage(Message msg) {
+        if (getUseSynchronousMode() || handler == null) {
+            handleMessage(msg);
+        } else if (!Thread.currentThread().isInterrupted()) { 
+            Utils.asserts(handler != null, "handler should not be null!");
+            handler.sendMessage(msg);
+        }
+    }
+
+
+    protected void postRunnable(Runnable runnable) {
+        if (runnable != null) {
+            if (getUseSynchronousMode() || handler == null) {
+
+                runnable.run();
+            } else {
+
+                handler.post(runnable);
+            }
+        }
+    }
+
+
+    protected Message obtainMessage(int responseMessageId, Object responseMessageData) {
+        return Message.obtain(handler, responseMessageId, responseMessageData);
+    }
+
+    @Override
+    public void sendResponseMessage(HttpResponse response) throws IOException {
+
+        if (!Thread.currentThread().isInterrupted()) {
+            StatusLine status = response.getStatusLine();
+            byte[] responseBody;
+            responseBody = getResponseData(response.getEntity());
+
+            if (!Thread.currentThread().isInterrupted()) {
+                if (status.getStatusCode() >= 300) {
+                    sendFailureMessage(status.getStatusCode(), response.getAllHeaders(), responseBody, new HttpResponseException(status.getStatusCode(), status.getReasonPhrase()));
+                } else {
+                    sendSuccessMessage(status.getStatusCode(), response.getAllHeaders(), responseBody);
+                }
+            }
+        }
+    }
+
+
+    byte[] getResponseData(HttpEntity entity) throws IOException {
+        byte[] responseBody = null;
+        if (entity != null) {
+            InputStream instream = entity.getContent();
+            if (instream != null) {
+                long contentLength = entity.getContentLength();
+                if (contentLength > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("HTTP entity too large to be buffered in memory");
+                }
+                int buffersize = (contentLength <= 0) ? BUFFER_SIZE : (int) contentLength;
+                try {
+                    ByteArrayBuffer buffer = new ByteArrayBuffer(buffersize);
+                    try {
+                        byte[] tmp = new byte[BUFFER_SIZE];
+                        long count = 0;
+                        int l;
+
                         while ((l = instream.read(tmp)) != -1 && !Thread.currentThread().isInterrupted()) {
                             count += l;
                             buffer.append(tmp, 0, l);

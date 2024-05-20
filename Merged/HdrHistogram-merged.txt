@@ -112,31 +112,14 @@ public class HistogramLogProcessor extends Thread {
                 startTime, (new Date((long) (startTime * 1000))).toString());
     }
 
-    int lineNumber = 0;
 
-    private EncodableHistogram getIntervalHistogram() {
-        EncodableHistogram histogram = null;
-        try {
-            histogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
-        } catch (RuntimeException ex) {
-            System.err.println("Log file parsing error at line number " + lineNumber +
-                    ": line appears to be malformed.");
-            if (config.verbose) {
-                throw ex;
-            } else {
-                System.exit(1);
-            }
-        }
-        lineNumber++;
-        return histogram;
-    }
-    
     @Override
     public void run() {
         PrintStream timeIntervalLog = null;
         PrintStream histogramPercentileLog = System.out;
         Double firstStartTime = 0.0;
         boolean timeIntervalLogLegendWritten = false;
+        int lineNumber = 0;
         try {
             if (config.outputFileName != null) {
                 try {
@@ -162,14 +145,14 @@ public class HistogramLogProcessor extends Thread {
             }
 
 
-            EncodableHistogram intervalHistogram = getIntervalHistogram();
+            EncodableHistogram intervalHistogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
 
 
             Histogram accumulatedRegularHistogram = null;
             DoubleHistogram accumulatedDoubleHistogram = null;
 
             if (intervalHistogram != null) {
-                
+
                 if (intervalHistogram instanceof DoubleHistogram) {
                     accumulatedDoubleHistogram = ((DoubleHistogram) intervalHistogram).copy();
                     accumulatedDoubleHistogram.reset();
@@ -218,12 +201,12 @@ public class HistogramLogProcessor extends Thread {
                     if (intervalHistogram instanceof DoubleHistogram) {
                         timeIntervalLog.format(Locale.US, logFormat,
                                 ((intervalHistogram.getEndTimeStamp() / 1000.0) - logReader.getStartTimeSec()),
-                                
+
                                 ((DoubleHistogram) intervalHistogram).getTotalCount(),
                                 ((DoubleHistogram) intervalHistogram).getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 ((DoubleHistogram) intervalHistogram).getValueAtPercentile(90.0) / config.outputValueUnitRatio,
                                 ((DoubleHistogram) intervalHistogram).getMaxValue() / config.outputValueUnitRatio,
-                                
+
                                 accumulatedDoubleHistogram.getTotalCount(),
                                 accumulatedDoubleHistogram.getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 accumulatedDoubleHistogram.getValueAtPercentile(90.0) / config.outputValueUnitRatio,
@@ -235,12 +218,12 @@ public class HistogramLogProcessor extends Thread {
                     } else {
                         timeIntervalLog.format(Locale.US, logFormat,
                                 ((intervalHistogram.getEndTimeStamp() / 1000.0) - logReader.getStartTimeSec()),
-                                
+
                                 ((Histogram) intervalHistogram).getTotalCount(),
                                 ((Histogram) intervalHistogram).getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 ((Histogram) intervalHistogram).getValueAtPercentile(90.0) / config.outputValueUnitRatio,
                                 ((Histogram) intervalHistogram).getMaxValue() / config.outputValueUnitRatio,
-                                
+
                                 accumulatedRegularHistogram.getTotalCount(),
                                 accumulatedRegularHistogram.getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 accumulatedRegularHistogram.getValueAtPercentile(90.0) / config.outputValueUnitRatio,
@@ -252,7 +235,19 @@ public class HistogramLogProcessor extends Thread {
                     }
                 }
 
-                intervalHistogram = getIntervalHistogram();
+                lineNumber++;
+
+                try {
+                    intervalHistogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
+                } catch (RuntimeException ex) {
+                    System.err.println("Log file parsing error at line number " + lineNumber +
+                            ": line appears to be malformed.");
+                    if (config.verbose) {
+                        throw ex;
+                    } else {
+                        System.exit(1);
+                    }
+                }
             }
 
             if (accumulatedDoubleHistogram != null) {
@@ -260,8 +255,8 @@ public class HistogramLogProcessor extends Thread {
                         config.percentilesOutputTicksPerHalf, config.outputValueUnitRatio, config.logFormatCsv);
             } else {
                 if (accumulatedRegularHistogram == null) {
-                    
-                    
+
+
                     accumulatedRegularHistogram = new Histogram(1000000L, 2);
                 }
                 accumulatedRegularHistogram.outputPercentileDistribution(histogramPercentileLog,
@@ -275,7 +270,7 @@ public class HistogramLogProcessor extends Thread {
         }
     }
 
-    
+
     public HistogramLogProcessor(final String[] args) throws FileNotFoundException {
         this.setName("HistogramLogProcessor");
         config = new HistogramLogProcessorConfiguration(args);
@@ -286,7 +281,7 @@ public class HistogramLogProcessor extends Thread {
         }
     }
 
-    
+
     public static void main(final String[] args)  {
         final HistogramLogProcessor processor;
         try {
@@ -413,14 +408,31 @@ public class HistogramLogProcessor extends Thread {
                 startTime, (new Date((long) (startTime * 1000))).toString());
     }
 
-    
+    int lineNumber = 0;
+
+    private EncodableHistogram getIntervalHistogram() {
+        EncodableHistogram histogram = null;
+        try {
+            histogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
+        } catch (RuntimeException ex) {
+            System.err.println("Log file parsing error at line number " + lineNumber +
+                    ": line appears to be malformed.");
+            if (config.verbose) {
+                throw ex;
+            } else {
+                System.exit(1);
+            }
+        }
+        lineNumber++;
+        return histogram;
+    }
+
     @Override
     public void run() {
         PrintStream timeIntervalLog = null;
         PrintStream histogramPercentileLog = System.out;
         Double firstStartTime = 0.0;
         boolean timeIntervalLogLegendWritten = false;
-        int lineNumber = 0;
         try {
             if (config.outputFileName != null) {
                 try {
@@ -446,14 +458,14 @@ public class HistogramLogProcessor extends Thread {
             }
 
 
-            EncodableHistogram intervalHistogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
+            EncodableHistogram intervalHistogram = getIntervalHistogram();
 
 
             Histogram accumulatedRegularHistogram = null;
             DoubleHistogram accumulatedDoubleHistogram = null;
 
             if (intervalHistogram != null) {
-                
+
                 if (intervalHistogram instanceof DoubleHistogram) {
                     accumulatedDoubleHistogram = ((DoubleHistogram) intervalHistogram).copy();
                     accumulatedDoubleHistogram.reset();
@@ -502,12 +514,12 @@ public class HistogramLogProcessor extends Thread {
                     if (intervalHistogram instanceof DoubleHistogram) {
                         timeIntervalLog.format(Locale.US, logFormat,
                                 ((intervalHistogram.getEndTimeStamp() / 1000.0) - logReader.getStartTimeSec()),
-                                
+
                                 ((DoubleHistogram) intervalHistogram).getTotalCount(),
                                 ((DoubleHistogram) intervalHistogram).getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 ((DoubleHistogram) intervalHistogram).getValueAtPercentile(90.0) / config.outputValueUnitRatio,
                                 ((DoubleHistogram) intervalHistogram).getMaxValue() / config.outputValueUnitRatio,
-                                
+
                                 accumulatedDoubleHistogram.getTotalCount(),
                                 accumulatedDoubleHistogram.getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 accumulatedDoubleHistogram.getValueAtPercentile(90.0) / config.outputValueUnitRatio,
@@ -519,12 +531,12 @@ public class HistogramLogProcessor extends Thread {
                     } else {
                         timeIntervalLog.format(Locale.US, logFormat,
                                 ((intervalHistogram.getEndTimeStamp() / 1000.0) - logReader.getStartTimeSec()),
-                                
+
                                 ((Histogram) intervalHistogram).getTotalCount(),
                                 ((Histogram) intervalHistogram).getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 ((Histogram) intervalHistogram).getValueAtPercentile(90.0) / config.outputValueUnitRatio,
                                 ((Histogram) intervalHistogram).getMaxValue() / config.outputValueUnitRatio,
-                                
+
                                 accumulatedRegularHistogram.getTotalCount(),
                                 accumulatedRegularHistogram.getValueAtPercentile(50.0) / config.outputValueUnitRatio,
                                 accumulatedRegularHistogram.getValueAtPercentile(90.0) / config.outputValueUnitRatio,
@@ -536,19 +548,7 @@ public class HistogramLogProcessor extends Thread {
                     }
                 }
 
-                lineNumber++;
-                
-                try {
-                    intervalHistogram = logReader.nextIntervalHistogram(config.rangeStartTimeSec, config.rangeEndTimeSec);
-                } catch (RuntimeException ex) {
-                    System.err.println("Log file parsing error at line number " + lineNumber +
-                            ": line appears to be malformed.");
-                    if (config.verbose) {
-                        throw ex;
-                    } else {
-                        System.exit(1);
-                    }
-                }
+                intervalHistogram = getIntervalHistogram();
             }
 
             if (accumulatedDoubleHistogram != null) {
@@ -556,8 +556,8 @@ public class HistogramLogProcessor extends Thread {
                         config.percentilesOutputTicksPerHalf, config.outputValueUnitRatio, config.logFormatCsv);
             } else {
                 if (accumulatedRegularHistogram == null) {
-                    
-                    
+
+
                     accumulatedRegularHistogram = new Histogram(1000000L, 2);
                 }
                 accumulatedRegularHistogram.outputPercentileDistribution(histogramPercentileLog,
@@ -571,7 +571,7 @@ public class HistogramLogProcessor extends Thread {
         }
     }
 
-    
+
     public HistogramLogProcessor(final String[] args) throws FileNotFoundException {
         this.setName("HistogramLogProcessor");
         config = new HistogramLogProcessorConfiguration(args);
@@ -582,7 +582,7 @@ public class HistogramLogProcessor extends Thread {
         }
     }
 
-    
+
     public static void main(final String[] args)  {
         final HistogramLogProcessor processor;
         try {

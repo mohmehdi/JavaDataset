@@ -40,7 +40,7 @@ import java.util.regex.Pattern;
 
 public abstract class AbstractDevice implements AndroidDevice {
   private static final Logger log = Logger.getLogger(AbstractDevice.class.getName());
-  public static final String WD_STATUS_ENDPOINT = "http:
+  public static final String WD_STATUS_ENDPOINT = "http://localhost:8080/wd/hub/status";
   protected String serial = null;
   protected String model = null;
   protected String apiTargetType = "android";
@@ -51,12 +51,12 @@ public abstract class AbstractDevice implements AndroidDevice {
   private static final Integer COMMAND_TIMEOUT = 20000;
   private boolean loggingEnabled = true;
 
-  
+
   public AbstractDevice(String serial) {
     this.serial = serial;
   }
 
-  
+
   public AbstractDevice(IDevice device) {
     this.device = device;
     this.serial = device.getSerialNumber();
@@ -104,12 +104,12 @@ public abstract class AbstractDevice implements AndroidDevice {
 
   @Override
   public void install(AndroidApp app) throws AndroidSdkException {
-    
+
     CommandLine command = adbCommand("install", "-r", app.getAbsolutePath());
 
     String out = executeCommandQuietly(command, COMMAND_TIMEOUT * 6);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -131,7 +131,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
     String out = executeCommandQuietly(command);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -159,7 +159,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
     executeCommandQuietly(command);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -189,7 +189,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
   private void freeSelendroidPort() {
     if (this.port == null) {
-      
+
       return;
     }
     CommandLine command = adbCommand("forward", "--remove", "tcp:" + this.port);
@@ -224,7 +224,7 @@ public abstract class AbstractDevice implements AndroidDevice {
       String genericMessage = "Could not start the app under test using instrumentation.";
       String detailedMessage;
       try {
-        
+
         String[] instrumentCmd =
             ObjectArrays.concat(new String[]{"shell", "am", "instrument", "-w"}, args, String.class);
         CommandLine getDetailedErrorCommand = adbCommand(instrumentCmd);
@@ -236,7 +236,7 @@ public abstract class AbstractDevice implements AndroidDevice {
           detailedMessage = genericMessage + " Read the details below:\n" + detailedResult;
         }
       } catch (Exception e) {
-        
+
         throw new SelendroidException(genericMessage, e);
       }
       throw new SelendroidException(detailedMessage);
@@ -373,7 +373,7 @@ public abstract class AbstractDevice implements AndroidDevice {
   }
 
   public boolean screenSizeMatches(String requestedScreenSize) {
-    
+
     if (requestedScreenSize == null || requestedScreenSize.isEmpty()) {
       return true;
     }
@@ -422,7 +422,7 @@ public abstract class AbstractDevice implements AndroidDevice {
       throw new AndroidDeviceException(e.getMessage());
     }
 
-    
+
     if (rawImage == null) return null;
 
     BufferedImage image =
@@ -436,10 +436,6 @@ public abstract class AbstractDevice implements AndroidDevice {
         index += IndexInc;
       }
     }
-    return toByteArray(image);
-  }
-
-  protected byte[] toByteArray(BufferedImage image) throws AndroidDeviceException {
     ByteArrayOutputStream stream = new ByteArrayOutputStream();
 
     try {
@@ -461,29 +457,30 @@ public abstract class AbstractDevice implements AndroidDevice {
       try {
         stream.close();
       } catch (IOException ioe) {
-        
+
       }
     }
+
     return raw;
   }
 
-  
+
   public void inputKeyevent(int value) {
     executeCommandQuietly(adbCommand("shell", "input", "keyevent", "" + value));
-    
+
     sleep(500);
   }
 
   public void invokeActivity(String activity) {
     executeCommandQuietly(adbCommand("shell", "am", "start", "-a", activity));
-    
+
     sleep(500);
   }
 
   public void restartADB() {
     executeCommandQuietly(adbCommand("kill-server"));
     sleep(500);
-    
+
     executeCommandQuietly(adbCommand("devices"));
   }
   
@@ -508,11 +505,11 @@ public abstract class AbstractDevice implements AndroidDevice {
     return runAdbCommand("shell echo $EXTERNAL_STORAGE");
   }
 
-  
+
   public String getCrashLog() {
     String crashLogFileName = ExternalStorageFile.APP_CRASH_LOG.toString();
 
-    
+
     String crashLogDirPath = getExternalStoragePath();
     if (!crashLogDirPath.endsWith("/")) {
       crashLogDirPath += "/";  
@@ -525,7 +522,7 @@ public abstract class AbstractDevice implements AndroidDevice {
     return "";
   }
 
-  
+
   public String listRunningThirdPartyProcesses() {
     String psOutput = runAdbCommand("shell ps");
     StringBuilder sb = new StringBuilder();
@@ -616,7 +613,7 @@ import java.util.regex.Pattern;
 
 public abstract class AbstractDevice implements AndroidDevice {
   private static final Logger log = Logger.getLogger(AbstractDevice.class.getName());
-  public static final String WD_STATUS_ENDPOINT = "http:
+  public static final String WD_STATUS_ENDPOINT = "http://localhost:8080/wd/hub/status";
   protected String serial = null;
   protected String model = null;
   protected String apiTargetType = "android";
@@ -627,12 +624,12 @@ public abstract class AbstractDevice implements AndroidDevice {
   private static final Integer COMMAND_TIMEOUT = 20000;
   private boolean loggingEnabled = true;
 
-  
+
   public AbstractDevice(String serial) {
     this.serial = serial;
   }
 
-  
+
   public AbstractDevice(IDevice device) {
     this.device = device;
     this.serial = device.getSerialNumber();
@@ -680,12 +677,12 @@ public abstract class AbstractDevice implements AndroidDevice {
 
   @Override
   public void install(AndroidApp app) throws AndroidSdkException {
-    
+
     CommandLine command = adbCommand("install", "-r", app.getAbsolutePath());
 
     String out = executeCommandQuietly(command, COMMAND_TIMEOUT * 6);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -707,7 +704,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
     String out = executeCommandQuietly(command);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -735,7 +732,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
     executeCommandQuietly(command);
     try {
-      
+
       Thread.sleep(1000);
     } catch (InterruptedException ie) {
       throw new RuntimeException(ie);
@@ -765,7 +762,7 @@ public abstract class AbstractDevice implements AndroidDevice {
 
   private void freeSelendroidPort() {
     if (this.port == null) {
-      
+
       return;
     }
     CommandLine command = adbCommand("forward", "--remove", "tcp:" + this.port);
@@ -800,7 +797,7 @@ public abstract class AbstractDevice implements AndroidDevice {
       String genericMessage = "Could not start the app under test using instrumentation.";
       String detailedMessage;
       try {
-        
+
         String[] instrumentCmd =
             ObjectArrays.concat(new String[]{"shell", "am", "instrument", "-w"}, args, String.class);
         CommandLine getDetailedErrorCommand = adbCommand(instrumentCmd);
@@ -812,7 +809,7 @@ public abstract class AbstractDevice implements AndroidDevice {
           detailedMessage = genericMessage + " Read the details below:\n" + detailedResult;
         }
       } catch (Exception e) {
-        
+
         throw new SelendroidException(genericMessage, e);
       }
       throw new SelendroidException(detailedMessage);
@@ -949,7 +946,7 @@ public abstract class AbstractDevice implements AndroidDevice {
   }
 
   public boolean screenSizeMatches(String requestedScreenSize) {
-    
+
     if (requestedScreenSize == null || requestedScreenSize.isEmpty()) {
       return true;
     }
@@ -998,7 +995,7 @@ public abstract class AbstractDevice implements AndroidDevice {
       throw new AndroidDeviceException(e.getMessage());
     }
 
-    
+
     if (rawImage == null) return null;
 
     BufferedImage image =
@@ -1012,6 +1009,10 @@ public abstract class AbstractDevice implements AndroidDevice {
         index += IndexInc;
       }
     }
+    return toByteArray(image);
+  }
+
+  protected byte[] toByteArray(BufferedImage image) throws AndroidDeviceException {
     ByteArrayOutputStream stream = new ByteArrayOutputStream();
 
     try {
@@ -1033,30 +1034,29 @@ public abstract class AbstractDevice implements AndroidDevice {
       try {
         stream.close();
       } catch (IOException ioe) {
-        
+
       }
     }
-
     return raw;
   }
 
-  
+
   public void inputKeyevent(int value) {
     executeCommandQuietly(adbCommand("shell", "input", "keyevent", "" + value));
-    
+
     sleep(500);
   }
 
   public void invokeActivity(String activity) {
     executeCommandQuietly(adbCommand("shell", "am", "start", "-a", activity));
-    
+
     sleep(500);
   }
 
   public void restartADB() {
     executeCommandQuietly(adbCommand("kill-server"));
     sleep(500);
-    
+
     executeCommandQuietly(adbCommand("devices"));
   }
   
@@ -1081,11 +1081,11 @@ public abstract class AbstractDevice implements AndroidDevice {
     return runAdbCommand("shell echo $EXTERNAL_STORAGE");
   }
 
-  
+
   public String getCrashLog() {
     String crashLogFileName = ExternalStorageFile.APP_CRASH_LOG.toString();
 
-    
+
     String crashLogDirPath = getExternalStoragePath();
     if (!crashLogDirPath.endsWith("/")) {
       crashLogDirPath += "/";  
@@ -1098,7 +1098,7 @@ public abstract class AbstractDevice implements AndroidDevice {
     return "";
   }
 
-  
+
   public String listRunningThirdPartyProcesses() {
     String psOutput = runAdbCommand("shell ps");
     StringBuilder sb = new StringBuilder();

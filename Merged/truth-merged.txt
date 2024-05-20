@@ -39,25 +39,25 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     super(failureStrategy, list);
   }
 
-  
+
   public final void isEmpty() {
     if (!Iterables.isEmpty(getSubject())) {
       fail("is empty");
     }
   }
 
-  
+
   public final void isNotEmpty() {
     if (Iterables.isEmpty(getSubject())) {
-      
-      
-      
-      
+
+
+
+
       fail("is not empty");
     }
   }
 
-  
+
   public final void hasSize(int expectedSize) {
     checkArgument(expectedSize >= 0, "expectedSize(%s) must be >= 0", expectedSize);
     int actualSize = Iterables.size(getSubject());
@@ -66,21 +66,21 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     }
   }
 
-  
+
   public final void contains(@Nullable Object element) {
     if (!Iterables.contains(getSubject(), element)) {
       failWithRawMessage("%s should have contained <%s>", getDisplaySubject(), element);
     }
   }
 
-  
+
   public final void doesNotContain(@Nullable Object element) {
     if (Iterables.contains(getSubject(), element)) {
       failWithRawMessage("%s should not have contained <%s>", getDisplaySubject(), element);
     }
   }
 
-  
+
   public final void containsNoDuplicates() {
     List<Entry<T>> duplicates = Lists.newArrayList();
     for (Multiset.Entry<T> entry : LinkedHashMultiset.create(getSubject()).entrySet()) {
@@ -93,13 +93,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     }
   }
 
-  
+
   public final void containsAnyOf(
       @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
     containsAny("contains any of", accumulate(first, second, rest));
   }
 
-  
+
   public final void containsAnyIn(Iterable<?> expected) {
     containsAny("contains any element in", expected);
   }
@@ -107,13 +107,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
   private void containsAny(String failVerb, Iterable<?> expected) {
     Collection<T> subject;
     if (getSubject() instanceof Collection) {
-      
-      
+
+
       subject = (Collection<T>) getSubject();
     } else {
-      
-      
-      
+
+
+
       subject = Lists.newArrayList(getSubject());
     }
 
@@ -125,13 +125,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     fail(failVerb, expected);
   }
 
-  
+
   public final Ordered containsAllOf(
       @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
     return containsAll("contains all of", accumulate(first, second, rest));
   }
 
-  
+
   public final Ordered containsAllIn(Iterable<?> expected) {
     return containsAll("contains all elements in", expected);
   }
@@ -144,13 +144,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     List<Object> actualNotInOrder = Lists.newArrayList();
 
     boolean ordered = true;
-    
+
     for (Object e : expected) {
       int index = actual.indexOf(e);
       if (index != -1) { 
-        
+
         moveElements(actual, actualNotInOrder, index);
-        
+
         actual.remove(0);
       } else { 
         if (actualNotInOrder.remove(e)) { 
@@ -160,21 +160,21 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
         }
       }
     }
-    
+
     if (!missing.isEmpty()) {
       failWithBadResults(failVerb, expected, "is missing", countDuplicates(missing));
     }
     return ordered ? IN_ORDER : new NotInOrder("contains all elements in order", expected);
   }
 
-  
+
   private static void moveElements(List<?> input, Collection<Object> output, int maxElements) {
     for (int i = 0; i < maxElements; i++) {
       output.add(input.remove(0));
     }
   }
 
-  
+
   public final Ordered containsExactly(@Nullable Object... varargs) {
     List<Object> expected = (varargs == null) ? Lists.newArrayList((Object) null) : asList(varargs);
     return containsExactly(
@@ -183,7 +183,7 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
         varargs != null && varargs.length == 1 && varargs[0] instanceof Iterable);
   }
 
-  
+
   public final Ordered containsExactlyElementsIn(Iterable<?> expected) {
     return containsExactly("contains exactly", expected, false);
   }
@@ -198,26 +198,26 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     Iterator<?> actualIter = getSubject().iterator();
     Iterator<?> requiredIter = required.iterator();
 
-    
+
     while (actualIter.hasNext() && requiredIter.hasNext()) {
       Object actualElement = actualIter.next();
       Object requiredElement = requiredIter.next();
 
-      
-      
-      
-      
+
+
+
+
       if (!Objects.equal(actualElement, requiredElement)) {
-        
+
         Collection<Object> missing = Lists.newArrayList();
         missing.add(requiredElement);
         Iterators.addAll(missing, requiredIter);
 
-        
+
         Collection<Object> extra = Lists.newArrayList();
 
-        
-        
+
+
         if (!missing.remove(actualElement)) {
           extra.add(actualElement);
         }
@@ -228,13 +228,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
           }
         }
 
-        
 
-        
-        
+
+
+
         if (!missing.isEmpty()) {
           if (!extra.isEmpty()) {
-            
+
             failWithRawMessage(
                 "Not true that %s %s <%s>. It is missing <%s> and has unexpected items <%s>%s",
                 getDisplaySubject(),
@@ -253,14 +253,14 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
               failVerb, required, "has unexpected items", countDuplicates(extra), failSuffix);
         }
 
-        
+
         return new NotInOrder("contains only these elements in order", required);
       }
     }
 
-    
-    
-    
+
+
+
     if (actualIter.hasNext()) {
       failWithBadResultsAndSuffix(
           failVerb,
@@ -277,12 +277,12 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
           failSuffix);
     }
 
-    
-    
+
+
     return IN_ORDER;
   }
 
-  
+
   protected final void failWithBadResultsAndSuffix(
       String verb, Object expected, String failVerb, Object actual, String suffix) {
     failWithRawMessage(
@@ -295,13 +295,13 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
         suffix);
   }
 
-  
+
   public final void containsNoneOf(
       @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
     containsNone("contains none of", accumulate(first, second, rest));
   }
 
-  
+
   public final void containsNoneIn(Iterable<?> excluded) {
     containsNone("contains no elements in", excluded);
   }
@@ -318,7 +318,7 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     }
   }
 
-  
+
   private class NotInOrder implements Ordered {
     private final String check;
     private final Iterable<?> required;
@@ -334,19 +334,19 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
     }
   }
 
-  
+
   private static final Ordered IN_ORDER =
       new Ordered() {
         @Override
         public void inOrder() {}
       };
 
-  
+
   public final void isStrictlyOrdered() {
     isStrictlyOrdered((Ordering) Ordering.natural());
   }
 
-  
+
   public final void isStrictlyOrdered(final Comparator<? super T> comparator) {
     checkNotNull(comparator);
     pairwiseCheck(
@@ -360,574 +360,14 @@ public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends It
         });
   }
 
-  
-  public final void isOrdered() {
-    isOrdered((Ordering) Ordering.natural());
-  }
 
-  
-  @Deprecated
-  public final void isPartiallyOrdered() {
-    isOrdered();
-  }
 
-  
-  public final void isOrdered(final Comparator<? super T> comparator) {
-    checkNotNull(comparator);
-    pairwiseCheck(
-        new PairwiseChecker<T>() {
-          @Override
-          public void check(T prev, T next) {
-            if (comparator.compare(prev, next) > 0) {
-              fail("is partially ordered", prev, next);
-            }
-          }
-        });
-  }
-
-  
-  @Deprecated
-  public final void isPartiallyOrdered(final Comparator<? super T> comparator) {
-    isOrdered(comparator);
-  }
-
-  private interface PairwiseChecker<T> {
-    void check(T prev, T next);
-  }
-
-  private void pairwiseCheck(PairwiseChecker<T> checker) {
-    Iterator<T> iterator = getSubject().iterator();
-    if (iterator.hasNext()) {
-      T prev = iterator.next();
-      while (iterator.hasNext()) {
-        T next = iterator.next();
-        checker.check(prev, next);
-        prev = next;
-      }
-    }
-  }
-}
-
-<code block>
-
-package com.google.common.truth;
-
-import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-
-
-
-@RunWith(JUnit4.class)
-public class ListTest {
-  @Test
-  public void listIsStrictlyOrdered() {
-    assertThat(Arrays.<Integer>asList()).isStrictlyOrdered();
-    assertThat(Arrays.asList(1)).isStrictlyOrdered();
-    assertThat(Arrays.asList(1, 2, 3, 4)).isStrictlyOrdered();
-  }
-
-  @Test
-  public void isStrictlyOrderedFailure() {
-    try {
-      assertThat(Arrays.asList(1, 2, 2, 4)).isStrictlyOrdered();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is strictly ordered");
-      assertThat(e.getMessage()).contains("<2> <2>");
-    }
-  }
-
-  @Test
-  public void isStrictlyOrderedWithNonComparableElementsFailure() {
-    try {
-      assertThat(Arrays.<Object>asList(1, "2", 3, "4")).isStrictlyOrdered();
-      fail("Should have thrown.");
-    } catch (ClassCastException e) {
-    }
-  }
-
-  @Test
-  public void listIsOrdered() {
-    assertThat(Arrays.<Integer>asList()).isOrdered();
-    assertThat(Arrays.asList(1)).isOrdered();
-    assertThat(Arrays.asList(1, 1, 2, 3, 3, 3, 4)).isOrdered();
-  }
-
-  @Test
-  public void isOrderedFailure() {
-    try {
-      assertThat(Arrays.asList(1, 3, 2, 4)).isOrdered();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is partially ordered");
-      assertThat(e.getMessage()).contains("<3> <2>");
-    }
-  }
-
-  @Test
-  public void isOrderedWithNonComparableElementsFailure() {
-    try {
-      assertThat(Arrays.<Object>asList(1, "2", 2, "3")).isOrdered();
-      fail("Should have thrown.");
-    } catch (ClassCastException e) {
-    }
-  }
-
-  @Test
-  public void listIsStrictlyOrderedWithComparator() {
-    assertThat(Arrays.<String>asList()).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    
-    assertThat(Arrays.asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-  }
-
-  @Test
-  public void listIsStrictlyOrderedWithComparatorFailure() {
-    try {
-      assertThat(Arrays.asList("1", "2", "2", "10")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is strictly ordered");
-      assertThat(e.getMessage()).contains("<2> <2>");
-    }
-  }
-
-  @Test
-  public void listIsOrderedWithComparator() {
-    assertThat(Arrays.<String>asList()).isOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1")).isOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1", "1", "2", "10", "10", "10", "20"))
-        .isOrdered(COMPARE_AS_DECIMAL);
-  }
-
-  @Test
-  public void listIsOrderedWithComparatorFailure() {
-    try {
-      assertThat(Arrays.asList("1", "10", "2", "20")).isOrdered(COMPARE_AS_DECIMAL);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is partially ordered");
-      assertThat(e.getMessage()).contains("<10> <2>");
-    }
-  }
-
-  private static final Comparator<String> COMPARE_AS_DECIMAL =
-      new Comparator<String>() {
-        @Override
-        public int compare(String a, String b) {
-          return Integer.valueOf(a).compareTo(Integer.valueOf(b));
-        }
-      };
-
-  private static class Foo {
-    private final int x;
-
-    private Foo(int x) {
-      this.x = x;
-    }
-  }
-
-  private static class Bar extends Foo {
-    private Bar(int x) {
-      super(x);
-    }
-  }
-
-  private static final Comparator<Foo> FOO_COMPARATOR =
-      new Comparator<Foo>() {
-        @Override
-        public int compare(Foo a, Foo b) {
-          return Integer.compare(a.x, b.x);
-        }
-      };
-
-  @Test
-  public void listOrderedByBaseClassComparator() {
-    List<Bar> targetList = Arrays.asList(new Bar(1), new Bar(2), new Bar(3));
-    assertThat(targetList).isOrdered(FOO_COMPARATOR);
-    assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
-  }
-}
-
-<code block>
-
-package com.google.common.truth;
-
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.truth.SubjectUtils.accumulate;
-import static com.google.common.truth.SubjectUtils.countDuplicates;
-import static java.util.Arrays.asList;
-
-import com.google.common.base.Objects;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Iterators;
-import com.google.common.collect.LinkedHashMultiset;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Multiset;
-import com.google.common.collect.Multiset.Entry;
-import com.google.common.collect.Ordering;
-import com.google.common.collect.Sets;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
-
-import javax.annotation.Nullable;
-
-
-public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends Iterable<T>>
-    extends Subject<S, C> {
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  static <T, C extends Iterable<T>>
-      IterableSubject<? extends IterableSubject<?, T, C>, T, C> create(
-          FailureStrategy failureStrategy, @Nullable Iterable<T> list) {
-    return new IterableSubject(failureStrategy, list);
-  }
-
-  protected IterableSubject(FailureStrategy failureStrategy, @Nullable C list) {
-    super(failureStrategy, list);
-  }
-
-  
-  public final void isEmpty() {
-    if (!Iterables.isEmpty(getSubject())) {
-      fail("is empty");
-    }
-  }
-
-  
-  public final void isNotEmpty() {
-    if (Iterables.isEmpty(getSubject())) {
-      
-      
-      
-      
-      fail("is not empty");
-    }
-  }
-
-  
-  public final void hasSize(int expectedSize) {
-    checkArgument(expectedSize >= 0, "expectedSize(%s) must be >= 0", expectedSize);
-    int actualSize = Iterables.size(getSubject());
-    if (actualSize != expectedSize) {
-      failWithBadResults("has a size of", expectedSize, "is", actualSize);
-    }
-  }
-
-  
-  public final void contains(@Nullable Object element) {
-    if (!Iterables.contains(getSubject(), element)) {
-      failWithRawMessage("%s should have contained <%s>", getDisplaySubject(), element);
-    }
-  }
-
-  
-  public final void doesNotContain(@Nullable Object element) {
-    if (Iterables.contains(getSubject(), element)) {
-      failWithRawMessage("%s should not have contained <%s>", getDisplaySubject(), element);
-    }
-  }
-
-  
-  public final void containsNoDuplicates() {
-    List<Entry<T>> duplicates = Lists.newArrayList();
-    for (Multiset.Entry<T> entry : LinkedHashMultiset.create(getSubject()).entrySet()) {
-      if (entry.getCount() > 1) {
-        duplicates.add(entry);
-      }
-    }
-    if (!duplicates.isEmpty()) {
-      failWithRawMessage("%s has the following duplicates: <%s>", getDisplaySubject(), duplicates);
-    }
-  }
-
-  
-  public final void containsAnyOf(
-      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
-    containsAny("contains any of", accumulate(first, second, rest));
-  }
-
-  
-  public final void containsAnyIn(Iterable<?> expected) {
-    containsAny("contains any element in", expected);
-  }
-
-  private void containsAny(String failVerb, Iterable<?> expected) {
-    Collection<T> subject;
-    if (getSubject() instanceof Collection) {
-      
-      
-      subject = (Collection<T>) getSubject();
-    } else {
-      
-      
-      
-      subject = Lists.newArrayList(getSubject());
-    }
-
-    for (Object item : expected) {
-      if (subject.contains(item)) {
-        return;
-      }
-    }
-    fail(failVerb, expected);
-  }
-
-  
-  public final Ordered containsAllOf(
-      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
-    return containsAll("contains all of", accumulate(first, second, rest));
-  }
-
-  
-  public final Ordered containsAllIn(Iterable<?> expected) {
-    return containsAll("contains all elements in", expected);
-  }
-
-  private Ordered containsAll(String failVerb, Iterable<?> expectedIterable) {
-    List<?> actual = Lists.newLinkedList(getSubject());
-    List<?> expected = Lists.newArrayList(expectedIterable);
-
-    List<Object> missing = Lists.newArrayList();
-    List<Object> actualNotInOrder = Lists.newArrayList();
-
-    boolean ordered = true;
-    
-    for (Object e : expected) {
-      int index = actual.indexOf(e);
-      if (index != -1) { 
-        
-        moveElements(actual, actualNotInOrder, index);
-        
-        actual.remove(0);
-      } else { 
-        if (actualNotInOrder.remove(e)) { 
-          ordered = false;
-        } else { 
-          missing.add(e);
-        }
-      }
-    }
-    
-    if (!missing.isEmpty()) {
-      failWithBadResults(failVerb, expected, "is missing", countDuplicates(missing));
-    }
-    return ordered ? IN_ORDER : new NotInOrder("contains all elements in order", expected);
-  }
-
-  
-  private static void moveElements(List<?> input, Collection<Object> output, int maxElements) {
-    for (int i = 0; i < maxElements; i++) {
-      output.add(input.remove(0));
-    }
-  }
-
-  
-  public final Ordered containsExactly(@Nullable Object... varargs) {
-    List<Object> expected = (varargs == null) ? Lists.newArrayList((Object) null) : asList(varargs);
-    return containsExactly(
-        "contains exactly",
-        expected,
-        varargs != null && varargs.length == 1 && varargs[0] instanceof Iterable);
-  }
-
-  
-  public final Ordered containsExactlyElementsIn(Iterable<?> expected) {
-    return containsExactly("contains exactly", expected, false);
-  }
-
-  private Ordered containsExactly(
-      String failVerb, Iterable<?> required, boolean addElementsInWarning) {
-    String failSuffix = addElementsInWarning
-        ? ". Passing an iterable to the varargs method containsExactly(Object...) is "
-            + "often not the correct thing to do. Did you mean to call "
-            + "containsExactlyElementsIn(Iterable) instead?"
-        : "";
-    Iterator<?> actualIter = getSubject().iterator();
-    Iterator<?> requiredIter = required.iterator();
-
-    
-    while (actualIter.hasNext() && requiredIter.hasNext()) {
-      Object actualElement = actualIter.next();
-      Object requiredElement = requiredIter.next();
-
-      
-      
-      
-      
-      if (!Objects.equal(actualElement, requiredElement)) {
-        
-        Collection<Object> missing = Lists.newArrayList();
-        missing.add(requiredElement);
-        Iterators.addAll(missing, requiredIter);
-
-        
-        Collection<Object> extra = Lists.newArrayList();
-
-        
-        
-        if (!missing.remove(actualElement)) {
-          extra.add(actualElement);
-        }
-        while (actualIter.hasNext()) {
-          Object item = actualIter.next();
-          if (!missing.remove(item)) {
-            extra.add(item);
-          }
-        }
-
-        
-
-        
-        
-        if (!missing.isEmpty()) {
-          if (!extra.isEmpty()) {
-            
-            failWithRawMessage(
-                "Not true that %s %s <%s>. It is missing <%s> and has unexpected items <%s>%s",
-                getDisplaySubject(),
-                failVerb,
-                required,
-                countDuplicates(missing),
-                countDuplicates(extra),
-                failSuffix);
-          } else {
-            failWithBadResultsAndSuffix(
-                failVerb, required, "is missing", countDuplicates(missing), failSuffix);
-          }
-        }
-        if (!extra.isEmpty()) {
-          failWithBadResultsAndSuffix(
-              failVerb, required, "has unexpected items", countDuplicates(extra), failSuffix);
-        }
-
-        
-        return new NotInOrder("contains only these elements in order", required);
-      }
-    }
-
-    
-    
-    
-    if (actualIter.hasNext()) {
-      failWithBadResultsAndSuffix(
-          failVerb,
-          required,
-          "has unexpected items",
-          countDuplicates(Lists.newArrayList(actualIter)),
-          failSuffix);
-    } else if (requiredIter.hasNext()) {
-      failWithBadResultsAndSuffix(
-          failVerb,
-          required,
-          "is missing",
-          countDuplicates(Lists.newArrayList(requiredIter)),
-          failSuffix);
-    }
-
-    
-    
-    return IN_ORDER;
-  }
-
-  
-  protected final void failWithBadResultsAndSuffix(
-      String verb, Object expected, String failVerb, Object actual, String suffix) {
-    failWithRawMessage(
-        "Not true that %s %s <%s>. It %s <%s>%s",
-        getDisplaySubject(),
-        verb,
-        expected,
-        failVerb,
-        ((actual == null) ? "null reference" : actual),
-        suffix);
-  }
-
-  
-  public final void containsNoneOf(
-      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
-    containsNone("contains none of", accumulate(first, second, rest));
-  }
-
-  
-  public final void containsNoneIn(Iterable<?> excluded) {
-    containsNone("contains no elements in", excluded);
-  }
-
-  private void containsNone(String failVerb, Iterable<?> excluded) {
-    Collection<Object> present = new ArrayList<Object>();
-    for (Object item : Sets.newLinkedHashSet(excluded)) {
-      if (Iterables.contains(getSubject(), item)) {
-        present.add(item);
-      }
-    }
-    if (!present.isEmpty()) {
-      failWithBadResults(failVerb, excluded, "contains", present);
-    }
-  }
-
-  
-  private class NotInOrder implements Ordered {
-    private final String check;
-    private final Iterable<?> required;
-
-    NotInOrder(String check, Iterable<?> required) {
-      this.check = check;
-      this.required = required;
-    }
-
-    @Override
-    public void inOrder() {
-      fail(check, required);
-    }
-  }
-
-  
-  private static final Ordered IN_ORDER =
-      new Ordered() {
-        @Override
-        public void inOrder() {}
-      };
-
-  
-  public final void isStrictlyOrdered() {
-    isStrictlyOrdered((Ordering) Ordering.natural());
-  }
-
-  
-  public final void isStrictlyOrdered(final Comparator<? super T> comparator) {
-    checkNotNull(comparator);
-    pairwiseCheck(
-        new PairwiseChecker<T>() {
-          @Override
-          public void check(T prev, T next) {
-            if (comparator.compare(prev, next) >= 0) {
-              fail("is strictly ordered", prev, next);
-            }
-          }
-        });
-  }
-
-  
-  
   public final void isPartiallyOrdered() {
     isPartiallyOrdered((Ordering) Ordering.natural());
   }
 
-  
-  
+
+
   public final void isPartiallyOrdered(final Comparator<? super T> comparator) {
     checkNotNull(comparator);
     pairwiseCheck(
@@ -1035,7 +475,7 @@ public class ListTest {
   public void listIsStrictlyOrderedWithComparator() {
     assertThat(Arrays.<String>asList()).isStrictlyOrdered(COMPARE_AS_DECIMAL);
     assertThat(Arrays.asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    
+
     assertThat(Arrays.asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
   }
 
@@ -1103,6 +543,1485 @@ public class ListTest {
   public void listOrderedByBaseClassComparator() {
     List<Bar> targetList = Arrays.asList(new Bar(1), new Bar(2), new Bar(3));
     assertThat(targetList).isPartiallyOrdered(FOO_COMPARATOR);
+    assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
+  }
+}
+
+<code block>
+
+package com.google.common.truth;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.truth.SubjectUtils.accumulate;
+import static com.google.common.truth.SubjectUtils.countDuplicates;
+import static java.util.Arrays.asList;
+
+import com.google.common.base.Objects;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.LinkedHashMultiset;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Multiset;
+import com.google.common.collect.Multiset.Entry;
+import com.google.common.collect.Ordering;
+import com.google.common.collect.Sets;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+
+import javax.annotation.Nullable;
+
+
+public class IterableSubject<S extends IterableSubject<S, T, C>, T, C extends Iterable<T>>
+    extends Subject<S, C> {
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  static <T, C extends Iterable<T>>
+      IterableSubject<? extends IterableSubject<?, T, C>, T, C> create(
+          FailureStrategy failureStrategy, @Nullable Iterable<T> list) {
+    return new IterableSubject(failureStrategy, list);
+  }
+
+  protected IterableSubject(FailureStrategy failureStrategy, @Nullable C list) {
+    super(failureStrategy, list);
+  }
+
+
+  public final void isEmpty() {
+    if (!Iterables.isEmpty(getSubject())) {
+      fail("is empty");
+    }
+  }
+
+
+  public final void isNotEmpty() {
+    if (Iterables.isEmpty(getSubject())) {
+
+
+
+
+      fail("is not empty");
+    }
+  }
+
+
+  public final void hasSize(int expectedSize) {
+    checkArgument(expectedSize >= 0, "expectedSize(%s) must be >= 0", expectedSize);
+    int actualSize = Iterables.size(getSubject());
+    if (actualSize != expectedSize) {
+      failWithBadResults("has a size of", expectedSize, "is", actualSize);
+    }
+  }
+
+
+  public final void contains(@Nullable Object element) {
+    if (!Iterables.contains(getSubject(), element)) {
+      failWithRawMessage("%s should have contained <%s>", getDisplaySubject(), element);
+    }
+  }
+
+
+  public final void doesNotContain(@Nullable Object element) {
+    if (Iterables.contains(getSubject(), element)) {
+      failWithRawMessage("%s should not have contained <%s>", getDisplaySubject(), element);
+    }
+  }
+
+
+  public final void containsNoDuplicates() {
+    List<Entry<T>> duplicates = Lists.newArrayList();
+    for (Multiset.Entry<T> entry : LinkedHashMultiset.create(getSubject()).entrySet()) {
+      if (entry.getCount() > 1) {
+        duplicates.add(entry);
+      }
+    }
+    if (!duplicates.isEmpty()) {
+      failWithRawMessage("%s has the following duplicates: <%s>", getDisplaySubject(), duplicates);
+    }
+  }
+
+
+  public final void containsAnyOf(
+      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
+    containsAny("contains any of", accumulate(first, second, rest));
+  }
+
+
+  public final void containsAnyIn(Iterable<?> expected) {
+    containsAny("contains any element in", expected);
+  }
+
+  private void containsAny(String failVerb, Iterable<?> expected) {
+    Collection<T> subject;
+    if (getSubject() instanceof Collection) {
+
+
+      subject = (Collection<T>) getSubject();
+    } else {
+
+
+
+      subject = Lists.newArrayList(getSubject());
+    }
+
+    for (Object item : expected) {
+      if (subject.contains(item)) {
+        return;
+      }
+    }
+    fail(failVerb, expected);
+  }
+
+
+  public final Ordered containsAllOf(
+      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
+    return containsAll("contains all of", accumulate(first, second, rest));
+  }
+
+
+  public final Ordered containsAllIn(Iterable<?> expected) {
+    return containsAll("contains all elements in", expected);
+  }
+
+  private Ordered containsAll(String failVerb, Iterable<?> expectedIterable) {
+    List<?> actual = Lists.newLinkedList(getSubject());
+    List<?> expected = Lists.newArrayList(expectedIterable);
+
+    List<Object> missing = Lists.newArrayList();
+    List<Object> actualNotInOrder = Lists.newArrayList();
+
+    boolean ordered = true;
+
+    for (Object e : expected) {
+      int index = actual.indexOf(e);
+      if (index != -1) { 
+
+        moveElements(actual, actualNotInOrder, index);
+
+        actual.remove(0);
+      } else { 
+        if (actualNotInOrder.remove(e)) { 
+          ordered = false;
+        } else { 
+          missing.add(e);
+        }
+      }
+    }
+
+    if (!missing.isEmpty()) {
+      failWithBadResults(failVerb, expected, "is missing", countDuplicates(missing));
+    }
+    return ordered ? IN_ORDER : new NotInOrder("contains all elements in order", expected);
+  }
+
+
+  private static void moveElements(List<?> input, Collection<Object> output, int maxElements) {
+    for (int i = 0; i < maxElements; i++) {
+      output.add(input.remove(0));
+    }
+  }
+
+
+  public final Ordered containsExactly(@Nullable Object... varargs) {
+    List<Object> expected = (varargs == null) ? Lists.newArrayList((Object) null) : asList(varargs);
+    return containsExactly(
+        "contains exactly",
+        expected,
+        varargs != null && varargs.length == 1 && varargs[0] instanceof Iterable);
+  }
+
+
+  public final Ordered containsExactlyElementsIn(Iterable<?> expected) {
+    return containsExactly("contains exactly", expected, false);
+  }
+
+  private Ordered containsExactly(
+      String failVerb, Iterable<?> required, boolean addElementsInWarning) {
+    String failSuffix = addElementsInWarning
+        ? ". Passing an iterable to the varargs method containsExactly(Object...) is "
+            + "often not the correct thing to do. Did you mean to call "
+            + "containsExactlyElementsIn(Iterable) instead?"
+        : "";
+    Iterator<?> actualIter = getSubject().iterator();
+    Iterator<?> requiredIter = required.iterator();
+
+
+    while (actualIter.hasNext() && requiredIter.hasNext()) {
+      Object actualElement = actualIter.next();
+      Object requiredElement = requiredIter.next();
+
+
+
+
+
+      if (!Objects.equal(actualElement, requiredElement)) {
+
+        Collection<Object> missing = Lists.newArrayList();
+        missing.add(requiredElement);
+        Iterators.addAll(missing, requiredIter);
+
+
+        Collection<Object> extra = Lists.newArrayList();
+
+
+
+        if (!missing.remove(actualElement)) {
+          extra.add(actualElement);
+        }
+        while (actualIter.hasNext()) {
+          Object item = actualIter.next();
+          if (!missing.remove(item)) {
+            extra.add(item);
+          }
+        }
+
+
+
+
+
+        if (!missing.isEmpty()) {
+          if (!extra.isEmpty()) {
+
+            failWithRawMessage(
+                "Not true that %s %s <%s>. It is missing <%s> and has unexpected items <%s>%s",
+                getDisplaySubject(),
+                failVerb,
+                required,
+                countDuplicates(missing),
+                countDuplicates(extra),
+                failSuffix);
+          } else {
+            failWithBadResultsAndSuffix(
+                failVerb, required, "is missing", countDuplicates(missing), failSuffix);
+          }
+        }
+        if (!extra.isEmpty()) {
+          failWithBadResultsAndSuffix(
+              failVerb, required, "has unexpected items", countDuplicates(extra), failSuffix);
+        }
+
+
+        return new NotInOrder("contains only these elements in order", required);
+      }
+    }
+
+
+
+
+    if (actualIter.hasNext()) {
+      failWithBadResultsAndSuffix(
+          failVerb,
+          required,
+          "has unexpected items",
+          countDuplicates(Lists.newArrayList(actualIter)),
+          failSuffix);
+    } else if (requiredIter.hasNext()) {
+      failWithBadResultsAndSuffix(
+          failVerb,
+          required,
+          "is missing",
+          countDuplicates(Lists.newArrayList(requiredIter)),
+          failSuffix);
+    }
+
+
+
+    return IN_ORDER;
+  }
+
+
+  protected final void failWithBadResultsAndSuffix(
+      String verb, Object expected, String failVerb, Object actual, String suffix) {
+    failWithRawMessage(
+        "Not true that %s %s <%s>. It %s <%s>%s",
+        getDisplaySubject(),
+        verb,
+        expected,
+        failVerb,
+        ((actual == null) ? "null reference" : actual),
+        suffix);
+  }
+
+
+  public final void containsNoneOf(
+      @Nullable Object first, @Nullable Object second, @Nullable Object... rest) {
+    containsNone("contains none of", accumulate(first, second, rest));
+  }
+
+
+  public final void containsNoneIn(Iterable<?> excluded) {
+    containsNone("contains no elements in", excluded);
+  }
+
+  private void containsNone(String failVerb, Iterable<?> excluded) {
+    Collection<Object> present = new ArrayList<Object>();
+    for (Object item : Sets.newLinkedHashSet(excluded)) {
+      if (Iterables.contains(getSubject(), item)) {
+        present.add(item);
+      }
+    }
+    if (!present.isEmpty()) {
+      failWithBadResults(failVerb, excluded, "contains", present);
+    }
+  }
+
+
+  private class NotInOrder implements Ordered {
+    private final String check;
+    private final Iterable<?> required;
+
+    NotInOrder(String check, Iterable<?> required) {
+      this.check = check;
+      this.required = required;
+    }
+
+    @Override
+    public void inOrder() {
+      fail(check, required);
+    }
+  }
+
+
+  private static final Ordered IN_ORDER =
+      new Ordered() {
+        @Override
+        public void inOrder() {}
+      };
+
+
+  public final void isStrictlyOrdered() {
+    isStrictlyOrdered((Ordering) Ordering.natural());
+  }
+
+
+  public final void isStrictlyOrdered(final Comparator<? super T> comparator) {
+    checkNotNull(comparator);
+    pairwiseCheck(
+        new PairwiseChecker<T>() {
+          @Override
+          public void check(T prev, T next) {
+            if (comparator.compare(prev, next) >= 0) {
+              fail("is strictly ordered", prev, next);
+            }
+          }
+        });
+  }
+
+
+  public final void isOrdered() {
+    isOrdered((Ordering) Ordering.natural());
+  }
+
+
+  @Deprecated
+  public final void isPartiallyOrdered() {
+    isOrdered();
+  }
+
+
+  public final void isOrdered(final Comparator<? super T> comparator) {
+    checkNotNull(comparator);
+    pairwiseCheck(
+        new PairwiseChecker<T>() {
+          @Override
+          public void check(T prev, T next) {
+            if (comparator.compare(prev, next) > 0) {
+              fail("is partially ordered", prev, next);
+            }
+          }
+        });
+  }
+
+
+  @Deprecated
+  public final void isPartiallyOrdered(final Comparator<? super T> comparator) {
+    isOrdered(comparator);
+  }
+
+  private interface PairwiseChecker<T> {
+    void check(T prev, T next);
+  }
+
+  private void pairwiseCheck(PairwiseChecker<T> checker) {
+    Iterator<T> iterator = getSubject().iterator();
+    if (iterator.hasNext()) {
+      T prev = iterator.next();
+      while (iterator.hasNext()) {
+        T next = iterator.next();
+        checker.check(prev, next);
+        prev = next;
+      }
+    }
+  }
+}
+
+<code block>
+
+package com.google.common.truth;
+
+import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.fail;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+
+
+
+@RunWith(JUnit4.class)
+public class ListTest {
+  @Test
+  public void listIsStrictlyOrdered() {
+    assertThat(Arrays.<Integer>asList()).isStrictlyOrdered();
+    assertThat(Arrays.asList(1)).isStrictlyOrdered();
+    assertThat(Arrays.asList(1, 2, 3, 4)).isStrictlyOrdered();
+  }
+
+  @Test
+  public void isStrictlyOrderedFailure() {
+    try {
+      assertThat(Arrays.asList(1, 2, 2, 4)).isStrictlyOrdered();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is strictly ordered");
+      assertThat(e.getMessage()).contains("<2> <2>");
+    }
+  }
+
+  @Test
+  public void isStrictlyOrderedWithNonComparableElementsFailure() {
+    try {
+      assertThat(Arrays.<Object>asList(1, "2", 3, "4")).isStrictlyOrdered();
+      fail("Should have thrown.");
+    } catch (ClassCastException e) {
+    }
+  }
+
+  @Test
+  public void listIsOrdered() {
+    assertThat(Arrays.<Integer>asList()).isOrdered();
+    assertThat(Arrays.asList(1)).isOrdered();
+    assertThat(Arrays.asList(1, 1, 2, 3, 3, 3, 4)).isOrdered();
+  }
+
+  @Test
+  public void isOrderedFailure() {
+    try {
+      assertThat(Arrays.asList(1, 3, 2, 4)).isOrdered();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is partially ordered");
+      assertThat(e.getMessage()).contains("<3> <2>");
+    }
+  }
+
+  @Test
+  public void isOrderedWithNonComparableElementsFailure() {
+    try {
+      assertThat(Arrays.<Object>asList(1, "2", 2, "3")).isOrdered();
+      fail("Should have thrown.");
+    } catch (ClassCastException e) {
+    }
+  }
+
+  @Test
+  public void listIsStrictlyOrderedWithComparator() {
+    assertThat(Arrays.<String>asList()).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+
+    assertThat(Arrays.asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+  }
+
+  @Test
+  public void listIsStrictlyOrderedWithComparatorFailure() {
+    try {
+      assertThat(Arrays.asList("1", "2", "2", "10")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is strictly ordered");
+      assertThat(e.getMessage()).contains("<2> <2>");
+    }
+  }
+
+  @Test
+  public void listIsOrderedWithComparator() {
+    assertThat(Arrays.<String>asList()).isOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1")).isOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1", "1", "2", "10", "10", "10", "20"))
+        .isOrdered(COMPARE_AS_DECIMAL);
+  }
+
+  @Test
+  public void listIsOrderedWithComparatorFailure() {
+    try {
+      assertThat(Arrays.asList("1", "10", "2", "20")).isOrdered(COMPARE_AS_DECIMAL);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is partially ordered");
+      assertThat(e.getMessage()).contains("<10> <2>");
+    }
+  }
+
+  private static final Comparator<String> COMPARE_AS_DECIMAL =
+      new Comparator<String>() {
+        @Override
+        public int compare(String a, String b) {
+          return Integer.valueOf(a).compareTo(Integer.valueOf(b));
+        }
+      };
+
+  private static class Foo {
+    private final int x;
+
+    private Foo(int x) {
+      this.x = x;
+    }
+  }
+
+  private static class Bar extends Foo {
+    private Bar(int x) {
+      super(x);
+    }
+  }
+
+  private static final Comparator<Foo> FOO_COMPARATOR =
+      new Comparator<Foo>() {
+        @Override
+        public int compare(Foo a, Foo b) {
+          return Integer.compare(a.x, b.x);
+        }
+      };
+
+  @Test
+  public void listOrderedByBaseClassComparator() {
+    List<Bar> targetList = Arrays.asList(new Bar(1), new Bar(2), new Bar(3));
+    assertThat(targetList).isOrdered(FOO_COMPARATOR);
+    assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
+  }
+}
+
+<code block>
+
+package com.google.common.truth;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.Arrays.asList;
+import static org.junit.Assert.fail;
+
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+
+
+@RunWith(JUnit4.class)
+public class IterableTest {
+  @Test
+  public void hasSize() {
+    assertThat(ImmutableList.of(1, 2, 3)).hasSize(3);
+  }
+
+  @Test
+  public void hasSizeZero() {
+    assertThat(ImmutableList.of()).hasSize(0);
+  }
+
+  @Test
+  public void hasSizeFails() {
+    try {
+      assertThat(ImmutableList.of(1, 2, 3)).hasSize(4);
+      fail();
+    } catch (AssertionError expected) {
+      assertThat(expected).hasMessage("Not true that <[1, 2, 3]> has a size of <4>. It is <3>");
+    }
+  }
+
+  @Test
+  public void hasSizeNegative() {
+    try {
+      assertThat(ImmutableList.of(1, 2, 3)).hasSize(-1);
+      fail();
+    } catch (IllegalArgumentException expected) {
+    }
+  }
+
+  @Test
+  public void iterableContainsItem() {
+    assertThat(iterable(1, 2, 3)).contains(1);
+  }
+
+  @Test
+  public void iterableContainsItemWithNull() {
+    assertThat(iterable(1, null, 3)).contains(null);
+  }
+
+  @Test
+  public void iterableContainsItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).contains(5);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("<[1, 2, 3]> should have contained <5>");
+    }
+  }
+
+  @Test
+  public void namedIterableContainsItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).named("numbers").contains(5);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("numbers (<[1, 2, 3]>) should have contained <5>");
+    }
+  }
+
+  @Test
+  public void failureMessageIterableContainsItemFailure() {
+    try {
+      assertWithMessage("custom msg").that(iterable(1, 2, 3)).contains(5);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("custom msg: <[1, 2, 3]> should have contained <5>");
+    }
+  }
+
+  @Test
+  public void iterableDoesntHaveItem() {
+    assertThat(iterable(1, null, 3)).doesNotContain(5);
+  }
+
+  @Test
+  public void iterableDoesntHaveItemWithNull() {
+    assertThat(iterable(1, 2, 3)).doesNotContain(null);
+  }
+
+  @Test
+  public void iterableDoesntHaveItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).doesNotContain(2);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("<[1, 2, 3]> should not have contained <2>");
+    }
+  }
+
+  @Test
+  public void doesNotContainDuplicates() {
+    assertThat(iterable(1, 2, 3)).containsNoDuplicates();
+  }
+
+  @Test
+  public void doesNotContainDuplicatesMixedTypes() {
+    List<Object> values = Lists.newArrayList();
+    values.add(1);
+    values.add(2);
+    values.add(2L);
+    values.add(3);
+    assertThat(values).containsNoDuplicates();
+  }
+
+  @Test
+  public void doesNotContainDuplicatesFailure() {
+    try {
+      assertThat(iterable(1, 2, 2, 3)).containsNoDuplicates();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("<[1, 2, 2, 3]> has the following duplicates: <[2 x 2]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAnyOf() {
+    assertThat(iterable(1, 2, 3)).containsAnyOf(1, 5);
+  }
+
+  @Test
+  public void iterableContainsAnyOfWithNull() {
+    assertThat(iterable(1, null, 3)).containsAnyOf(null, 5);
+  }
+
+  @Test
+  public void iterableContainsAnyOfWithNullInThirdAndFinalPosition() {
+    assertThat(iterable(1, null, 3)).containsAnyOf(4, 5, (Integer) null);
+  }
+
+  @Test
+  public void iterableContainsAnyOfFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsAnyOf(5, 6, 0);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("Not true that <[1, 2, 3]> contains any of <[5, 6, 0]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAnyOfWithOneShotIterable() {
+    final Iterator<Object> iterator = iterable(2, 1, "b").iterator();
+    Iterable<Object> iterable =
+        new Iterable<Object>() {
+          @Override
+          public Iterator<Object> iterator() {
+            return iterator;
+          }
+        };
+
+    assertThat(iterable).containsAnyOf(3, "a", 7, "b", 0);
+  }
+
+  @Test
+  public void iterableContainsAllOfWithMany() {
+    assertThat(iterable(1, 2, 3)).containsAllOf(1, 2);
+  }
+
+  @Test
+  public void iterableContainsAllOfWithDuplicates() {
+    assertThat(iterable(1, 2, 2, 2, 3)).containsAllOf(2, 2);
+  }
+
+  @Test
+  public void iterableContainsAllOfWithNull() {
+    assertThat(iterable(1, null, 3)).containsAllOf(3, (Integer) null);
+  }
+
+  @Test
+  public void iterableContainsAllOfWithNullAtThirdAndFinalPosition() {
+    assertThat(iterable(1, null, 3)).containsAllOf(1, 3, null);
+  }
+
+  @Test
+  public void iterableContainsAllOfFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsAllOf(1, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage("Not true that <[1, 2, 3]> contains all of <[1, 2, 4]>. It is missing <[4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAllOfWithExtras() {
+    try {
+      assertThat(iterable("y", "x")).containsAllOf("x", "y", "z");
+    } catch (AssertionError expected) {
+      assertThat(expected)
+          .hasMessage("Not true that <[y, x]> contains all of <[x, y, z]>. It is missing <[z]>");
+      return;
+    }
+    fail("Should have thrown.");
+  }
+
+  @Test
+  public void iterableContainsAllOfWithExtraCopiesOfOutOfOrder() {
+    try {
+      assertThat(iterable("y", "x")).containsAllOf("x", "y", "y");
+    } catch (AssertionError expected) {
+      assertThat(expected)
+          .hasMessage("Not true that <[y, x]> contains all of <[x, y, y]>. It is missing <[y]>");
+      return;
+    }
+    fail("Should have thrown.");
+  }
+
+  @Test
+  public void iterableContainsAllOfWithDuplicatesFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsAllOf(1, 2, 2, 2, 3, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains all of <[1, 2, 2, 2, 3, 4]>. "
+                  + "It is missing <[2 [2 copies], 4]>");
+    }
+  }
+
+
+  @Test
+  public void iterableContainsAllOfWithDuplicateMissingElements() {
+    try {
+      assertThat(iterable(1, 2)).containsAllOf(4, 4, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2]> contains all of <[4, 4, 4]>. It is missing <[4 [3 copies]]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAllOfWithNullFailure() {
+    try {
+      assertThat(iterable(1, null, 3)).containsAllOf(1, null, null, 3);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, null, 3]> contains all of <[1, null, null, 3]>. "
+                  + "It is missing <[null]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrder() {
+    assertThat(iterable(3, 2, 5)).containsAllOf(3, 2, 5).inOrder();
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrderWithGaps() {
+    assertThat(iterable(3, 2, 5)).containsAllOf(3, 5).inOrder();
+    assertThat(iterable(3, 2, 2, 4, 5)).containsAllOf(3, 2, 2, 5).inOrder();
+    assertThat(iterable(3, 1, 4, 1, 5)).containsAllOf(3, 1, 5).inOrder();
+    assertThat(iterable("x", "y", "y", "z")).containsAllOf("x", "y", "z").inOrder();
+    assertThat(iterable("x", "x", "y", "z")).containsAllOf("x", "y", "z").inOrder();
+    assertThat(iterable("z", "x", "y", "z")).containsAllOf("x", "y", "z").inOrder();
+    assertThat(iterable("x", "x", "y", "z", "x")).containsAllOf("x", "y", "z", "x").inOrder();
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrderWithNull() {
+    assertThat(iterable(3, null, 5)).containsAllOf(3, null, 5).inOrder();
+    assertThat(iterable(3, null, 7, 5)).containsAllOf(3, null, 5).inOrder();
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrderWithFailure() {
+    try {
+      assertThat(iterable(1, null, 3)).containsAllOf(null, 1, 3).inOrder();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage("Not true that <[1, null, 3]> contains all elements in order <[null, 1, 3]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrderWithOneShotIterable() {
+    final Iterable<Object> iterable = iterable(2, 1, null, 4, "a", 3, "b");
+    final Iterator<Object> iterator = iterable.iterator();
+    Iterable<Object> oneShot =
+        new Iterable<Object>() {
+          @Override
+          public Iterator<Object> iterator() {
+            return iterator;
+          }
+
+          @Override
+          public String toString() {
+            return Iterables.toString(iterable);
+          }
+        };
+
+    assertThat(oneShot).containsAllOf(1, null, 3).inOrder();
+  }
+
+  @Test
+  public void iterableContainsAllOfInOrderWithOneShotIterableWrongOrder() {
+    final Iterator<Object> iterator = iterable(2, 1, null, 4, "a", 3, "b").iterator();
+    Iterable<Object> iterable =
+        new Iterable<Object>() {
+          @Override
+          public Iterator<Object> iterator() {
+            return iterator;
+          }
+
+          @Override
+          public String toString() {
+            return "BadIterable";
+          }
+        };
+
+    try {
+      assertThat(iterable).containsAllOf(1, 3, null).inOrder();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage("Not true that <BadIterable> contains all elements in order <[1, 3, null]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsNoneOf() {
+    assertThat(iterable(1, 2, 3)).containsNoneOf(4, 5, 6);
+  }
+
+  @Test
+  public void iterableContainsNoneOfFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsNoneOf(1, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains none of <[1, 2, 4]>. It contains <[1, 2]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsNoneOfFailureWithDuplicateInSubject() {
+    try {
+      assertThat(iterable(1, 2, 2, 3)).containsNoneOf(1, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 2, 3]> contains none of <[1, 2, 4]>. It contains <[1, 2]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsNoneOfFailureWithDuplicateInExpected() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsNoneOf(1, 2, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains none of <[1, 2, 2, 4]>. It contains <[1, 2]>");
+    }
+  }
+
+  @Test
+  public void listContainsExactlyArray() {
+    String[] stringArray = {"a", "b"};
+    ImmutableList<String[]> iterable = ImmutableList.of(stringArray);
+
+    assertThat(iterable).containsExactly((Object) stringArray);
+  }
+
+  @Test
+  public void arrayContainsExactly() {
+    ImmutableList<String> iterable = ImmutableList.of("a", "b");
+    String[] array = {"a", "b"};
+    assertThat(iterable).containsExactly(array);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithMany() {
+    assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 3);
+  }
+
+  @Test
+  public void iterableContainsExactlyOutOfOrder() {
+    assertThat(iterable(1, 2, 3, 4)).containsExactly(3, 1, 4, 2);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicates() {
+    assertThat(iterable(1, 2, 2, 2, 3)).containsExactly(1, 2, 2, 2, 3);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicatesOutOfOrder() {
+    assertThat(iterable(1, 2, 2, 2, 3)).containsExactly(2, 1, 2, 3, 2);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithOnlyNull() {
+    Iterable<Object> actual = iterable((Object) null);
+    assertThat(actual).containsExactly(null);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithNullSecond() {
+    assertThat(iterable(1, null)).containsExactly(1, null);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithNullThird() {
+    assertThat(iterable(1, 2, null)).containsExactly(1, 2, null);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithNull() {
+    assertThat(iterable(1, null, 3)).containsExactly(1, null, 3);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithNullOutOfOrder() {
+    assertThat(iterable(1, null, 3)).containsExactly(1, 3, (Integer) null);
+  }
+
+  @Test
+  public void iterableContainsExactlyWithElementsThatThrowWhenYouCallHashCode() {
+    HashCodeThrower one = new HashCodeThrower();
+    HashCodeThrower two = new HashCodeThrower();
+
+    assertThat(iterable(one, two)).containsExactly(two, one);
+    assertThat(iterable(one, two)).containsExactly(one, two).inOrder();
+    assertThat(iterable(one, two)).containsExactlyElementsIn(iterable(two, one));
+    assertThat(iterable(one, two)).containsExactlyElementsIn(iterable(one, two)).inOrder();
+
+    try {
+      assertThat(iterable(one, two)).containsExactly(one);
+    } catch (AssertionError expected) {
+      assertThat(expected)
+          .hasMessage(
+              "Not true that <[HCT, HCT]> contains exactly <[HCT]>. "
+                  + "It has unexpected items <[HCT]>");
+      return;
+    }
+    fail();
+  }
+
+  private static class HashCodeThrower {
+    @Override
+    public boolean equals(Object other) {
+      return this == other;
+    }
+
+    @Override
+    public int hashCode() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String toString() {
+      return "HCT";
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyElementsInErrorMessageIsOrdered() {
+    try {
+      assertThat(asList("foo OR bar")).containsExactlyElementsIn(asList("foo", "bar"));
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[foo OR bar]> contains exactly <[foo, bar]>. "
+                  + "It is missing <[foo, bar]> and has unexpected items <[foo OR bar]>");
+      return;
+    }
+    fail("Should have thrown.");
+  }
+
+  @Test
+  public void iterableContainsExactlyMissingItemFailure() {
+    try {
+      assertThat(iterable(1, 2)).containsExactly(1, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage("Not true that <[1, 2]> contains exactly <[1, 2, 4]>. It is missing <[4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyUnexpectedItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsExactly(1, 2);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains exactly <[1, 2]>. It has unexpected items <[3]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicatesNotEnoughItemsFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 2, 2, 3);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 2, 2, 3]>. "
+                  + "It is missing <[2 [2 copies]]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicatesMissingItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 2, 2, 3, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 2, 2, 3, 4]>. "
+                  + "It is missing <[2 [2 copies], 4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicatesUnexpectedItemFailure() {
+    try {
+      assertThat(iterable(1, 2, 2, 2, 2, 3)).containsExactly(1, 2, 2, 3);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 2, 2, 2, 3]> contains exactly <[1, 2, 2, 3]>. "
+                  + "It has unexpected items <[2 [2 copies]]>");
+    }
+  }
+
+
+  @Test
+  public void iterableContainsExactlyWithDuplicateMissingElements() {
+    try {
+      assertThat(iterable()).containsExactly(4, 4, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[]> contains exactly <[4, 4, 4]>. It is missing <[4 [3 copies]]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithNullFailure() {
+    try {
+      assertThat(iterable(1, null, 3)).containsExactly(1, null, null, 3);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, null, 3]> contains exactly <[1, null, null, 3]>. "
+                  + "It is missing <[null]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithMissingAndExtraElements() {
+    try {
+      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 4]>. "
+                  + "It is missing <[4]> and has unexpected items <[3]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithDuplicateMissingAndExtraElements() {
+    try {
+      assertThat(iterable(1, 2, 3, 3)).containsExactly(1, 2, 4, 4);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3, 3]> contains exactly <[1, 2, 4, 4]>. "
+                  + "It is missing <[4 [2 copies]]> and has unexpected items <[3 [2 copies]]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithOneIterableGivesWarning() {
+    try {
+      assertThat(iterable(1, 2, 3, 4)).containsExactly(iterable(1, 2, 3, 4));
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3, 4]> contains exactly <[[1, 2, 3, 4]]>. "
+                  + "It is missing <[[1, 2, 3, 4]]> and has unexpected items <[1, 2, 3, 4]>. "
+                  + "Passing an iterable to the varargs method containsExactly(Object...) is "
+                  + "often not the correct thing to do. Did you mean to call "
+                  + "containsExactlyElementsIn(Iterable) instead?");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyElementsInWithOneIterableDoesNotGiveWarning() {
+    try {
+      assertThat(iterable(1, 2, 3, 4)).containsExactlyElementsIn(iterable(1, 2, 3));
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3, 4]> contains exactly <[1, 2, 3]>. "
+                  + "It has unexpected items <[4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithTwoIterableDoesNotGivesWarning() {
+    try {
+      assertThat(iterable(1, 2, 3, 4)).containsExactly(iterable(1, 2), iterable(3, 4));
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3, 4]> contains exactly <[[1, 2], [3, 4]]>. "
+                  + "It is missing <[[1, 2], [3, 4]]> and has unexpected items <[1, 2, 3, 4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyWithOneNonIterableDoesNotGiveWarning() {
+    try {
+      assertThat(iterable(1, 2, 3, 4)).containsExactly(1);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, 2, 3, 4]> contains exactly <[1]>. "
+                  + "It has unexpected items <[2, 3, 4]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyInOrder() {
+    assertThat(iterable(3, 2, 5)).containsExactly(3, 2, 5).inOrder();
+  }
+
+  @Test
+  public void iterableContainsExactlyInOrderWithNull() {
+    assertThat(iterable(3, null, 5)).containsExactly(3, null, 5).inOrder();
+  }
+
+  @Test
+  public void iterableContainsExactlyInOrderWithFailure() {
+    try {
+      assertThat(iterable(1, null, 3)).containsExactly(null, 1, 3).inOrder();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <[1, null, 3]> contains only these elements in order <[null, 1, 3]>");
+    }
+  }
+
+  @Test
+  public void iterableContainsExactlyInOrderWithOneShotIterable() {
+    final Iterator<Object> iterator = iterable(1, null, 3).iterator();
+    Iterable<Object> iterable =
+        new Iterable<Object>() {
+          @Override
+          public Iterator<Object> iterator() {
+            return iterator;
+          }
+        };
+    assertThat(iterable).containsExactly(1, null, 3).inOrder();
+  }
+
+  @Test
+  public void iterableContainsExactlyInOrderWithOneShotIterableWrongOrder() {
+    final Iterator<Object> iterator = iterable(1, null, 3).iterator();
+    Iterable<Object> iterable =
+        new Iterable<Object>() {
+          @Override
+          public Iterator<Object> iterator() {
+            return iterator;
+          }
+
+          @Override
+          public String toString() {
+            return "BadIterable";
+          }
+        };
+
+    try {
+      assertThat(iterable).containsExactly(1, 3, null).inOrder();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e)
+          .hasMessage(
+              "Not true that <BadIterable> contains only these elements in order <[1, 3, null]>");
+    }
+  }
+
+  @Test
+  public void iterableIsEmpty() {
+    assertThat(iterable()).isEmpty();
+  }
+
+  @Test
+  public void iterableIsEmptyWithFailure() {
+    try {
+      assertThat(iterable(1, null, 3)).isEmpty();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("Not true that <[1, null, 3]> is empty");
+    }
+  }
+
+  @Test
+  public void iterableIsNotEmpty() {
+    assertThat(iterable("foo")).isNotEmpty();
+  }
+
+  @Test
+  public void iterableIsNotEmptyWithFailure() {
+    try {
+      assertThat(iterable()).isNotEmpty();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("Not true that <[]> is not empty");
+    }
+  }
+
+
+  private static Iterable<Object> iterable(Object... items) {
+    return Arrays.asList(items);
+  }
+}
+
+<code block>
+
+package com.google.common.truth;
+
+import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.fail;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+
+
+
+@RunWith(JUnit4.class)
+public class ListTest {
+  @Test
+  public void listIsStrictlyOrdered() {
+    assertThat(Arrays.<Integer>asList()).isStrictlyOrdered();
+    assertThat(Arrays.asList(1)).isStrictlyOrdered();
+    assertThat(Arrays.asList(1, 2, 3, 4)).isStrictlyOrdered();
+  }
+
+  @Test
+  public void isStrictlyOrderedFailure() {
+    try {
+      assertThat(Arrays.asList(1, 2, 2, 4)).isStrictlyOrdered();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is strictly ordered");
+      assertThat(e.getMessage()).contains("<2> <2>");
+    }
+  }
+
+  @Test
+  public void isStrictlyOrderedWithNonComparableElementsFailure() {
+    try {
+      assertThat(Arrays.<Object>asList(1, "2", 3, "4")).isStrictlyOrdered();
+      fail("Should have thrown.");
+    } catch (ClassCastException e) {
+    }
+  }
+
+  @Test
+  public void listIsOrdered() {
+    assertThat(Arrays.<Integer>asList()).isOrdered();
+    assertThat(Arrays.asList(1)).isOrdered();
+    assertThat(Arrays.asList(1, 1, 2, 3, 3, 3, 4)).isOrdered();
+  }
+
+  @Test
+  public void isOrderedFailure() {
+    try {
+      assertThat(Arrays.asList(1, 3, 2, 4)).isOrdered();
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is ordered");
+      assertThat(e.getMessage()).contains("<3> <2>");
+    }
+  }
+
+  @Test
+  public void isOrderedWithNonComparableElementsFailure() {
+    try {
+      assertThat(Arrays.<Object>asList(1, "2", 2, "3")).isOrdered();
+      fail("Should have thrown.");
+    } catch (ClassCastException e) {
+    }
+  }
+
+  @Test
+  public void listIsStrictlyOrderedWithComparator() {
+    assertThat(Arrays.<String>asList()).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+
+    assertThat(Arrays.asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+  }
+
+  @Test
+  public void listIsStrictlyOrderedWithComparatorFailure() {
+    try {
+      assertThat(Arrays.asList("1", "2", "2", "10")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is strictly ordered");
+      assertThat(e.getMessage()).contains("<2> <2>");
+    }
+  }
+
+  @Test
+  public void listIsOrderedWithComparator() {
+    assertThat(Arrays.<String>asList()).isOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1")).isOrdered(COMPARE_AS_DECIMAL);
+    assertThat(Arrays.asList("1", "1", "2", "10", "10", "10", "20"))
+        .isOrdered(COMPARE_AS_DECIMAL);
+  }
+
+  @Test
+  public void listIsOrderedWithComparatorFailure() {
+    try {
+      assertThat(Arrays.asList("1", "10", "2", "20")).isOrdered(COMPARE_AS_DECIMAL);
+      fail("Should have thrown.");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains("is ordered");
+      assertThat(e.getMessage()).contains("<10> <2>");
+    }
+  }
+
+  private static final Comparator<String> COMPARE_AS_DECIMAL =
+      new Comparator<String>() {
+        @Override
+        public int compare(String a, String b) {
+          return Integer.valueOf(a).compareTo(Integer.valueOf(b));
+        }
+      };
+
+  private static class Foo {
+    private final int x;
+
+    private Foo(int x) {
+      this.x = x;
+    }
+  }
+
+  private static class Bar extends Foo {
+    private Bar(int x) {
+      super(x);
+    }
+  }
+
+  private static final Comparator<Foo> FOO_COMPARATOR =
+      new Comparator<Foo>() {
+        @Override
+        public int compare(Foo a, Foo b) {
+          return Integer.compare(a.x, b.x);
+        }
+      };
+
+  @Test
+  public void listOrderedByBaseClassComparator() {
+    List<Bar> targetList = Arrays.asList(new Bar(1), new Bar(2), new Bar(3));
+    assertThat(targetList).isOrdered(FOO_COMPARATOR);
     assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
   }
 }
@@ -1345,7 +2264,7 @@ public class IterableTest {
     }
   }
 
-  
+
   @Test
   public void iterableContainsAllOfWithDuplicateMissingElements() {
     try {
@@ -1494,7 +2413,7 @@ public class IterableTest {
   public void iterableContainsExactlyArray() {
     String[] stringArray = {"a", "b"};
     ImmutableList<String[]> iterable = ImmutableList.of(stringArray);
-    
+
     assertThat(iterable).containsExactly((Object) stringArray);
   }
 
@@ -1666,7 +2585,7 @@ public class IterableTest {
     }
   }
 
-  
+
   @Test
   public void iterableContainsExactlyWithDuplicateMissingElements() {
     try {
@@ -1923,7 +2842,7 @@ public class IterableTest {
     Iterable<String> emptyStrings = asList();
     assertThat(emptyStrings).isStrictlyOrdered(COMPARE_AS_DECIMAL);
     assertThat(asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    
+
     assertThat(asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
   }
 
@@ -1990,925 +2909,6 @@ public class IterableTest {
   @Test
   public void iterableOrderedByBaseClassComparator() {
     Iterable<Bar> targetList = asList(new Bar(1), new Bar(2), new Bar(3));
-    assertThat(targetList).isOrdered(FOO_COMPARATOR);
-    assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
-  }
-}
-
-<code block>
-
-package com.google.common.truth;
-
-import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
-import static java.util.Arrays.asList;
-import static org.junit.Assert.fail;
-
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-
-
-@RunWith(JUnit4.class)
-public class IterableTest {
-  @Test
-  public void hasSize() {
-    assertThat(ImmutableList.of(1, 2, 3)).hasSize(3);
-  }
-
-  @Test
-  public void hasSizeZero() {
-    assertThat(ImmutableList.of()).hasSize(0);
-  }
-
-  @Test
-  public void hasSizeFails() {
-    try {
-      assertThat(ImmutableList.of(1, 2, 3)).hasSize(4);
-      fail();
-    } catch (AssertionError expected) {
-      assertThat(expected).hasMessage("Not true that <[1, 2, 3]> has a size of <4>. It is <3>");
-    }
-  }
-
-  @Test
-  public void hasSizeNegative() {
-    try {
-      assertThat(ImmutableList.of(1, 2, 3)).hasSize(-1);
-      fail();
-    } catch (IllegalArgumentException expected) {
-    }
-  }
-
-  @Test
-  public void iterableContainsItem() {
-    assertThat(iterable(1, 2, 3)).contains(1);
-  }
-
-  @Test
-  public void iterableContainsItemWithNull() {
-    assertThat(iterable(1, null, 3)).contains(null);
-  }
-
-  @Test
-  public void iterableContainsItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).contains(5);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("<[1, 2, 3]> should have contained <5>");
-    }
-  }
-
-  @Test
-  public void namedIterableContainsItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).named("numbers").contains(5);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("numbers (<[1, 2, 3]>) should have contained <5>");
-    }
-  }
-
-  @Test
-  public void failureMessageIterableContainsItemFailure() {
-    try {
-      assertWithMessage("custom msg").that(iterable(1, 2, 3)).contains(5);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("custom msg: <[1, 2, 3]> should have contained <5>");
-    }
-  }
-
-  @Test
-  public void iterableDoesntHaveItem() {
-    assertThat(iterable(1, null, 3)).doesNotContain(5);
-  }
-
-  @Test
-  public void iterableDoesntHaveItemWithNull() {
-    assertThat(iterable(1, 2, 3)).doesNotContain(null);
-  }
-
-  @Test
-  public void iterableDoesntHaveItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).doesNotContain(2);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("<[1, 2, 3]> should not have contained <2>");
-    }
-  }
-
-  @Test
-  public void doesNotContainDuplicates() {
-    assertThat(iterable(1, 2, 3)).containsNoDuplicates();
-  }
-
-  @Test
-  public void doesNotContainDuplicatesMixedTypes() {
-    List<Object> values = Lists.newArrayList();
-    values.add(1);
-    values.add(2);
-    values.add(2L);
-    values.add(3);
-    assertThat(values).containsNoDuplicates();
-  }
-
-  @Test
-  public void doesNotContainDuplicatesFailure() {
-    try {
-      assertThat(iterable(1, 2, 2, 3)).containsNoDuplicates();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("<[1, 2, 2, 3]> has the following duplicates: <[2 x 2]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAnyOf() {
-    assertThat(iterable(1, 2, 3)).containsAnyOf(1, 5);
-  }
-
-  @Test
-  public void iterableContainsAnyOfWithNull() {
-    assertThat(iterable(1, null, 3)).containsAnyOf(null, 5);
-  }
-
-  @Test
-  public void iterableContainsAnyOfWithNullInThirdAndFinalPosition() {
-    assertThat(iterable(1, null, 3)).containsAnyOf(4, 5, (Integer) null);
-  }
-
-  @Test
-  public void iterableContainsAnyOfFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsAnyOf(5, 6, 0);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("Not true that <[1, 2, 3]> contains any of <[5, 6, 0]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAnyOfWithOneShotIterable() {
-    final Iterator<Object> iterator = iterable(2, 1, "b").iterator();
-    Iterable<Object> iterable =
-        new Iterable<Object>() {
-          @Override
-          public Iterator<Object> iterator() {
-            return iterator;
-          }
-        };
-
-    assertThat(iterable).containsAnyOf(3, "a", 7, "b", 0);
-  }
-
-  @Test
-  public void iterableContainsAllOfWithMany() {
-    assertThat(iterable(1, 2, 3)).containsAllOf(1, 2);
-  }
-
-  @Test
-  public void iterableContainsAllOfWithDuplicates() {
-    assertThat(iterable(1, 2, 2, 2, 3)).containsAllOf(2, 2);
-  }
-
-  @Test
-  public void iterableContainsAllOfWithNull() {
-    assertThat(iterable(1, null, 3)).containsAllOf(3, (Integer) null);
-  }
-
-  @Test
-  public void iterableContainsAllOfWithNullAtThirdAndFinalPosition() {
-    assertThat(iterable(1, null, 3)).containsAllOf(1, 3, null);
-  }
-
-  @Test
-  public void iterableContainsAllOfFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsAllOf(1, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage("Not true that <[1, 2, 3]> contains all of <[1, 2, 4]>. It is missing <[4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAllOfWithExtras() {
-    try {
-      assertThat(iterable("y", "x")).containsAllOf("x", "y", "z");
-    } catch (AssertionError expected) {
-      assertThat(expected)
-          .hasMessage("Not true that <[y, x]> contains all of <[x, y, z]>. It is missing <[z]>");
-      return;
-    }
-    fail("Should have thrown.");
-  }
-
-  @Test
-  public void iterableContainsAllOfWithExtraCopiesOfOutOfOrder() {
-    try {
-      assertThat(iterable("y", "x")).containsAllOf("x", "y", "y");
-    } catch (AssertionError expected) {
-      assertThat(expected)
-          .hasMessage("Not true that <[y, x]> contains all of <[x, y, y]>. It is missing <[y]>");
-      return;
-    }
-    fail("Should have thrown.");
-  }
-
-  @Test
-  public void iterableContainsAllOfWithDuplicatesFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsAllOf(1, 2, 2, 2, 3, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains all of <[1, 2, 2, 2, 3, 4]>. "
-                  + "It is missing <[2 [2 copies], 4]>");
-    }
-  }
-
-  
-  @Test
-  public void iterableContainsAllOfWithDuplicateMissingElements() {
-    try {
-      assertThat(iterable(1, 2)).containsAllOf(4, 4, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2]> contains all of <[4, 4, 4]>. It is missing <[4 [3 copies]]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAllOfWithNullFailure() {
-    try {
-      assertThat(iterable(1, null, 3)).containsAllOf(1, null, null, 3);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, null, 3]> contains all of <[1, null, null, 3]>. "
-                  + "It is missing <[null]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrder() {
-    assertThat(iterable(3, 2, 5)).containsAllOf(3, 2, 5).inOrder();
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrderWithGaps() {
-    assertThat(iterable(3, 2, 5)).containsAllOf(3, 5).inOrder();
-    assertThat(iterable(3, 2, 2, 4, 5)).containsAllOf(3, 2, 2, 5).inOrder();
-    assertThat(iterable(3, 1, 4, 1, 5)).containsAllOf(3, 1, 5).inOrder();
-    assertThat(iterable("x", "y", "y", "z")).containsAllOf("x", "y", "z").inOrder();
-    assertThat(iterable("x", "x", "y", "z")).containsAllOf("x", "y", "z").inOrder();
-    assertThat(iterable("z", "x", "y", "z")).containsAllOf("x", "y", "z").inOrder();
-    assertThat(iterable("x", "x", "y", "z", "x")).containsAllOf("x", "y", "z", "x").inOrder();
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrderWithNull() {
-    assertThat(iterable(3, null, 5)).containsAllOf(3, null, 5).inOrder();
-    assertThat(iterable(3, null, 7, 5)).containsAllOf(3, null, 5).inOrder();
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrderWithFailure() {
-    try {
-      assertThat(iterable(1, null, 3)).containsAllOf(null, 1, 3).inOrder();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage("Not true that <[1, null, 3]> contains all elements in order <[null, 1, 3]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrderWithOneShotIterable() {
-    final Iterable<Object> iterable = iterable(2, 1, null, 4, "a", 3, "b");
-    final Iterator<Object> iterator = iterable.iterator();
-    Iterable<Object> oneShot =
-        new Iterable<Object>() {
-          @Override
-          public Iterator<Object> iterator() {
-            return iterator;
-          }
-
-          @Override
-          public String toString() {
-            return Iterables.toString(iterable);
-          }
-        };
-
-    assertThat(oneShot).containsAllOf(1, null, 3).inOrder();
-  }
-
-  @Test
-  public void iterableContainsAllOfInOrderWithOneShotIterableWrongOrder() {
-    final Iterator<Object> iterator = iterable(2, 1, null, 4, "a", 3, "b").iterator();
-    Iterable<Object> iterable =
-        new Iterable<Object>() {
-          @Override
-          public Iterator<Object> iterator() {
-            return iterator;
-          }
-
-          @Override
-          public String toString() {
-            return "BadIterable";
-          }
-        };
-
-    try {
-      assertThat(iterable).containsAllOf(1, 3, null).inOrder();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage("Not true that <BadIterable> contains all elements in order <[1, 3, null]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsNoneOf() {
-    assertThat(iterable(1, 2, 3)).containsNoneOf(4, 5, 6);
-  }
-
-  @Test
-  public void iterableContainsNoneOfFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsNoneOf(1, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains none of <[1, 2, 4]>. It contains <[1, 2]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsNoneOfFailureWithDuplicateInSubject() {
-    try {
-      assertThat(iterable(1, 2, 2, 3)).containsNoneOf(1, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 2, 3]> contains none of <[1, 2, 4]>. It contains <[1, 2]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsNoneOfFailureWithDuplicateInExpected() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsNoneOf(1, 2, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains none of <[1, 2, 2, 4]>. It contains <[1, 2]>");
-    }
-  }
-
-  @Test
-  public void listContainsExactlyArray() {
-    String[] stringArray = {"a", "b"};
-    ImmutableList<String[]> iterable = ImmutableList.of(stringArray);
-    
-    assertThat(iterable).containsExactly((Object) stringArray);
-  }
-
-  @Test
-  public void arrayContainsExactly() {
-    ImmutableList<String> iterable = ImmutableList.of("a", "b");
-    String[] array = {"a", "b"};
-    assertThat(iterable).containsExactly(array);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithMany() {
-    assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 3);
-  }
-
-  @Test
-  public void iterableContainsExactlyOutOfOrder() {
-    assertThat(iterable(1, 2, 3, 4)).containsExactly(3, 1, 4, 2);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicates() {
-    assertThat(iterable(1, 2, 2, 2, 3)).containsExactly(1, 2, 2, 2, 3);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicatesOutOfOrder() {
-    assertThat(iterable(1, 2, 2, 2, 3)).containsExactly(2, 1, 2, 3, 2);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithOnlyNull() {
-    Iterable<Object> actual = iterable((Object) null);
-    assertThat(actual).containsExactly(null);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithNullSecond() {
-    assertThat(iterable(1, null)).containsExactly(1, null);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithNullThird() {
-    assertThat(iterable(1, 2, null)).containsExactly(1, 2, null);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithNull() {
-    assertThat(iterable(1, null, 3)).containsExactly(1, null, 3);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithNullOutOfOrder() {
-    assertThat(iterable(1, null, 3)).containsExactly(1, 3, (Integer) null);
-  }
-
-  @Test
-  public void iterableContainsExactlyWithElementsThatThrowWhenYouCallHashCode() {
-    HashCodeThrower one = new HashCodeThrower();
-    HashCodeThrower two = new HashCodeThrower();
-
-    assertThat(iterable(one, two)).containsExactly(two, one);
-    assertThat(iterable(one, two)).containsExactly(one, two).inOrder();
-    assertThat(iterable(one, two)).containsExactlyElementsIn(iterable(two, one));
-    assertThat(iterable(one, two)).containsExactlyElementsIn(iterable(one, two)).inOrder();
-
-    try {
-      assertThat(iterable(one, two)).containsExactly(one);
-    } catch (AssertionError expected) {
-      assertThat(expected)
-          .hasMessage(
-              "Not true that <[HCT, HCT]> contains exactly <[HCT]>. "
-                  + "It has unexpected items <[HCT]>");
-      return;
-    }
-    fail();
-  }
-
-  private static class HashCodeThrower {
-    @Override
-    public boolean equals(Object other) {
-      return this == other;
-    }
-
-    @Override
-    public int hashCode() {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public String toString() {
-      return "HCT";
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyElementsInErrorMessageIsOrdered() {
-    try {
-      assertThat(asList("foo OR bar")).containsExactlyElementsIn(asList("foo", "bar"));
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[foo OR bar]> contains exactly <[foo, bar]>. "
-                  + "It is missing <[foo, bar]> and has unexpected items <[foo OR bar]>");
-      return;
-    }
-    fail("Should have thrown.");
-  }
-
-  @Test
-  public void iterableContainsExactlyMissingItemFailure() {
-    try {
-      assertThat(iterable(1, 2)).containsExactly(1, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage("Not true that <[1, 2]> contains exactly <[1, 2, 4]>. It is missing <[4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyUnexpectedItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsExactly(1, 2);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains exactly <[1, 2]>. It has unexpected items <[3]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicatesNotEnoughItemsFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 2, 2, 3);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 2, 2, 3]>. "
-                  + "It is missing <[2 [2 copies]]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicatesMissingItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 2, 2, 3, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 2, 2, 3, 4]>. "
-                  + "It is missing <[2 [2 copies], 4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicatesUnexpectedItemFailure() {
-    try {
-      assertThat(iterable(1, 2, 2, 2, 2, 3)).containsExactly(1, 2, 2, 3);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 2, 2, 2, 3]> contains exactly <[1, 2, 2, 3]>. "
-                  + "It has unexpected items <[2 [2 copies]]>");
-    }
-  }
-
-  
-  @Test
-  public void iterableContainsExactlyWithDuplicateMissingElements() {
-    try {
-      assertThat(iterable()).containsExactly(4, 4, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[]> contains exactly <[4, 4, 4]>. It is missing <[4 [3 copies]]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithNullFailure() {
-    try {
-      assertThat(iterable(1, null, 3)).containsExactly(1, null, null, 3);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, null, 3]> contains exactly <[1, null, null, 3]>. "
-                  + "It is missing <[null]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithMissingAndExtraElements() {
-    try {
-      assertThat(iterable(1, 2, 3)).containsExactly(1, 2, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3]> contains exactly <[1, 2, 4]>. "
-                  + "It is missing <[4]> and has unexpected items <[3]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithDuplicateMissingAndExtraElements() {
-    try {
-      assertThat(iterable(1, 2, 3, 3)).containsExactly(1, 2, 4, 4);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3, 3]> contains exactly <[1, 2, 4, 4]>. "
-                  + "It is missing <[4 [2 copies]]> and has unexpected items <[3 [2 copies]]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithOneIterableGivesWarning() {
-    try {
-      assertThat(iterable(1, 2, 3, 4)).containsExactly(iterable(1, 2, 3, 4));
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3, 4]> contains exactly <[[1, 2, 3, 4]]>. "
-                  + "It is missing <[[1, 2, 3, 4]]> and has unexpected items <[1, 2, 3, 4]>. "
-                  + "Passing an iterable to the varargs method containsExactly(Object...) is "
-                  + "often not the correct thing to do. Did you mean to call "
-                  + "containsExactlyElementsIn(Iterable) instead?");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyElementsInWithOneIterableDoesNotGiveWarning() {
-    try {
-      assertThat(iterable(1, 2, 3, 4)).containsExactlyElementsIn(iterable(1, 2, 3));
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3, 4]> contains exactly <[1, 2, 3]>. "
-                  + "It has unexpected items <[4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithTwoIterableDoesNotGivesWarning() {
-    try {
-      assertThat(iterable(1, 2, 3, 4)).containsExactly(iterable(1, 2), iterable(3, 4));
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3, 4]> contains exactly <[[1, 2], [3, 4]]>. "
-                  + "It is missing <[[1, 2], [3, 4]]> and has unexpected items <[1, 2, 3, 4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyWithOneNonIterableDoesNotGiveWarning() {
-    try {
-      assertThat(iterable(1, 2, 3, 4)).containsExactly(1);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, 2, 3, 4]> contains exactly <[1]>. "
-                  + "It has unexpected items <[2, 3, 4]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyInOrder() {
-    assertThat(iterable(3, 2, 5)).containsExactly(3, 2, 5).inOrder();
-  }
-
-  @Test
-  public void iterableContainsExactlyInOrderWithNull() {
-    assertThat(iterable(3, null, 5)).containsExactly(3, null, 5).inOrder();
-  }
-
-  @Test
-  public void iterableContainsExactlyInOrderWithFailure() {
-    try {
-      assertThat(iterable(1, null, 3)).containsExactly(null, 1, 3).inOrder();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <[1, null, 3]> contains only these elements in order <[null, 1, 3]>");
-    }
-  }
-
-  @Test
-  public void iterableContainsExactlyInOrderWithOneShotIterable() {
-    final Iterator<Object> iterator = iterable(1, null, 3).iterator();
-    Iterable<Object> iterable =
-        new Iterable<Object>() {
-          @Override
-          public Iterator<Object> iterator() {
-            return iterator;
-          }
-        };
-    assertThat(iterable).containsExactly(1, null, 3).inOrder();
-  }
-
-  @Test
-  public void iterableContainsExactlyInOrderWithOneShotIterableWrongOrder() {
-    final Iterator<Object> iterator = iterable(1, null, 3).iterator();
-    Iterable<Object> iterable =
-        new Iterable<Object>() {
-          @Override
-          public Iterator<Object> iterator() {
-            return iterator;
-          }
-
-          @Override
-          public String toString() {
-            return "BadIterable";
-          }
-        };
-
-    try {
-      assertThat(iterable).containsExactly(1, 3, null).inOrder();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e)
-          .hasMessage(
-              "Not true that <BadIterable> contains only these elements in order <[1, 3, null]>");
-    }
-  }
-
-  @Test
-  public void iterableIsEmpty() {
-    assertThat(iterable()).isEmpty();
-  }
-
-  @Test
-  public void iterableIsEmptyWithFailure() {
-    try {
-      assertThat(iterable(1, null, 3)).isEmpty();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("Not true that <[1, null, 3]> is empty");
-    }
-  }
-
-  @Test
-  public void iterableIsNotEmpty() {
-    assertThat(iterable("foo")).isNotEmpty();
-  }
-
-  @Test
-  public void iterableIsNotEmptyWithFailure() {
-    try {
-      assertThat(iterable()).isNotEmpty();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e).hasMessage("Not true that <[]> is not empty");
-    }
-  }
-
-  
-  private static Iterable<Object> iterable(Object... items) {
-    return Arrays.asList(items);
-  }
-}
-
-<code block>
-
-package com.google.common.truth;
-
-import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-
-
-
-@RunWith(JUnit4.class)
-public class ListTest {
-  @Test
-  public void listIsStrictlyOrdered() {
-    assertThat(Arrays.<Integer>asList()).isStrictlyOrdered();
-    assertThat(Arrays.asList(1)).isStrictlyOrdered();
-    assertThat(Arrays.asList(1, 2, 3, 4)).isStrictlyOrdered();
-  }
-
-  @Test
-  public void isStrictlyOrderedFailure() {
-    try {
-      assertThat(Arrays.asList(1, 2, 2, 4)).isStrictlyOrdered();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is strictly ordered");
-      assertThat(e.getMessage()).contains("<2> <2>");
-    }
-  }
-
-  @Test
-  public void isStrictlyOrderedWithNonComparableElementsFailure() {
-    try {
-      assertThat(Arrays.<Object>asList(1, "2", 3, "4")).isStrictlyOrdered();
-      fail("Should have thrown.");
-    } catch (ClassCastException e) {
-    }
-  }
-
-  @Test
-  public void listIsOrdered() {
-    assertThat(Arrays.<Integer>asList()).isOrdered();
-    assertThat(Arrays.asList(1)).isOrdered();
-    assertThat(Arrays.asList(1, 1, 2, 3, 3, 3, 4)).isOrdered();
-  }
-
-  @Test
-  public void isOrderedFailure() {
-    try {
-      assertThat(Arrays.asList(1, 3, 2, 4)).isOrdered();
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is ordered");
-      assertThat(e.getMessage()).contains("<3> <2>");
-    }
-  }
-
-  @Test
-  public void isOrderedWithNonComparableElementsFailure() {
-    try {
-      assertThat(Arrays.<Object>asList(1, "2", 2, "3")).isOrdered();
-      fail("Should have thrown.");
-    } catch (ClassCastException e) {
-    }
-  }
-
-  @Test
-  public void listIsStrictlyOrderedWithComparator() {
-    assertThat(Arrays.<String>asList()).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-    
-    assertThat(Arrays.asList("1", "2", "10", "20")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-  }
-
-  @Test
-  public void listIsStrictlyOrderedWithComparatorFailure() {
-    try {
-      assertThat(Arrays.asList("1", "2", "2", "10")).isStrictlyOrdered(COMPARE_AS_DECIMAL);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is strictly ordered");
-      assertThat(e.getMessage()).contains("<2> <2>");
-    }
-  }
-
-  @Test
-  public void listIsOrderedWithComparator() {
-    assertThat(Arrays.<String>asList()).isOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1")).isOrdered(COMPARE_AS_DECIMAL);
-    assertThat(Arrays.asList("1", "1", "2", "10", "10", "10", "20"))
-        .isOrdered(COMPARE_AS_DECIMAL);
-  }
-
-  @Test
-  public void listIsOrderedWithComparatorFailure() {
-    try {
-      assertThat(Arrays.asList("1", "10", "2", "20")).isOrdered(COMPARE_AS_DECIMAL);
-      fail("Should have thrown.");
-    } catch (AssertionError e) {
-      assertThat(e.getMessage()).contains("is ordered");
-      assertThat(e.getMessage()).contains("<10> <2>");
-    }
-  }
-
-  private static final Comparator<String> COMPARE_AS_DECIMAL =
-      new Comparator<String>() {
-        @Override
-        public int compare(String a, String b) {
-          return Integer.valueOf(a).compareTo(Integer.valueOf(b));
-        }
-      };
-
-  private static class Foo {
-    private final int x;
-
-    private Foo(int x) {
-      this.x = x;
-    }
-  }
-
-  private static class Bar extends Foo {
-    private Bar(int x) {
-      super(x);
-    }
-  }
-
-  private static final Comparator<Foo> FOO_COMPARATOR =
-      new Comparator<Foo>() {
-        @Override
-        public int compare(Foo a, Foo b) {
-          return Integer.compare(a.x, b.x);
-        }
-      };
-
-  @Test
-  public void listOrderedByBaseClassComparator() {
-    List<Bar> targetList = Arrays.asList(new Bar(1), new Bar(2), new Bar(3));
     assertThat(targetList).isOrdered(FOO_COMPARATOR);
     assertThat(targetList).isStrictlyOrdered(FOO_COMPARATOR);
   }

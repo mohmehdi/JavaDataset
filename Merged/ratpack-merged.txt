@@ -84,6 +84,242 @@ public class DefaultResponseTransmitter implements ResponseTransmitter {
 
   @Override
   public void transmit(HttpResponseStatus responseStatus, ByteBuf body) {
+    transmit(responseStatus, new DefaultHttpContent(body));
+  }
+
+  private void transmit(final HttpResponseStatus responseStatus, Object body) {
+    ChannelFuture channelFuture = pre(responseStatus);
+    if (channelFuture == null) {
+      return;
+    }
+
+    channelFuture.addListener(future -> {
+      if (channel.isOpen()) {
+        channel.write(body);
+        post(responseStatus);
+      }
+    });
+  }
+
+  @Override
+  public void transmit(HttpResponseStatus status, Path file) {
+    String sizeString = responseHeaders.get(HttpHeaderConstants.CONTENT_LENGTH);
+    long size = sizeString == null ? 0 : Long.parseLong(sizeString);
+    boolean compress = !responseHeaders.contains(HttpHeaderConstants.CONTENT_ENCODING, HttpHeaderConstants.IDENTITY, true);
+
+    responseHeaders.set(HttpHeaderConstants.CONTENT_LENGTH, size);
+
+    if (!isSsl && !compress && file.getFileSystem().equals(FileSystems.getDefault())) {
+      execControl.blocking(() -> new FileInputStream(file.toFile()).getChannel()).then(fileChannel -> {
+        FileRegion defaultFileRegion = new DefaultFileRegion(fileChannel, 0, size);
+        transmit(status, defaultFileRegion);
+      });
+    } else {
+      execControl.blocking(() ->
+          Files.newByteChannel(file)
+      ).then(fileChannel ->
+          transmit(status, new HttpChunkedInput(new ChunkedNioStream(fileChannel)))
+      );
+    }
+  }
+
+  @Override
+  public Subscriber<ByteBuf> transmitter(HttpResponseStatus responseStatus) {
+    return new Subscriber<ByteBuf>() {
+      private Subscription subscription;
+      private final AtomicBoolean done = new AtomicBoolean();
+
+      private final ChannelFutureListener cancelOnFailure = future -> {
+        if (!done.get()) {
+          if (!future.isSuccess()) {
+            cancel();
+          }
+        }
+      };
+
+      private void cancel() {
+        if (done.compareAndSet(false, true)) {
+          subscription.cancel();
+          post(responseStatus);
+        }
+      }
+
+      @Override
+      public void onSubscribe(Subscription subscription) {
+        if (subscription == null) {
+          throw new NullPointerException("'subscription' is null");
+        }
+        if (this.subscription != null) {
+          subscription.cancel();
+          return;
+        }
+
+        this.subscription = subscription;
+
+        onWritabilityChanged = () -> {
+          if (channel.isWritable() && !done.get()) {
+            this.subscription.request(1);
+          }
+        };
+
+        ChannelFuture channelFuture = pre(responseStatus);
+        if (channelFuture == null) {
+          subscription.cancel();
+          notifyListeners(responseStatus, channel.close());
+        } else {
+          channelFuture.addListener(cancelOnFailure);
+          if (channel.isWritable()) {
+            this.subscription.request(1);
+          }
+        }
+      }
+
+      @Override
+      public void onNext(ByteBuf o) {
+        if (channel.isOpen()) {
+          channel.writeAndFlush(new DefaultHttpContent(o)).addListener(cancelOnFailure);
+          if (channel.isWritable()) {
+            subscription.request(1);
+          }
+        } else {
+          cancel();
+        }
+      }
+
+      @Override
+      public void onError(Throwable t) {
+        if (t == null) {
+          throw new NullPointerException("error is null");
+        }
+        LOGGER.warn("Exception thrown transmitting stream", t);
+        if (done.compareAndSet(false, true)) {
+          post(responseStatus);
+        }
+      }
+
+      @Override
+      public void onComplete() {
+        if (done.compareAndSet(false, true)) {
+          post(responseStatus);
+        }
+      }
+    };
+  }
+
+  private void post(HttpResponseStatus responseStatus) {
+    if (channel.isOpen()) {
+      ChannelFuture lastContentFuture = channel.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
+      if (!isKeepAlive) {
+        lastContentFuture.addListener(ChannelFutureListener.CLOSE);
+      }
+      notifyListeners(responseStatus, lastContentFuture);
+    } else {
+      notifyListeners(responseStatus, channel.newSucceededFuture());
+    }
+  }
+
+  private void notifyListeners(final HttpResponseStatus responseStatus, ChannelFuture future) {
+    if (requestOutcomeEventController.isHasListeners()) {
+      future.addListener(ignore -> {
+        SentResponse sentResponse = new DefaultSentResponse(new NettyHeadersBackedHeaders(responseHeaders), new DefaultStatus(responseStatus));
+        RequestOutcome requestOutcome = new DefaultRequestOutcome(ratpackRequest, sentResponse, stopTime);
+        requestOutcomeEventController.fire(requestOutcome);
+      });
+    }
+  }
+
+  public void writabilityChanged() {
+    onWritabilityChanged.run();
+  }
+}
+
+<code block>
+
+
+package ratpack.server.internal;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.*;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.stream.ChunkedNioStream;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import ratpack.event.internal.DefaultEventController;
+import ratpack.exec.ExecControl;
+import ratpack.file.internal.ResponseTransmitter;
+import ratpack.handling.DoubleTransmissionException;
+import ratpack.handling.RequestOutcome;
+import ratpack.handling.internal.DefaultRequestOutcome;
+import ratpack.http.Request;
+import ratpack.http.SentResponse;
+import ratpack.http.internal.*;
+
+import java.io.FileInputStream;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public class DefaultResponseTransmitter implements ResponseTransmitter {
+
+  private final static Logger LOGGER = LoggerFactory.getLogger(DefaultResponseTransmitter.class);
+  private static final Runnable NOOP_RUNNABLE = () -> {
+  };
+
+  private final AtomicBoolean transmitted;
+  private final ExecControl execControl;
+  private final Channel channel;
+  private final FullHttpRequest nettyRequest;
+  private final Request ratpackRequest;
+  private final HttpHeaders responseHeaders;
+  private final DefaultEventController<RequestOutcome> requestOutcomeEventController;
+  private final boolean isKeepAlive;
+  private final boolean isSsl;
+
+  private long stopTime;
+
+  private Runnable onWritabilityChanged = NOOP_RUNNABLE;
+
+  public DefaultResponseTransmitter(AtomicBoolean transmitted, ExecControl execControl, Channel channel, FullHttpRequest nettyRequest, Request ratpackRequest, HttpHeaders responseHeaders, DefaultEventController<RequestOutcome> requestOutcomeEventController) {
+    this.transmitted = transmitted;
+    this.execControl = execControl;
+    this.channel = channel;
+    this.nettyRequest = nettyRequest.retain();
+    this.ratpackRequest = ratpackRequest;
+    this.responseHeaders = responseHeaders;
+    this.requestOutcomeEventController = requestOutcomeEventController;
+    this.isKeepAlive = HttpHeaderUtil.isKeepAlive(nettyRequest);
+    this.isSsl = channel.pipeline().get(SslHandler.class) != null;
+  }
+
+  private ChannelFuture pre(HttpResponseStatus responseStatus) {
+    if (transmitted.compareAndSet(false, true)) {
+      stopTime = System.nanoTime();
+
+      HttpResponse headersResponse = new CustomHttpResponse(responseStatus, responseHeaders);
+      nettyRequest.release();
+
+      if (isKeepAlive) {
+        headersResponse.headers().set(HttpHeaderConstants.CONNECTION, HttpHeaderConstants.KEEP_ALIVE);
+      }
+
+      if (channel.isOpen()) {
+        return channel.writeAndFlush(headersResponse).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+      } else {
+        return null;
+      }
+    } else {
+      String msg = "attempt at double transmission for: " + ratpackRequest.getRawUri();
+      LOGGER.warn(msg, new DoubleTransmissionException(msg));
+      return null;
+    }
+  }
+
+  @Override
+  public void transmit(HttpResponseStatus responseStatus, ByteBuf body) {
     transmit(responseStatus, new DefaultHttpContent(body), true);
   }
 
@@ -242,242 +478,6 @@ public class DefaultResponseTransmitter implements ResponseTransmitter {
 
 <code block>
 
-
-package ratpack.server.internal;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.*;
-import io.netty.handler.codec.http.*;
-import io.netty.handler.ssl.SslHandler;
-import io.netty.handler.stream.ChunkedNioStream;
-import org.reactivestreams.Subscriber;
-import org.reactivestreams.Subscription;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import ratpack.event.internal.DefaultEventController;
-import ratpack.exec.ExecControl;
-import ratpack.file.internal.ResponseTransmitter;
-import ratpack.handling.DoubleTransmissionException;
-import ratpack.handling.RequestOutcome;
-import ratpack.handling.internal.DefaultRequestOutcome;
-import ratpack.http.Request;
-import ratpack.http.SentResponse;
-import ratpack.http.internal.*;
-
-import java.io.FileInputStream;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-public class DefaultResponseTransmitter implements ResponseTransmitter {
-
-  private final static Logger LOGGER = LoggerFactory.getLogger(DefaultResponseTransmitter.class);
-  private static final Runnable NOOP_RUNNABLE = () -> {
-  };
-
-  private final AtomicBoolean transmitted;
-  private final ExecControl execControl;
-  private final Channel channel;
-  private final FullHttpRequest nettyRequest;
-  private final Request ratpackRequest;
-  private final HttpHeaders responseHeaders;
-  private final DefaultEventController<RequestOutcome> requestOutcomeEventController;
-  private final boolean isKeepAlive;
-  private final boolean isSsl;
-
-  private long stopTime;
-
-  private Runnable onWritabilityChanged = NOOP_RUNNABLE;
-
-  public DefaultResponseTransmitter(AtomicBoolean transmitted, ExecControl execControl, Channel channel, FullHttpRequest nettyRequest, Request ratpackRequest, HttpHeaders responseHeaders, DefaultEventController<RequestOutcome> requestOutcomeEventController) {
-    this.transmitted = transmitted;
-    this.execControl = execControl;
-    this.channel = channel;
-    this.nettyRequest = nettyRequest.retain();
-    this.ratpackRequest = ratpackRequest;
-    this.responseHeaders = responseHeaders;
-    this.requestOutcomeEventController = requestOutcomeEventController;
-    this.isKeepAlive = HttpHeaderUtil.isKeepAlive(nettyRequest);
-    this.isSsl = channel.pipeline().get(SslHandler.class) != null;
-  }
-
-  private ChannelFuture pre(HttpResponseStatus responseStatus) {
-    if (transmitted.compareAndSet(false, true)) {
-      stopTime = System.nanoTime();
-
-      HttpResponse headersResponse = new CustomHttpResponse(responseStatus, responseHeaders);
-      nettyRequest.release();
-
-      if (isKeepAlive) {
-        headersResponse.headers().set(HttpHeaderConstants.CONNECTION, HttpHeaderConstants.KEEP_ALIVE);
-      }
-
-      if (channel.isOpen()) {
-        return channel.writeAndFlush(headersResponse).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
-      } else {
-        return null;
-      }
-    } else {
-      String msg = "attempt at double transmission for: " + ratpackRequest.getRawUri();
-      LOGGER.warn(msg, new DoubleTransmissionException(msg));
-      return null;
-    }
-  }
-
-  @Override
-  public void transmit(HttpResponseStatus responseStatus, ByteBuf body) {
-    transmit(responseStatus, new DefaultHttpContent(body));
-  }
-
-  private void transmit(final HttpResponseStatus responseStatus, Object body) {
-    ChannelFuture channelFuture = pre(responseStatus);
-    if (channelFuture == null) {
-      return;
-    }
-
-    channelFuture.addListener(future -> {
-      if (channel.isOpen()) {
-        channel.write(body);
-        post(responseStatus);
-      }
-    });
-  }
-
-  @Override
-  public void transmit(HttpResponseStatus status, Path file) {
-    String sizeString = responseHeaders.get(HttpHeaderConstants.CONTENT_LENGTH);
-    long size = sizeString == null ? 0 : Long.parseLong(sizeString);
-    boolean compress = !responseHeaders.contains(HttpHeaderConstants.CONTENT_ENCODING, HttpHeaderConstants.IDENTITY, true);
-
-    responseHeaders.set(HttpHeaderConstants.CONTENT_LENGTH, size);
-
-    if (!isSsl && !compress && file.getFileSystem().equals(FileSystems.getDefault())) {
-      execControl.blocking(() -> new FileInputStream(file.toFile()).getChannel()).then(fileChannel -> {
-        FileRegion defaultFileRegion = new DefaultFileRegion(fileChannel, 0, size);
-        transmit(status, defaultFileRegion);
-      });
-    } else {
-      execControl.blocking(() ->
-          Files.newByteChannel(file)
-      ).then(fileChannel ->
-          transmit(status, new HttpChunkedInput(new ChunkedNioStream(fileChannel)))
-      );
-    }
-  }
-
-  @Override
-  public Subscriber<ByteBuf> transmitter(HttpResponseStatus responseStatus) {
-    return new Subscriber<ByteBuf>() {
-      private Subscription subscription;
-      private final AtomicBoolean done = new AtomicBoolean();
-
-      private final ChannelFutureListener cancelOnFailure = future -> {
-        if (!done.get()) {
-          if (!future.isSuccess()) {
-            cancel();
-          }
-        }
-      };
-
-      private void cancel() {
-        if (done.compareAndSet(false, true)) {
-          subscription.cancel();
-          post(responseStatus);
-        }
-      }
-
-      @Override
-      public void onSubscribe(Subscription subscription) {
-        if (subscription == null) {
-          throw new NullPointerException("'subscription' is null");
-        }
-        if (this.subscription != null) {
-          subscription.cancel();
-          return;
-        }
-
-        this.subscription = subscription;
-
-        onWritabilityChanged = () -> {
-          if (channel.isWritable() && !done.get()) {
-            this.subscription.request(1);
-          }
-        };
-
-        ChannelFuture channelFuture = pre(responseStatus);
-        if (channelFuture == null) {
-          subscription.cancel();
-          notifyListeners(responseStatus, channel.close());
-        } else {
-          channelFuture.addListener(cancelOnFailure);
-          if (channel.isWritable()) {
-            this.subscription.request(1);
-          }
-        }
-      }
-
-      @Override
-      public void onNext(ByteBuf o) {
-        if (channel.isOpen()) {
-          channel.writeAndFlush(new DefaultHttpContent(o)).addListener(cancelOnFailure);
-          if (channel.isWritable()) {
-            subscription.request(1);
-          }
-        } else {
-          cancel();
-        }
-      }
-
-      @Override
-      public void onError(Throwable t) {
-        if (t == null) {
-          throw new NullPointerException("error is null");
-        }
-        LOGGER.warn("Exception thrown transmitting stream", t);
-        if (done.compareAndSet(false, true)) {
-          post(responseStatus);
-        }
-      }
-
-      @Override
-      public void onComplete() {
-        if (done.compareAndSet(false, true)) {
-          post(responseStatus);
-        }
-      }
-    };
-  }
-
-  private void post(HttpResponseStatus responseStatus) {
-    if (channel.isOpen()) {
-      ChannelFuture lastContentFuture = channel.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
-      if (!isKeepAlive) {
-        lastContentFuture.addListener(ChannelFutureListener.CLOSE);
-      }
-      notifyListeners(responseStatus, lastContentFuture);
-    } else {
-      notifyListeners(responseStatus, channel.newSucceededFuture());
-    }
-  }
-
-  private void notifyListeners(final HttpResponseStatus responseStatus, ChannelFuture future) {
-    if (requestOutcomeEventController.isHasListeners()) {
-      future.addListener(ignore -> {
-        SentResponse sentResponse = new DefaultSentResponse(new NettyHeadersBackedHeaders(responseHeaders), new DefaultStatus(responseStatus));
-        RequestOutcome requestOutcome = new DefaultRequestOutcome(ratpackRequest, sentResponse, stopTime);
-        requestOutcomeEventController.fire(requestOutcome);
-      });
-    }
-  }
-
-  public void writabilityChanged() {
-    onWritabilityChanged.run();
-  }
-}
-
-<code block>
-
 package ratpack.spring;
 
 import static org.junit.Assert.assertEquals;
@@ -505,7 +505,7 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
 import ratpack.func.Action;
 import ratpack.handling.Chain;
-import ratpack.jackson.guice.JacksonModule;
+import ratpack.jackson.JacksonModule;
 import ratpack.server.RatpackServer;
 import ratpack.spring.ApplicationTests.Application;
 import ratpack.spring.config.EnableRatpack;
@@ -525,12 +525,12 @@ public class ApplicationTests {
     assertEquals(
         "{" + System.getProperty("line.separator") + "  \"message\" : \"Hello World\""
             + System.getProperty("line.separator") + "}",
-        restTemplate.getForObject("http:
+        restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class));
   }
 
   @Test
   public void notFound() {
-    ResponseEntity<String> response = restTemplate.getForEntity("http:
+    ResponseEntity<String> response = restTemplate.getForEntity("http://localhost:" + server.getBindPort() + "/none",
         String.class);
     assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     assertNull("Default 404 handler has null body", response.getBody());
@@ -548,8 +548,8 @@ public class ApplicationTests {
     @Bean
     public Action<Chain> handler() {
       return chain -> chain.get(context -> {
-        
-        
+
+
         assertNotNull(context.get(MessageService.class));
         context.render(json(Collections.singletonMap("message", service.message())));
       });
@@ -580,7 +580,6 @@ public class ApplicationTests {
   }
 
 }
-
 <code block>
 
 package ratpack.spring;
@@ -615,7 +614,7 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import ratpack.func.Action;
 import ratpack.handling.Chain;
 import ratpack.handling.Handler;
-import ratpack.jackson.guice.JacksonModule;
+import ratpack.jackson.JacksonModule;
 import ratpack.server.RatpackServer;
 import ratpack.spring.JsonTests.Application;
 import ratpack.spring.config.EnableRatpack;
@@ -632,7 +631,7 @@ public class JsonTests {
 
   @Test
   public void get() {
-    String body = restTemplate.getForObject("http:
+    String body = restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class);
     assertTrue("Wrong body" + body, body.contains("{"));
     assertFalse("Wrong body" + body, body.toLowerCase().contains("<html"));
   }
@@ -643,10 +642,10 @@ public class JsonTests {
     headers.setContentType(MediaType.APPLICATION_JSON);
     HttpEntity<Map<String, String>> entity = new HttpEntity<Map<String, String>>(Collections.singletonMap("foo", "bar"),
         headers);
-    ResponseEntity<String> result = restTemplate.postForEntity("http:
+    ResponseEntity<String> result = restTemplate.postForEntity("http://localhost:" + server.getBindPort(), entity,
         String.class);
     assertEquals(HttpStatus.OK, result.getStatusCode());
-    String body = restTemplate.getForObject("http:
+    String body = restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class);
     assertTrue("Wrong body" + body, body.contains("foo"));
   }
 
@@ -665,12 +664,12 @@ public class JsonTests {
     @SuppressWarnings("unchecked")
     @Bean
     public Handler handler() {
-      
+
       return context -> context.byMethod(spec -> spec.get(() -> context.render(json(map))).post(() -> {
         map.putAll(context.parse(fromJson(Map.class)));
         context.render(json(map));
       }));
-      
+
     }
 
     @Bean
@@ -685,13 +684,6 @@ public class JsonTests {
   }
 
 }
-
-<code block>
-
-
-
-package ratpack.jackson;
-
 <code block>
 
 
@@ -703,7 +695,7 @@ import ratpack.func.Pair;
 import ratpack.groovy.template.MarkupTemplateModule;
 import ratpack.groovy.template.TextTemplateModule;
 import ratpack.guice.Guice;
-import ratpack.jackson.guice.JacksonModule;
+import ratpack.jackson.JacksonModule;
 import ratpack.newrelic.NewRelicModule;
 import ratpack.registry.Registry;
 import ratpack.rx.RxRatpack;
@@ -754,10 +746,10 @@ public class SiteMain {
 
             c
               .all(ctx -> {
-                
+
                 String host = ctx.getRequest().getHeaders().get("host");
                 if (host != null && (host.endsWith("ratpack-framework.org") || host.equals("www.ratpack.io"))) {
-                  ctx.redirect(301, "http:
+                  ctx.redirect(301, "http://ratpack.io" + ctx.getRequest().getRawUri());
                   return;
                 }
 
@@ -870,12 +862,11 @@ public class SiteMain {
 
 
 
-package ratpack.jackson.guice;
-
+package ratpack.jackson;
 <code block>
 
 
-package ratpack.jackson.guice;
+package ratpack.jackson;
 
 import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import com.fasterxml.jackson.core.util.MinimalPrettyPrinter;
@@ -886,9 +877,6 @@ import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.collect.Lists;
 import com.google.inject.Provides;
 import ratpack.guice.ConfigurableModule;
-import ratpack.jackson.Jackson;
-import ratpack.jackson.JsonParseOpts;
-import ratpack.jackson.JsonRender;
 import ratpack.parse.NullParseOpts;
 import ratpack.parse.Parser;
 import ratpack.render.Renderer;
@@ -902,40 +890,40 @@ import java.util.function.Consumer;
 @SuppressWarnings("UnusedDeclaration")
 public class JacksonModule extends ConfigurableModule<JacksonModule.Config> {
 
-  
+
   public static class Config {
     private boolean prettyPrint = true;
     private List<Module> modules = Lists.newLinkedList();
     private List<Consumer<? super ObjectMapper>> configurers = Lists.newLinkedList();
 
-    
+
     public boolean isPrettyPrint() {
       return prettyPrint;
     }
 
-    
+
     public Config prettyPrint(boolean prettyPrint) {
       this.prettyPrint = prettyPrint;
       return this;
     }
 
-    
+
     public List<Module> getModules() {
       return modules;
     }
 
-    
+
     public Config modules(Iterable<Module> modules) {
       this.modules.addAll(Lists.newArrayList(modules));
       return this;
     }
 
-    
+
     public Config modules(Module... modules) {
       return modules(Arrays.asList(modules));
     }
 
-    
+
     public Config withMapper(Consumer<? super ObjectMapper> configurer) {
       this.configurers.add(configurer);
       return this;
@@ -1018,7 +1006,7 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
 import ratpack.func.Action;
 import ratpack.handling.Chain;
-import ratpack.jackson.JacksonModule;
+import ratpack.jackson.guice.JacksonModule;
 import ratpack.server.RatpackServer;
 import ratpack.spring.ApplicationTests.Application;
 import ratpack.spring.config.EnableRatpack;
@@ -1038,12 +1026,12 @@ public class ApplicationTests {
     assertEquals(
         "{" + System.getProperty("line.separator") + "  \"message\" : \"Hello World\""
             + System.getProperty("line.separator") + "}",
-        restTemplate.getForObject("http:
+        restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class));
   }
 
   @Test
   public void notFound() {
-    ResponseEntity<String> response = restTemplate.getForEntity("http:
+    ResponseEntity<String> response = restTemplate.getForEntity("http://localhost:" + server.getBindPort() + "/none",
         String.class);
     assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     assertNull("Default 404 handler has null body", response.getBody());
@@ -1061,8 +1049,8 @@ public class ApplicationTests {
     @Bean
     public Action<Chain> handler() {
       return chain -> chain.get(context -> {
-        
-        
+
+
         assertNotNull(context.get(MessageService.class));
         context.render(json(Collections.singletonMap("message", service.message())));
       });
@@ -1093,6 +1081,7 @@ public class ApplicationTests {
   }
 
 }
+
 <code block>
 
 package ratpack.spring;
@@ -1127,7 +1116,7 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import ratpack.func.Action;
 import ratpack.handling.Chain;
 import ratpack.handling.Handler;
-import ratpack.jackson.JacksonModule;
+import ratpack.jackson.guice.JacksonModule;
 import ratpack.server.RatpackServer;
 import ratpack.spring.JsonTests.Application;
 import ratpack.spring.config.EnableRatpack;
@@ -1144,7 +1133,7 @@ public class JsonTests {
 
   @Test
   public void get() {
-    String body = restTemplate.getForObject("http:
+    String body = restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class);
     assertTrue("Wrong body" + body, body.contains("{"));
     assertFalse("Wrong body" + body, body.toLowerCase().contains("<html"));
   }
@@ -1155,10 +1144,10 @@ public class JsonTests {
     headers.setContentType(MediaType.APPLICATION_JSON);
     HttpEntity<Map<String, String>> entity = new HttpEntity<Map<String, String>>(Collections.singletonMap("foo", "bar"),
         headers);
-    ResponseEntity<String> result = restTemplate.postForEntity("http:
+    ResponseEntity<String> result = restTemplate.postForEntity("http://localhost:" + server.getBindPort(), entity,
         String.class);
     assertEquals(HttpStatus.OK, result.getStatusCode());
-    String body = restTemplate.getForObject("http:
+    String body = restTemplate.getForObject("http://localhost:" + server.getBindPort(), String.class);
     assertTrue("Wrong body" + body, body.contains("foo"));
   }
 
@@ -1177,12 +1166,12 @@ public class JsonTests {
     @SuppressWarnings("unchecked")
     @Bean
     public Handler handler() {
-      
+
       return context -> context.byMethod(spec -> spec.get(() -> context.render(json(map))).post(() -> {
         map.putAll(context.parse(fromJson(Map.class)));
         context.render(json(map));
       }));
-      
+
     }
 
     @Bean
@@ -1197,6 +1186,7 @@ public class JsonTests {
   }
 
 }
+
 <code block>
 
 
@@ -1208,7 +1198,7 @@ import ratpack.func.Pair;
 import ratpack.groovy.template.MarkupTemplateModule;
 import ratpack.groovy.template.TextTemplateModule;
 import ratpack.guice.Guice;
-import ratpack.jackson.JacksonModule;
+import ratpack.jackson.guice.JacksonModule;
 import ratpack.newrelic.NewRelicModule;
 import ratpack.registry.Registry;
 import ratpack.rx.RxRatpack;
@@ -1259,10 +1249,10 @@ public class SiteMain {
 
             c
               .all(ctx -> {
-                
+
                 String host = ctx.getRequest().getHeaders().get("host");
                 if (host != null && (host.endsWith("ratpack-framework.org") || host.equals("www.ratpack.io"))) {
-                  ctx.redirect(301, "http:
+                  ctx.redirect(301, "http://ratpack.io" + ctx.getRequest().getRawUri());
                   return;
                 }
 
@@ -1376,10 +1366,17 @@ public class SiteMain {
 
 
 package ratpack.jackson;
+
 <code block>
 
 
-package ratpack.jackson;
+
+package ratpack.jackson.guice;
+
+<code block>
+
+
+package ratpack.jackson.guice;
 
 import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import com.fasterxml.jackson.core.util.MinimalPrettyPrinter;
@@ -1390,6 +1387,9 @@ import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.collect.Lists;
 import com.google.inject.Provides;
 import ratpack.guice.ConfigurableModule;
+import ratpack.jackson.Jackson;
+import ratpack.jackson.JsonParseOpts;
+import ratpack.jackson.JsonRender;
 import ratpack.parse.NullParseOpts;
 import ratpack.parse.Parser;
 import ratpack.render.Renderer;
@@ -1403,40 +1403,40 @@ import java.util.function.Consumer;
 @SuppressWarnings("UnusedDeclaration")
 public class JacksonModule extends ConfigurableModule<JacksonModule.Config> {
 
-  
+
   public static class Config {
     private boolean prettyPrint = true;
     private List<Module> modules = Lists.newLinkedList();
     private List<Consumer<? super ObjectMapper>> configurers = Lists.newLinkedList();
 
-    
+
     public boolean isPrettyPrint() {
       return prettyPrint;
     }
 
-    
+
     public Config prettyPrint(boolean prettyPrint) {
       this.prettyPrint = prettyPrint;
       return this;
     }
 
-    
+
     public List<Module> getModules() {
       return modules;
     }
 
-    
+
     public Config modules(Iterable<Module> modules) {
       this.modules.addAll(Lists.newArrayList(modules));
       return this;
     }
 
-    
+
     public Config modules(Module... modules) {
       return modules(Arrays.asList(modules));
     }
 
-    
+
     public Config withMapper(Consumer<? super ObjectMapper> configurer) {
       this.configurers.add(configurer);
       return this;

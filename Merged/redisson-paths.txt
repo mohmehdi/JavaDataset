@@ -1,8 +1,8 @@
-Java_Projects/redisson/redisson-186357ac/curr/src/main/java/com/lambdaworks/redis/protocol/CommandHandler.java
-Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/ConnectionManager.java
-Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/MasterSlaveConnectionManager.java
-Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/SentinelConnectionManager.java
 Java_Projects/redisson/redisson-186357ac/prev/src/main/java/com/lambdaworks/redis/protocol/CommandHandler.java
-Java_Projects/redisson/redisson-186357ac/prev/src/main/java/org/redisson/connection/ConnectionManager.java
 Java_Projects/redisson/redisson-186357ac/prev/src/main/java/org/redisson/connection/MasterSlaveConnectionManager.java
 Java_Projects/redisson/redisson-186357ac/prev/src/main/java/org/redisson/connection/SentinelConnectionManager.java
+Java_Projects/redisson/redisson-186357ac/prev/src/main/java/org/redisson/connection/ConnectionManager.java
+Java_Projects/redisson/redisson-186357ac/curr/src/main/java/com/lambdaworks/redis/protocol/CommandHandler.java
+Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/MasterSlaveConnectionManager.java
+Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/SentinelConnectionManager.java
+Java_Projects/redisson/redisson-186357ac/curr/src/main/java/org/redisson/connection/ConnectionManager.java

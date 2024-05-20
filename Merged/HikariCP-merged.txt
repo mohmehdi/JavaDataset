@@ -1,720 +1,39 @@
 
+package com.zaxxer.hikari.util;
 
-package com.zaxxer.hikari.pool;
-
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_IN_USE;
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_NOT_IN_USE;
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_REMOVED;
-import static com.zaxxer.hikari.util.UtilityElf.createThreadPoolExecutor;
-import static com.zaxxer.hikari.util.UtilityElf.getTransactionIsolation;
-import static com.zaxxer.hikari.util.UtilityElf.quietlySleep;
-
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.SQLTimeoutException;
-import java.sql.Statement;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.FutureTask;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
-import javax.sql.DataSource;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.codahale.metrics.MetricRegistry;
-import com.codahale.metrics.health.HealthCheckRegistry;
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.metrics.CodaHaleMetricsTracker;
-import com.zaxxer.hikari.metrics.CodahaleHealthChecker;
-import com.zaxxer.hikari.metrics.MetricsTracker;
-import com.zaxxer.hikari.metrics.MetricsTracker.MetricsContext;
-import com.zaxxer.hikari.metrics.PoolStats;
-import com.zaxxer.hikari.proxy.ConnectionProxy;
-import com.zaxxer.hikari.proxy.IHikariConnectionProxy;
-import com.zaxxer.hikari.proxy.ProxyFactory;
-import com.zaxxer.hikari.util.ClockSource;
-import com.zaxxer.hikari.util.ConcurrentBag;
-import com.zaxxer.hikari.util.ConcurrentBag.IBagStateListener;
-import com.zaxxer.hikari.util.DefaultThreadFactory;
-import com.zaxxer.hikari.util.PropertyElf;
 
 
-public class HikariPool implements HikariPoolMBean, IBagStateListener
+public interface IBagStateListener
 {
-   private final Logger LOGGER = LoggerFactory.getLogger(getClass());
-
-   private static final ClockSource clockSource = ClockSource.INSTANCE;
-
-   private final long ALIVE_BYPASS_WINDOW_MS = Long.getLong("com.zaxxer.hikari.aliveBypassWindow", TimeUnit.SECONDS.toMillis(1));
-   private final long HOUSEKEEPING_PERIOD_MS = Long.getLong("com.zaxxer.hikari.housekeeping.periodMs", TimeUnit.SECONDS.toMillis(30));
-
-   private static final int POOL_NORMAL = 0;
-   private static final int POOL_SUSPENDED = 1;
-   private static final int POOL_SHUTDOWN = 2;
-
-   public int transactionIsolation;
-   public final String catalog;
-   public final boolean isReadOnly;
-   public final boolean isAutoCommit;
-   public final PoolElf poolUtils;
-
-   final HikariConfig config;
-   final ConcurrentBag<PoolBagEntry> connectionBag;
-   final ScheduledThreadPoolExecutor houseKeepingExecutorService;
-
-   private final AtomicInteger totalConnections;
-   private final ThreadPoolExecutor addConnectionExecutor;
-   private final ThreadPoolExecutor closeConnectionExecutor;
-
-   private final boolean isUseJdbc4Validation;
-   private final boolean isIsolateInternalQueries;
-
-   private volatile int poolState;
-   private long connectionTimeout;
-   
-   private final LeakTask leakTask;
-   private final DataSource dataSource;
-   private final SuspendResumeLock suspendResumeLock;
-   private final AtomicReference<Throwable> lastConnectionFailure;
-
-   private volatile MetricsTracker metricsTracker;
-   private boolean isRecordMetrics;
-
-   
-   public HikariPool(HikariConfig config)
-    {
-      this.config = config;
-
-      this.poolUtils = new PoolElf(config);
-      this.dataSource = poolUtils.initializeDataSource();
-
-      this.connectionBag = new ConcurrentBag<>(this);
-      this.totalConnections = new AtomicInteger();
-      this.connectionTimeout = config.getConnectionTimeout();
-      this.lastConnectionFailure = new AtomicReference<>();
-
-      this.catalog = config.getCatalog();
-      this.isReadOnly = config.isReadOnly();
-      this.isAutoCommit = config.isAutoCommit();
-      this.isUseJdbc4Validation = config.getConnectionTestQuery() == null;
-      this.isIsolateInternalQueries = config.isIsolateInternalQueries();
-      this.transactionIsolation = getTransactionIsolation(config.getTransactionIsolation());
-
-      this.suspendResumeLock = config.isAllowPoolSuspension() ? new SuspendResumeLock(true) : SuspendResumeLock.FAUX_LOCK;
-
-      setMetricRegistry(config.getMetricRegistry());
-      setHealthCheckRegistry(config.getHealthCheckRegistry());
-
-      this.addConnectionExecutor = createThreadPoolExecutor(config.getMaximumPoolSize(), "Hikari connection filler (pool " + config.getPoolName() + ")", config.getThreadFactory(), new ThreadPoolExecutor.DiscardPolicy());
-      this.closeConnectionExecutor = createThreadPoolExecutor(4, "Hikari connection closer (pool " + config.getPoolName() + ")", config.getThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
-
-      if (config.getScheduledExecutorService() == null) {
-         ThreadFactory threadFactory = config.getThreadFactory() != null ? config.getThreadFactory() : new DefaultThreadFactory("Hikari housekeeper (pool " + config.getPoolName() + ")", true);
-         this.houseKeepingExecutorService = new ScheduledThreadPoolExecutor(1, threadFactory, new ThreadPoolExecutor.DiscardPolicy());
-         this.houseKeepingExecutorService.scheduleAtFixedRate(new HouseKeeper(), HOUSEKEEPING_PERIOD_MS, HOUSEKEEPING_PERIOD_MS, TimeUnit.MILLISECONDS);
-         this.houseKeepingExecutorService.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-         this.houseKeepingExecutorService.setRemoveOnCancelPolicy(true);
-      }
-      else {
-         this.houseKeepingExecutorService = config.getScheduledExecutorService();
-      }
-      this.leakTask = (config.getLeakDetectionThreshold() == 0) ? LeakTask.NO_LEAK : new LeakTask(config.getLeakDetectionThreshold(), houseKeepingExecutorService);
-
-      poolUtils.registerMBeans(this);
-
-      PropertyElf.flushCaches();  
-
-      initializeConnections();
-   }
-
-   
-   public final Connection getConnection() throws SQLException
-   {
-      return getConnection(connectionTimeout);
-   }
-
-   
-   public final Connection getConnection(final long hardTimeout) throws SQLException
-   {
-      suspendResumeLock.acquire();
-      final long startTime = clockSource.currentTime();
-
-      try {
-         long timeout = hardTimeout;
-         final MetricsContext metricsContext = (isRecordMetrics ? metricsTracker.recordConnectionRequest() : MetricsTracker.NO_CONTEXT);
-         do {
-            final PoolBagEntry bagEntry = connectionBag.borrow(timeout, TimeUnit.MILLISECONDS);
-            if (bagEntry == null) {
-               break; 
-            }
-
-            final long now = clockSource.currentTime();
-            if (bagEntry.evicted || (clockSource.elapsedMillis(bagEntry.lastAccess, now) > ALIVE_BYPASS_WINDOW_MS && !isConnectionAlive(bagEntry.connection))) {
-               closeConnection(bagEntry, "(connection evicted or dead)"); 
-               timeout = hardTimeout - clockSource.elapsedMillis(startTime, now);
-            }
-            else {
-               metricsContext.setConnectionLastOpen(bagEntry, now);
-               metricsContext.stop();
-               return ProxyFactory.getProxyConnection(bagEntry, leakTask.start(bagEntry), now);
-            }
-         }
-         while (timeout > 0L);
-      }
-      catch (InterruptedException e) {
-         throw new SQLException("Interrupted during connection acquisition", e);
-      }
-      finally {
-         suspendResumeLock.release();
-      }
-
-      logPoolState("Timeout failure ");
-      throw new SQLTimeoutException(String.format("Timeout after %dms of waiting for a connection.", clockSource.elapsedMillis(startTime), lastConnectionFailure.getAndSet(null)));
-   }
-
-   
-   public final void releaseConnection(final PoolBagEntry bagEntry)
-   {
-      metricsTracker.recordConnectionUsage(bagEntry);
-
-      if (bagEntry.evicted) {
-         closeConnection(bagEntry, "(connection broken or evicted)");
-      }
-      else {
-         connectionBag.requite(bagEntry);
-      }
-   }
-
-   
-   public final synchronized void shutdown() throws InterruptedException
-   {
-      try {
-         poolState = POOL_SHUTDOWN;
-
-         LOGGER.info("Hikari pool {} is shutting down.", config.getPoolName());
-
-         logPoolState("Before shutdown ");
-         connectionBag.close();
-         softEvictConnections();
-         houseKeepingExecutorService.shutdown();
-         addConnectionExecutor.shutdownNow();
-         houseKeepingExecutorService.awaitTermination(5L, TimeUnit.SECONDS);
-         addConnectionExecutor.awaitTermination(5L, TimeUnit.SECONDS);
-
-         final ExecutorService assassinExecutor = createThreadPoolExecutor(config.getMaximumPoolSize(), "Hikari connection assassin",
-                                                                           config.getThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
-         try {
-            final long start = clockSource.currentTime();
-            do {
-               softEvictConnections();
-               abortActiveConnections(assassinExecutor);
-            }
-            while (getTotalConnections() > 0 && clockSource.elapsedMillis(start) < TimeUnit.SECONDS.toMillis(5));
-         } finally {
-            assassinExecutor.shutdown();
-            assassinExecutor.awaitTermination(5L, TimeUnit.SECONDS);
-         }
-
-         closeConnectionExecutor.shutdown();
-         closeConnectionExecutor.awaitTermination(5L, TimeUnit.SECONDS);
-      }
-      finally {
-         logPoolState("After shutdown ");
-
-         poolUtils.unregisterMBeans();
-         metricsTracker.close();
-      }
-   }
-
-   
-   public final void evictConnection(IHikariConnectionProxy proxyConnection)
-   {
-      closeConnection(proxyConnection.getPoolBagEntry(), "(connection evicted by user)");
-   }
-
-   
-   public final DataSource getDataSource()
-   {
-      return dataSource;
-   }
-
-   public void setMetricRegistry(Object metricRegistry)
-   {
-      this.isRecordMetrics = metricRegistry != null;
-      if (isRecordMetrics) {
-         this.metricsTracker = new CodaHaleMetricsTracker(config.getPoolName(), getPoolStats(), (MetricRegistry) metricRegistry);
-      }
-      else {
-         this.metricsTracker = new MetricsTracker();
-      }
-   }
-
-   public void setHealthCheckRegistry(Object healthCheckRegistry)
-   {
-      if (healthCheckRegistry != null) {
-         CodahaleHealthChecker.registerHealthChecks(this, config, (HealthCheckRegistry) healthCheckRegistry);
-      }
-   }
-
-   
-   public final void logPoolState(String... prefix)
-   {
-      if (LOGGER.isDebugEnabled()) {
-         LOGGER.debug("{}pool {} stats (total={}, active={}, idle={}, waiting={})",
-                      (prefix.length > 0 ? prefix[0] : ""), config.getPoolName(),
-                      getTotalConnections(), getActiveConnections(), getIdleConnections(), getThreadsAwaitingConnection());
-      }
-   }
-
-   
-   @Override
-   public String toString()
-   {
-      return config.getPoolName();
-   }
-
-   
-   
-   
-
-   
-   @Override
-   public Future<Boolean> addBagItem()
-   {
-      FutureTask<Boolean> future = new FutureTask<>(new Runnable() {
-         @Override
-         public void run()
-         {
-            long sleepBackoff = 200L;
-            final int minimumIdle = config.getMinimumIdle();
-            final int maxPoolSize = config.getMaximumPoolSize();
-            while (poolState == POOL_NORMAL && totalConnections.get() < maxPoolSize && getIdleConnections() <= minimumIdle && !addConnection()) {
-               
-               quietlySleep(sleepBackoff);
-               sleepBackoff = Math.min(connectionTimeout / 2, (long) ((double) sleepBackoff * 1.5));
-            }
-         }
-      }, true);
-
-      addConnectionExecutor.execute(future);
-      return future;
-   }
-
-   
-   
-   
-
-   
-   @Override
-   public final int getActiveConnections()
-   {
-      return connectionBag.getCount(STATE_IN_USE);
-   }
-
-   
-   @Override
-   public final int getIdleConnections()
-   {
-      return connectionBag.getCount(STATE_NOT_IN_USE);
-   }
-
-   
-   @Override
-   public final int getTotalConnections()
-   {
-      return connectionBag.size() - connectionBag.getCount(STATE_REMOVED);
-   }
-
-   
-   @Override
-   public final int getThreadsAwaitingConnection()
-   {
-      return connectionBag.getPendingQueue();
-   }
-
-   
-   @Override
-   public void softEvictConnections()
-   {
-      for (PoolBagEntry bagEntry : connectionBag.values()) {
-         bagEntry.evicted = true;
-      }
-
-      for (PoolBagEntry bagEntry : connectionBag.values(STATE_NOT_IN_USE)) {
-         if (connectionBag.reserve(bagEntry)) {
-            closeConnection(bagEntry, "(connection evicted by user)");
-         }
-      }
-   }
-
-   
-   @Override
-   public final synchronized void suspendPool()
-   {
-      if (suspendResumeLock == SuspendResumeLock.FAUX_LOCK) {
-         throw new IllegalStateException("Pool " + config.getPoolName() + " is not suspendable");
-      }
-      else if (poolState != POOL_SUSPENDED) {
-         suspendResumeLock.suspend();
-         poolState = POOL_SUSPENDED;
-      }
-   }
-
-   
-   @Override
-   public final synchronized void resumePool()
-   {
-      if (poolState == POOL_SUSPENDED) {
-         poolState = POOL_NORMAL;
-         fillPool();
-         suspendResumeLock.resume();
-      }
-   }
-
-   
-   
-   
-
-   
-   void closeConnection(final PoolBagEntry bagEntry, final String closureReason)
-   {
-      final Connection connection = bagEntry.connection;
-      bagEntry.connection = null;
-      bagEntry.cancelMaxLifeTermination();
-      if (connectionBag.remove(bagEntry)) {
-         final int tc = totalConnections.decrementAndGet();
-         if (tc < 0) {
-            LOGGER.warn("Internal accounting inconsistency, totalConnections={}", tc, new Exception());
-         }
-         
-         closeConnectionExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-               poolUtils.quietlyCloseConnection(connection, closureReason);
-            }
-         });
-      }
-   }
-
-   
-   
-   
-
-   
-   private boolean addConnection()
-   {
-      
-      if (totalConnections.incrementAndGet() > config.getMaximumPoolSize()) {
-         totalConnections.decrementAndGet(); 
-         lastConnectionFailure.set(new SQLException("Hikari pool " + config.getPoolName() +" is at maximum capacity"));
-         return true;
-      }
-
-      Connection connection = null;
-      try {
-         String username = config.getUsername();
-         String password = config.getPassword();
-
-         connection = (username == null && password == null) ? dataSource.getConnection() : dataSource.getConnection(username, password);
-         
-         if (isUseJdbc4Validation && !poolUtils.isJdbc4ValidationSupported(connection)) {
-            throw new SQLException("JDBC4 Connection.isValid() method not supported, connection test query must be configured");
-         }
-
-         final int originalTimeout = poolUtils.getAndSetNetworkTimeout(connection, connectionTimeout);
-
-         transactionIsolation = (transactionIsolation < 0 ? connection.getTransactionIsolation() : transactionIsolation);
-         poolUtils.setupConnection(connection, config.getConnectionInitSql(), isAutoCommit, isReadOnly, transactionIsolation, catalog);
-
-         poolUtils.setNetworkTimeout(connection, originalTimeout);
-         
-         connectionBag.add(new PoolBagEntry(connection, originalTimeout, this));
-         lastConnectionFailure.set(null);
-         LOGGER.debug("Connection {} added to pool {} ", connection, config.getPoolName());
-         return true;
-      }
-      catch (Exception e) {
-         totalConnections.decrementAndGet(); 
-         lastConnectionFailure.set(e);
-         if (poolState == POOL_NORMAL) {
-            LOGGER.debug("Connection attempt to database in pool {} failed: {}", config.getPoolName(), e.getMessage(), e);
-         }
-         poolUtils.quietlyCloseConnection(connection, "(exception during connection creation)");
-         return false;
-      }
-   }
-
-   
-   private void fillPool()
-   {
-      final int connectionsToAdd = Math.min(config.getMaximumPoolSize() - totalConnections.get(), config.getMinimumIdle() - getIdleConnections());
-      for (int i = 0; i < connectionsToAdd; i++) {
-         addBagItem();
-      }
-
-      if (connectionsToAdd > 0 && LOGGER.isDebugEnabled()) {
-         addConnectionExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-               logPoolState("After fill ");
-            }
-         });
-      }
-   }
-
-   
-   private boolean isConnectionAlive(final Connection connection)
-   {
-      try {
-         int timeoutSec = (int) TimeUnit.MILLISECONDS.toSeconds(config.getValidationTimeout());
-
-         if (isUseJdbc4Validation) {
-            return connection.isValid(timeoutSec);
-         }
-
-         final int originalTimeout = poolUtils.getAndSetNetworkTimeout(connection, config.getValidationTimeout());
-
-         try (Statement statement = connection.createStatement()) {
-            poolUtils.setQueryTimeout(statement, timeoutSec);
-            try (ResultSet rs = statement.executeQuery(config.getConnectionTestQuery())) { 
-               
-            }
-         }
-
-         if (isIsolateInternalQueries && !isAutoCommit) {
-            connection.rollback();
-         }
-
-         poolUtils.setNetworkTimeout(connection, originalTimeout);
-
-         return true;
-      }
-      catch (SQLException e) {
-         LOGGER.warn("Exception during alive check, Connection ({}) declared dead.", connection, e);
-         return false;
-      }
-   }
-
-   
-   private void abortActiveConnections(final ExecutorService assassinExecutor)
-   {
-      for (PoolBagEntry bagEntry : connectionBag.values(STATE_IN_USE)) {
-         try {
-            bagEntry.aborted = bagEntry.evicted = true;
-            bagEntry.connection.abort(assassinExecutor);
-         }
-         catch (Throwable e) {
-            poolUtils.quietlyCloseConnection(bagEntry.connection, "(connection aborted during shutdown)");
-         }
-         finally {
-            bagEntry.connection = null;
-            if (connectionBag.remove(bagEntry)) {
-               totalConnections.decrementAndGet();
-            }
-         }
-      }
-   }
-   
-   
-   private void initializeConnections()
-   {
-      if (config.isInitializationFailFast()) {
-         try {
-            if (!addConnection()) {
-               throw lastConnectionFailure.getAndSet(null);
-            }
-
-            ConnectionProxy connection = (ConnectionProxy) getConnection();
-            connection.getPoolBagEntry().evicted = (config.getMinimumIdle() == 0);
-            connection.close();
-         }
-         catch (Throwable e) {
-            try {
-               shutdown();
-            }
-            catch (Throwable ex) {
-               e.addSuppressed(ex);
-            }
-
-            throw new PoolInitializationException(e);
-         }
-      }
-
-      fillPool();
-   }
-
-   private PoolStats getPoolStats()
-   {
-      return new PoolStats(TimeUnit.SECONDS.toMillis(1)) {
-         @Override
-         protected void update() {
-            this.pendingThreads = HikariPool.this.getThreadsAwaitingConnection();
-            this.idleConnections = HikariPool.this.getIdleConnections();
-            this.totalConnections = HikariPool.this.getTotalConnections();
-            this.activeConnections = HikariPool.this.getActiveConnections();
-         }
-      };
-   }
-
-   
-   
-   
-
-   
-   private class HouseKeeper implements Runnable
-   {
-      private volatile long previous = clockSource.currentTime();
-
-      @Override
-      public void run()
-      {
-         connectionTimeout = config.getConnectionTimeout(); 
-
-         final long now = clockSource.currentTime();
-         final long idleTimeout = config.getIdleTimeout();
-
-         
-         if (now < previous || now > clockSource.plusMillis(previous, (2 * HOUSEKEEPING_PERIOD_MS))) {
-            LOGGER.warn("Unusual system clock change detected, soft-evicting connections from pool.");
-            softEvictConnections();
-            fillPool();
-            return;
-         }
-
-         previous = now;
-
-         logPoolState("Before cleanup ");
-         for (PoolBagEntry bagEntry : connectionBag.values(STATE_NOT_IN_USE)) {
-            if (connectionBag.reserve(bagEntry)) {
-               if (bagEntry.evicted) {
-                  closeConnection(bagEntry, "(connection evicted)");
-               }
-               else if (idleTimeout > 0L && clockSource.elapsedMillis(bagEntry.lastAccess, now) > idleTimeout) {
-                  closeConnection(bagEntry, "(connection passed idleTimeout)");
-               }
-               else {
-                  connectionBag.unreserve(bagEntry);
-               }
-            }
-         }
-         
-         logPoolState("After cleanup ");
-
-         fillPool(); 
-      }
-   }
-}
-
-<code block>
-
-package com.zaxxer.hikari.pool;
-
-import java.sql.Connection;
-import java.sql.Statement;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import com.zaxxer.hikari.util.ClockSource;
-import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
-import com.zaxxer.hikari.util.FastList;
-
-
-public final class PoolBagEntry implements IConcurrentBagEntry
-{
-   public final AtomicInteger state = new AtomicInteger();
-   public final FastList<Statement> openStatements;
-   public final HikariPool parentPool;
-
-   public Connection connection;
-   public int networkTimeout;
-   public long lastAccess;
-   public volatile long lastOpenTime;
-   public volatile boolean evicted;
-   public volatile boolean aborted;
-
-   private volatile ScheduledFuture<?> endOfLife;
-
-   public PoolBagEntry(final Connection connection, final int networkTimeout, final HikariPool pool) {
-      this.connection = connection;
-      this.networkTimeout = networkTimeout;
-      this.parentPool = pool;
-      this.lastAccess = ClockSource.INSTANCE.currentTime();
-      this.openStatements = new FastList<>(Statement.class, 16);
-
-      final long variance = pool.config.getMaxLifetime() > 60_000 ? ThreadLocalRandom.current().nextLong(10_000) : 0;
-      final long maxLifetime = pool.config.getMaxLifetime() - variance;
-      if (maxLifetime > 0) {
-         endOfLife = pool.houseKeepingExecutorService.schedule(new Runnable() {
-            @Override
-            public void run()
-            {
-               
-               if (pool.connectionBag.reserve(PoolBagEntry.this)) {
-                  pool.closeConnection(PoolBagEntry.this, "(connection reached maxLifetime)");
-               }
-               else {
-                  
-                  PoolBagEntry.this.evicted = true;
-               }
-            }
-         }, maxLifetime, TimeUnit.MILLISECONDS);
-      }
-   }
-
-   void cancelMaxLifeTermination()
-   {
-      if (endOfLife != null) {
-         endOfLife.cancel(false);
-      }
-   }
-
-
-   
-   @Override
-   public AtomicInteger state()
-   {
-      return state;
-   }
-
-   @Override
-   public String toString()
-   {
-      return "Connection......" + connection + "\n"
-           + "  Last  access.." + lastAccess + "\n"
-           + "  Last open....." + lastOpenTime + "\n"
-           + "  State........." + stateToString();
-   }
-
-   private String stateToString()
-   {
-      switch (state.get()) {
-      case STATE_IN_USE:
-         return "IN_USE";
-      case STATE_NOT_IN_USE:
-         return "NOT_IN_USE";
-      case STATE_REMOVED:
-         return "REMOVED";
-      case STATE_RESERVED:
-         return "RESERVED";
-      default:
-         return "Invalid";
-      }
-   }
+   Future<Boolean> addBagItem();
 }
 
 <code block>
 
 package com.zaxxer.hikari.util;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+
+public interface IConcurrentBagEntry
+{
+   int STATE_NOT_IN_USE = 0;
+   int STATE_IN_USE = 1;
+   int STATE_REMOVED = -1;
+   int STATE_RESERVED = -2;
+
+   AtomicInteger state();
+}
+
+<code block>
+
+package com.zaxxer.hikari.util;
+
+import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_IN_USE;
+import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_NOT_IN_USE;
+import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_REMOVED;
+import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_RESERVED;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -722,17 +41,9 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
-
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_NOT_IN_USE;
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_IN_USE;
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_REMOVED;
-import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_RESERVED;
 
 
 @SuppressWarnings("rawtypes")
@@ -748,22 +59,8 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    private final IBagStateListener listener;
    private volatile boolean closed;
 
-   public interface IConcurrentBagEntry
-   {
-      int STATE_NOT_IN_USE = 0;
-      int STATE_IN_USE = 1;
-      int STATE_REMOVED = -1;
-      int STATE_RESERVED = -2;
 
-      AtomicInteger state();
-   }
 
-   public interface IBagStateListener
-   {
-      Future<Boolean> addBagItem();
-   }
-
-   
    public ConcurrentBag(IBagStateListener listener)
    {
       this.listener = listener;
@@ -785,11 +82,11 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   
+
    @SuppressWarnings("unchecked")
    public T borrow(long timeout, final TimeUnit timeUnit) throws InterruptedException
    {
-      
+
       if (!synchronizer.hasQueuedThreads()) {
          List<?> list = threadList.get();
          if (weakThreadLocals && list == null) {
@@ -805,7 +102,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
          }
       }
 
-      
+
       timeout = timeUnit.toNanos(timeout);
       Future<Boolean> addItemFuture = null;
       final long startScan = System.nanoTime();
@@ -831,7 +128,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       return null;
    }
 
-   
+
    @SuppressWarnings("unchecked")
    public void requite(final T bagEntry)
    {
@@ -848,7 +145,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   
+
    public void add(final T bagEntry)
    {
       if (closed) {
@@ -860,7 +157,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       synchronizer.signal();
    }
 
-   
+
    public boolean remove(final T bagEntry)
    {
       if (!bagEntry.state().compareAndSet(STATE_IN_USE, STATE_REMOVED) && !bagEntry.state().compareAndSet(STATE_RESERVED, STATE_REMOVED) && !closed) {
@@ -875,14 +172,14 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       return removed;
    }
 
-   
+
    @Override
    public void close()
    {
       closed = true;
    }
 
-   
+
    public List<T> values(final int state)
    {
       final ArrayList<T> list = new ArrayList<>(sharedList.size());
@@ -895,20 +192,20 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       return list;
    }
 
-   
+
    @SuppressWarnings("unchecked")
    public List<T> values()
    {
       return (List<T>) sharedList.clone();
    }
 
-   
+
    public boolean reserve(final T bagEntry)
    {
       return bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_RESERVED);
    }
 
-   
+
    public void unreserve(final T bagEntry)
    {
       if (bagEntry.state().compareAndSet(STATE_RESERVED, STATE_NOT_IN_USE)) {
@@ -919,13 +216,13 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   
+
    public int getPendingQueue()
    {
       return synchronizer.getQueueLength();
    }
 
-   
+
    public int getCount(final int state)
    {
       int count = 0;
@@ -937,7 +234,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       return count;
    }
 
-   
+
    public int size()
    {
       return sharedList.size();
@@ -950,7 +247,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       }
    }
 
-   
+
    private boolean useWeakThreadLocals()
    {
       try {
@@ -963,139 +260,6 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
       catch (SecurityException se) {
          return true;
       }
-   }
-}
-
-<code block>
-
-
-package com.zaxxer.hikari;
-
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
-
-import com.zaxxer.hikari.pool.HikariPool;
-import com.zaxxer.hikari.pool.PoolBagEntry;
-import com.zaxxer.hikari.util.ConcurrentBag;
-import com.zaxxer.hikari.util.ConcurrentBag.IBagStateListener;
-
-
-public class TestConcurrentBag
-{
-   private static HikariDataSource ds;
-
-   @BeforeClass
-   public static void setup()
-   {
-      HikariConfig config = new HikariConfig();
-      config.setMinimumIdle(1);
-      config.setMaximumPoolSize(2);
-      config.setInitializationFailFast(true);
-      config.setConnectionTestQuery("VALUES 1");
-      config.setDataSourceClassName("com.zaxxer.hikari.mocks.StubDataSource");
-
-      ds = new HikariDataSource(config);      
-   }
-
-   @AfterClass
-   public static void teardown()
-   {
-      ds.close();
-   }
-
-   @Test
-   public void testConcurrentBag() throws InterruptedException
-   {
-      ConcurrentBag<PoolBagEntry> bag = new ConcurrentBag<PoolBagEntry>(new IBagStateListener() {
-         @Override
-         public Future<Boolean> addBagItem()
-         {
-            return new Future<Boolean>() {
-               @Override
-               public boolean isDone()
-               {
-                  return true;
-               }
-               
-               @Override
-               public boolean isCancelled()
-               {
-                  return false;
-               }
-               
-               @Override
-               public Boolean get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException
-               {
-                  return null;
-               }
-               
-               @Override
-               public Boolean get() throws InterruptedException, ExecutionException
-               {
-                  return true;
-               }
-               
-               @Override
-               public boolean cancel(boolean mayInterruptIfRunning)
-               {
-                  return false;
-               }
-            };
-         }
-      });
-      Assert.assertEquals(0, bag.values(8).size());
-
-      HikariPool pool = TestElf.getPool(ds);
-      PoolBagEntry reserved = new PoolBagEntry(null, 0, TestElf.getPool(ds));
-      bag.add(reserved);
-      bag.reserve(reserved);      
-
-      PoolBagEntry inuse = new PoolBagEntry(null, 0, pool);
-      bag.add(inuse);
-      bag.borrow(2, TimeUnit.MILLISECONDS); 
-      
-      PoolBagEntry notinuse = new PoolBagEntry(null, 0, pool);
-      bag.add(notinuse); 
-
-      bag.dumpState();
-
-      ByteArrayOutputStream baos = new ByteArrayOutputStream();
-      PrintStream ps = new PrintStream(baos, true);
-      TestElf.setSlf4jTargetStream(ConcurrentBag.class, ps);
-      
-      bag.requite(reserved);
-      Assert.assertTrue(new String(baos.toByteArray()).contains("does not exist"));
-
-      bag.remove(notinuse);
-      Assert.assertTrue(new String(baos.toByteArray()).contains("not borrowed or reserved"));
-
-      bag.unreserve(notinuse);
-      Assert.assertTrue(new String(baos.toByteArray()).contains("was not reserved"));
-
-      bag.remove(inuse);
-      bag.remove(inuse);
-      Assert.assertTrue(new String(baos.toByteArray()).contains("not borrowed or reserved"));
-
-      bag.close();
-      try {
-         PoolBagEntry bagEntry = new PoolBagEntry(null, 0, pool);
-         bag.add(bagEntry);
-         Assert.assertNotEquals(bagEntry, bag.borrow(100, TimeUnit.MILLISECONDS));
-      }
-      catch (IllegalStateException e) {
-         Assert.assertTrue(new String(baos.toByteArray()).contains("ignoring add()"));
-      }
-
-      Assert.assertNotNull(notinuse.toString());
    }
 }
 
@@ -1190,7 +354,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
    private volatile MetricsTracker metricsTracker;
    private boolean isRecordMetrics;
 
-   
+
    public HikariPool(HikariConfig config)
     {
       this.config = config;
@@ -1237,13 +401,13 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       initializeConnections();
    }
 
-   
+
    public final Connection getConnection() throws SQLException
    {
       return getConnection(connectionTimeout);
    }
 
-   
+
    public final Connection getConnection(final long hardTimeout) throws SQLException
    {
       suspendResumeLock.acquire();
@@ -1282,7 +446,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       throw new SQLTimeoutException(String.format("Timeout after %dms of waiting for a connection.", clockSource.elapsedMillis(startTime), lastConnectionFailure.getAndSet(null)));
    }
 
-   
+
    public final void releaseConnection(final PoolBagEntry bagEntry)
    {
       metricsTracker.recordConnectionUsage(bagEntry);
@@ -1295,7 +459,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    public final synchronized void shutdown() throws InterruptedException
    {
       try {
@@ -1336,13 +500,13 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    public final void evictConnection(IHikariConnectionProxy proxyConnection)
    {
       closeConnection(proxyConnection.getPoolBagEntry(), "(connection evicted by user)");
    }
 
-   
+
    public final DataSource getDataSource()
    {
       return dataSource;
@@ -1366,7 +530,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    public final void logPoolState(String... prefix)
    {
       if (LOGGER.isDebugEnabled()) {
@@ -1376,18 +540,18 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    @Override
    public String toString()
    {
       return config.getPoolName();
    }
 
-   
-   
-   
 
-   
+
+
+
+
    @Override
    public Future<Boolean> addBagItem()
    {
@@ -1399,7 +563,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
             final int minimumIdle = config.getMinimumIdle();
             final int maxPoolSize = config.getMaximumPoolSize();
             while (poolState == POOL_NORMAL && totalConnections.get() < maxPoolSize && getIdleConnections() <= minimumIdle && !addConnection()) {
-               
+
                quietlySleep(sleepBackoff);
                sleepBackoff = Math.min(connectionTimeout / 2, (long) ((double) sleepBackoff * 1.5));
             }
@@ -1410,39 +574,39 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       return future;
    }
 
-   
-   
-   
 
-   
+
+
+
+
    @Override
    public final int getActiveConnections()
    {
       return connectionBag.getCount(STATE_IN_USE);
    }
 
-   
+
    @Override
    public final int getIdleConnections()
    {
       return connectionBag.getCount(STATE_NOT_IN_USE);
    }
 
-   
+
    @Override
    public final int getTotalConnections()
    {
       return connectionBag.size() - connectionBag.getCount(STATE_REMOVED);
    }
 
-   
+
    @Override
    public final int getThreadsAwaitingConnection()
    {
       return connectionBag.getPendingQueue();
    }
 
-   
+
    @Override
    public void softEvictConnections()
    {
@@ -1457,7 +621,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    @Override
    public final synchronized void suspendPool()
    {
@@ -1470,7 +634,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    @Override
    public final synchronized void resumePool()
    {
@@ -1481,11 +645,11 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
-   
-   
 
-   
+
+
+
+
    void closeConnection(final PoolBagEntry bagEntry, final String closureReason)
    {
       final Connection connection = bagEntry.connection;
@@ -1506,14 +670,14 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
-   
-   
 
-   
+
+
+
+
    private boolean addConnection()
    {
-      
+
       if (totalConnections.incrementAndGet() > config.getMaximumPoolSize()) {
          totalConnections.decrementAndGet(); 
          lastConnectionFailure.set(new SQLException("Hikari pool " + config.getPoolName() +" is at maximum capacity"));
@@ -1554,7 +718,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    private void fillPool()
    {
       final int connectionsToAdd = Math.min(config.getMaximumPoolSize() - totalConnections.get(), config.getMinimumIdle() - getIdleConnections());
@@ -1572,7 +736,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    private boolean isConnectionAlive(final Connection connection)
    {
       try {
@@ -1587,7 +751,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
          try (Statement statement = connection.createStatement()) {
             poolUtils.setQueryTimeout(statement, timeoutSec);
             try (ResultSet rs = statement.executeQuery(config.getConnectionTestQuery())) { 
-               
+
             }
          }
 
@@ -1605,7 +769,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
 
-   
+
    private void abortActiveConnections(final ExecutorService assassinExecutor)
    {
       for (PoolBagEntry bagEntry : connectionBag.values(STATE_IN_USE)) {
@@ -1625,7 +789,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       }
    }
    
-   
+
    private void initializeConnections()
    {
       if (config.isInitializationFailFast()) {
@@ -1666,11 +830,11 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
       };
    }
 
-   
-   
-   
 
-   
+
+
+
+
    private class HouseKeeper implements Runnable
    {
       private volatile long previous = clockSource.currentTime();
@@ -1683,7 +847,7 @@ public class HikariPool implements HikariPoolMBean, IBagStateListener
          final long now = clockSource.currentTime();
          final long idleTimeout = config.getIdleTimeout();
 
-         
+
          if (now < previous || now > clockSource.plusMillis(previous, (2 * HOUSEKEEPING_PERIOD_MS))) {
             LOGGER.warn("Unusual system clock change detected, soft-evicting connections from pool.");
             softEvictConnections();
@@ -1760,12 +924,12 @@ public final class PoolBagEntry implements IConcurrentBagEntry
             @Override
             public void run()
             {
-               
+
                if (pool.connectionBag.reserve(PoolBagEntry.this)) {
                   pool.closeConnection(PoolBagEntry.this, "(connection reached maxLifetime)");
                }
                else {
-                  
+
                   PoolBagEntry.this.evicted = true;
                }
             }
@@ -1781,7 +945,7 @@ public final class PoolBagEntry implements IConcurrentBagEntry
    }
 
 
-   
+
    @Override
    public AtomicInteger state()
    {
@@ -1812,272 +976,6 @@ public final class PoolBagEntry implements IConcurrentBagEntry
          return "Invalid";
       }
    }
-}
-
-<code block>
-
-package com.zaxxer.hikari.util;
-
-import java.util.concurrent.Future;
-
-
-public interface IBagStateListener
-{
-   Future<Boolean> addBagItem();
-}
-
-<code block>
-
-package com.zaxxer.hikari.util;
-
-import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_IN_USE;
-import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_NOT_IN_USE;
-import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_REMOVED;
-import static com.zaxxer.hikari.util.IConcurrentBagEntry.STATE_RESERVED;
-
-import java.lang.ref.WeakReference;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-@SuppressWarnings("rawtypes")
-public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseable
-{
-   private static final Logger LOGGER = LoggerFactory.getLogger(ConcurrentBag.class);
-
-   private final QueuedSequenceSynchronizer synchronizer;
-   private final CopyOnWriteArrayList<T> sharedList;
-   private final boolean weakThreadLocals;
-
-   private final ThreadLocal<List> threadList;
-   private final IBagStateListener listener;
-   private volatile boolean closed;
-
-
-   
-   public ConcurrentBag(IBagStateListener listener)
-   {
-      this.listener = listener;
-      this.weakThreadLocals = useWeakThreadLocals();
-
-      this.sharedList = new CopyOnWriteArrayList<>();
-      this.synchronizer = new QueuedSequenceSynchronizer();
-      if (weakThreadLocals) {
-         this.threadList = new ThreadLocal<>(); 
-      }
-      else {
-         this.threadList = new ThreadLocal<List>() {
-            @Override
-            protected List initialValue()
-            {
-               return new FastList<>(IConcurrentBagEntry.class, 16);
-            }
-         };
-      }
-   }
-
-   
-   @SuppressWarnings("unchecked")
-   public T borrow(long timeout, final TimeUnit timeUnit) throws InterruptedException
-   {
-      
-      if (!synchronizer.hasQueuedThreads()) {
-         List<?> list = threadList.get();
-         if (weakThreadLocals && list == null) {
-            list = new ArrayList<>(16);
-            threadList.set(list);
-         }
-
-         for (int i = list.size() - 1; i >= 0; i--) {
-            final T bagEntry = (T) (weakThreadLocals ? ((WeakReference) list.remove(i)).get() : list.remove(i));
-            if (bagEntry != null && bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
-               return bagEntry;
-            }
-         }
-      }
-
-      
-      timeout = timeUnit.toNanos(timeout);
-      Future<Boolean> addItemFuture = null;
-      final long startScan = System.nanoTime();
-      final long originTimeout = timeout;
-      long startSeq;
-      do {
-         do {
-            startSeq = synchronizer.currentSequence();
-            for (final T bagEntry : sharedList) {
-               if (bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
-                  return bagEntry;
-               }
-            }
-         } while (startSeq < synchronizer.currentSequence());
-
-         if (addItemFuture == null || addItemFuture.isDone()) {
-            addItemFuture = listener.addBagItem();
-         }
-
-         timeout = originTimeout - (System.nanoTime() - startScan);
-      } while (timeout > 1000L && synchronizer.waitUntilSequenceExceeded(startSeq, timeout));
-
-      return null;
-   }
-
-   
-   @SuppressWarnings("unchecked")
-   public void requite(final T bagEntry)
-   {
-      if (bagEntry.state().compareAndSet(STATE_IN_USE, STATE_NOT_IN_USE)) {
-         final List threadLocalList = threadList.get();
-         if (threadLocalList != null) {
-            threadLocalList.add((weakThreadLocals ? new WeakReference<>(bagEntry) : bagEntry));
-         }
-
-         synchronizer.signal();
-      }
-      else {
-         LOGGER.warn("Attempt to remove an object from the bag that does not exist: {}", bagEntry);
-      }
-   }
-
-   
-   public void add(final T bagEntry)
-   {
-      if (closed) {
-         LOGGER.info("ConcurrentBag has been closed, ignoring add()");
-         throw new IllegalStateException("ConcurrentBag has been closed, ignoring add()");
-      }
-
-      sharedList.add(bagEntry);
-      synchronizer.signal();
-   }
-
-   
-   public boolean remove(final T bagEntry)
-   {
-      if (!bagEntry.state().compareAndSet(STATE_IN_USE, STATE_REMOVED) && !bagEntry.state().compareAndSet(STATE_RESERVED, STATE_REMOVED) && !closed) {
-         LOGGER.warn("Attempt to remove an object from the bag that was not borrowed or reserved: {}", bagEntry);
-         return false;
-      }
-
-      final boolean removed = sharedList.remove(bagEntry);
-      if (!removed && !closed) {
-         LOGGER.warn("Attempt to remove an object from the bag that does not exist: {}", bagEntry);
-      }
-      return removed;
-   }
-
-   
-   @Override
-   public void close()
-   {
-      closed = true;
-   }
-
-   
-   public List<T> values(final int state)
-   {
-      final ArrayList<T> list = new ArrayList<>(sharedList.size());
-      for (final T reference : sharedList) {
-         if (reference.state().get() == state) {
-            list.add(reference);
-         }
-      }
-
-      return list;
-   }
-
-   
-   @SuppressWarnings("unchecked")
-   public List<T> values()
-   {
-      return (List<T>) sharedList.clone();
-   }
-
-   
-   public boolean reserve(final T bagEntry)
-   {
-      return bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_RESERVED);
-   }
-
-   
-   public void unreserve(final T bagEntry)
-   {
-      if (bagEntry.state().compareAndSet(STATE_RESERVED, STATE_NOT_IN_USE)) {
-         synchronizer.signal();
-      }
-      else {
-         LOGGER.warn("Attempt to relinquish an object to the bag that was not reserved: {}", bagEntry);
-      }
-   }
-
-   
-   public int getPendingQueue()
-   {
-      return synchronizer.getQueueLength();
-   }
-
-   
-   public int getCount(final int state)
-   {
-      int count = 0;
-      for (final T reference : sharedList) {
-         if (reference.state().get() == state) {
-            count++;
-         }
-      }
-      return count;
-   }
-
-   
-   public int size()
-   {
-      return sharedList.size();
-   }
-
-   public void dumpState()
-   {
-      for (T bagEntry : sharedList) {
-         LOGGER.info(bagEntry.toString());
-      }
-   }
-
-   
-   private boolean useWeakThreadLocals()
-   {
-      try {
-         if (System.getProperty("com.zaxxer.hikari.useWeakReferences") != null) {   
-            return Boolean.getBoolean("com.zaxxer.hikari.useWeakReferences");
-         }
-
-         return getClass().getClassLoader() != ClassLoader.getSystemClassLoader();
-      }
-      catch (SecurityException se) {
-         return true;
-      }
-   }
-}
-
-<code block>
-
-package com.zaxxer.hikari.util;
-
-import java.util.concurrent.atomic.AtomicInteger;
-
-
-public interface IConcurrentBagEntry
-{
-   int STATE_NOT_IN_USE = 0;
-   int STATE_IN_USE = 1;
-   int STATE_REMOVED = -1;
-   int STATE_RESERVED = -2;
-
-   AtomicInteger state();
 }
 
 <code block>
@@ -2215,250 +1113,1103 @@ public class TestConcurrentBag
 
 <code block>
 
-
 package com.zaxxer.hikari.util;
 
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
+
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_NOT_IN_USE;
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_IN_USE;
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_REMOVED;
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_RESERVED;
 
 
-public interface ClockSource
+@SuppressWarnings("rawtypes")
+public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseable
 {
-   final ClockSource INSTANCE = Factory.create();
+   private static final Logger LOGGER = LoggerFactory.getLogger(ConcurrentBag.class);
 
-   
-   long currentTime();
+   private final QueuedSequenceSynchronizer synchronizer;
+   private final CopyOnWriteArrayList<T> sharedList;
+   private final boolean weakThreadLocals;
 
-   
-   long toMillis(long time);
+   private final ThreadLocal<List> threadList;
+   private final IBagStateListener listener;
+   private volatile boolean closed;
 
-   
-   long elapsedMillis(long startTime);
-
-   
-   long elapsedMillis(long startTime, long endTime);
-
-   
-   long plusMillis(long time, long millis);
-
-   
-   class Factory
+   public interface IConcurrentBagEntry
    {
-      private static ClockSource create()
-      {
-         String os = System.getProperty("os.name");
-         if ("Mac OS X".equals(os)) {
-            return new MillisecondClockSource();
+      int STATE_NOT_IN_USE = 0;
+      int STATE_IN_USE = 1;
+      int STATE_REMOVED = -1;
+      int STATE_RESERVED = -2;
+
+      AtomicInteger state();
+   }
+
+   public interface IBagStateListener
+   {
+      Future<Boolean> addBagItem();
+   }
+
+
+   public ConcurrentBag(IBagStateListener listener)
+   {
+      this.listener = listener;
+      this.weakThreadLocals = useWeakThreadLocals();
+
+      this.sharedList = new CopyOnWriteArrayList<>();
+      this.synchronizer = new QueuedSequenceSynchronizer();
+      if (weakThreadLocals) {
+         this.threadList = new ThreadLocal<>(); 
+      }
+      else {
+         this.threadList = new ThreadLocal<List>() {
+            @Override
+            protected List initialValue()
+            {
+               return new FastList<>(IConcurrentBagEntry.class, 16);
+            }
+         };
+      }
+   }
+
+
+   @SuppressWarnings("unchecked")
+   public T borrow(long timeout, final TimeUnit timeUnit) throws InterruptedException
+   {
+
+      if (!synchronizer.hasQueuedThreads()) {
+         List<?> list = threadList.get();
+         if (weakThreadLocals && list == null) {
+            list = new ArrayList<>(16);
+            threadList.set(list);
          }
 
-         return new NanosecondClockSource();
-      }
-   }
-
-   final class MillisecondClockSource implements ClockSource
-   {
-      
-      @Override
-      public long currentTime()
-      {
-         return System.currentTimeMillis();
+         for (int i = list.size() - 1; i >= 0; i--) {
+            final T bagEntry = (T) (weakThreadLocals ? ((WeakReference) list.remove(i)).get() : list.remove(i));
+            if (bagEntry != null && bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
+               return bagEntry;
+            }
+         }
       }
 
-      
-      @Override
-      public long elapsedMillis(final long startTime)
-      {
-         return System.currentTimeMillis() - startTime;
-      }
 
-      
-      @Override
-      public long elapsedMillis(final long startTime, final long endTime)
-      {
-         return endTime - startTime;
-      }
+      timeout = timeUnit.toNanos(timeout);
+      Future<Boolean> addItemFuture = null;
+      final long startScan = System.nanoTime();
+      final long originTimeout = timeout;
+      long startSeq;
+      do {
+         do {
+            startSeq = synchronizer.currentSequence();
+            for (final T bagEntry : sharedList) {
+               if (bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
+                  return bagEntry;
+               }
+            }
+         } while (startSeq < synchronizer.currentSequence());
 
-      
-      @Override
-      public long toMillis(long time)
-      {
-         return time;
-      }
-
-      
-      @Override
-      public long plusMillis(long time, long millis)
-      {
-         return time + millis;
-      }
-   }
-
-   final class NanosecondClockSource implements ClockSource
-   {
-      
-      @Override
-      public long currentTime()
-      {
-         return System.nanoTime();
-      }
-
-      
-      @Override
-      public final long toMillis(final long time)
-      {
-         return TimeUnit.NANOSECONDS.toMillis(time);
-      }
-
-      
-      @Override
-      public long elapsedMillis(final long startTime)
-      {
-         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
-      }
-
-      
-      @Override
-      public long elapsedMillis(final long startTime, final long endTime)
-      {
-         return TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
-      }
-
-      
-      @Override
-      public long plusMillis(final long time, final long millis)
-      {
-         return time + TimeUnit.MILLISECONDS.toNanos(millis);
-      }
-   }
-}
-
-<code block>
-
-
-package com.zaxxer.hikari.util;
-
-import java.util.concurrent.TimeUnit;
-
-
-class NanosecondClockSource implements ClockSource
-{
-   
-   @Override
-   public long currentTime()
-   {
-      return System.nanoTime();
-   }
-
-   
-   @Override
-   public final long toMillis(final long time)
-   {
-      return TimeUnit.NANOSECONDS.toMillis(time);
-   }
-
-   
-   @Override
-   public long elapsedMillis(final long startTime)
-   {
-      return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
-   }
-
-   
-   @Override
-   public long elapsedMillis(final long startTime, final long endTime)
-   {
-      return TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
-   }
-
-   
-   @Override
-   public long plusMillis(final long time, final long millis)
-   {
-      return time + TimeUnit.MILLISECONDS.toNanos(millis);
-   }
-}
-
-<code block>
-
-
-package com.zaxxer.hikari.util;
-
-
-
-class MillisecondClockSource implements ClockSource
-{
-   
-   @Override
-   public long currentTime()
-   {
-      return System.currentTimeMillis();
-   }
-
-   
-   @Override
-   public long elapsedMillis(final long startTime)
-   {
-      return System.currentTimeMillis() - startTime;
-   }
-
-   
-   @Override
-   public long elapsedMillis(final long startTime, final long endTime)
-   {
-      return endTime - startTime;
-   }
-
-   
-   @Override
-   public long toMillis(long time)
-   {
-      return time;
-   }
-
-   
-   @Override
-   public long plusMillis(long time, long millis)
-   {
-      return time + millis;
-   }
-}
-
-<code block>
-
-
-package com.zaxxer.hikari.util;
-
-
-public interface ClockSource
-{
-   final ClockSource INSTANCE = Factory.create();
-
-   
-   long currentTime();
-
-   
-   long toMillis(long time);
-
-   
-   long elapsedMillis(long startTime);
-
-   
-   long elapsedMillis(long startTime, long endTime);
-
-   
-   long plusMillis(long time, long millis);
-
-   
-   class Factory
-   {
-      private static ClockSource create()
-      {
-         String os = System.getProperty("os.name");
-         if ("Mac OS X".equals(os)) {
-            return new MillisecondClockSource();
+         if (addItemFuture == null || addItemFuture.isDone()) {
+            addItemFuture = listener.addBagItem();
          }
 
-         return new NanosecondClockSource();
+         timeout = originTimeout - (System.nanoTime() - startScan);
+      } while (timeout > 1000L && synchronizer.waitUntilSequenceExceeded(startSeq, timeout));
+
+      return null;
+   }
+
+
+   @SuppressWarnings("unchecked")
+   public void requite(final T bagEntry)
+   {
+      if (bagEntry.state().compareAndSet(STATE_IN_USE, STATE_NOT_IN_USE)) {
+         final List threadLocalList = threadList.get();
+         if (threadLocalList != null) {
+            threadLocalList.add((weakThreadLocals ? new WeakReference<>(bagEntry) : bagEntry));
+         }
+
+         synchronizer.signal();
       }
+      else {
+         LOGGER.warn("Attempt to remove an object from the bag that does not exist: {}", bagEntry);
+      }
+   }
+
+
+   public void add(final T bagEntry)
+   {
+      if (closed) {
+         LOGGER.info("ConcurrentBag has been closed, ignoring add()");
+         throw new IllegalStateException("ConcurrentBag has been closed, ignoring add()");
+      }
+
+      sharedList.add(bagEntry);
+      synchronizer.signal();
+   }
+
+
+   public boolean remove(final T bagEntry)
+   {
+      if (!bagEntry.state().compareAndSet(STATE_IN_USE, STATE_REMOVED) && !bagEntry.state().compareAndSet(STATE_RESERVED, STATE_REMOVED) && !closed) {
+         LOGGER.warn("Attempt to remove an object from the bag that was not borrowed or reserved: {}", bagEntry);
+         return false;
+      }
+
+      final boolean removed = sharedList.remove(bagEntry);
+      if (!removed && !closed) {
+         LOGGER.warn("Attempt to remove an object from the bag that does not exist: {}", bagEntry);
+      }
+      return removed;
+   }
+
+
+   @Override
+   public void close()
+   {
+      closed = true;
+   }
+
+
+   public List<T> values(final int state)
+   {
+      final ArrayList<T> list = new ArrayList<>(sharedList.size());
+      for (final T reference : sharedList) {
+         if (reference.state().get() == state) {
+            list.add(reference);
+         }
+      }
+
+      return list;
+   }
+
+
+   @SuppressWarnings("unchecked")
+   public List<T> values()
+   {
+      return (List<T>) sharedList.clone();
+   }
+
+
+   public boolean reserve(final T bagEntry)
+   {
+      return bagEntry.state().compareAndSet(STATE_NOT_IN_USE, STATE_RESERVED);
+   }
+
+
+   public void unreserve(final T bagEntry)
+   {
+      if (bagEntry.state().compareAndSet(STATE_RESERVED, STATE_NOT_IN_USE)) {
+         synchronizer.signal();
+      }
+      else {
+         LOGGER.warn("Attempt to relinquish an object to the bag that was not reserved: {}", bagEntry);
+      }
+   }
+
+
+   public int getPendingQueue()
+   {
+      return synchronizer.getQueueLength();
+   }
+
+
+   public int getCount(final int state)
+   {
+      int count = 0;
+      for (final T reference : sharedList) {
+         if (reference.state().get() == state) {
+            count++;
+         }
+      }
+      return count;
+   }
+
+
+   public int size()
+   {
+      return sharedList.size();
+   }
+
+   public void dumpState()
+   {
+      for (T bagEntry : sharedList) {
+         LOGGER.info(bagEntry.toString());
+      }
+   }
+
+
+   private boolean useWeakThreadLocals()
+   {
+      try {
+         if (System.getProperty("com.zaxxer.hikari.useWeakReferences") != null) {   
+            return Boolean.getBoolean("com.zaxxer.hikari.useWeakReferences");
+         }
+
+         return getClass().getClassLoader() != ClassLoader.getSystemClassLoader();
+      }
+      catch (SecurityException se) {
+         return true;
+      }
+   }
+}
+
+<code block>
+
+
+package com.zaxxer.hikari.pool;
+
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_IN_USE;
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_NOT_IN_USE;
+import static com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry.STATE_REMOVED;
+import static com.zaxxer.hikari.util.UtilityElf.createThreadPoolExecutor;
+import static com.zaxxer.hikari.util.UtilityElf.getTransactionIsolation;
+import static com.zaxxer.hikari.util.UtilityElf.quietlySleep;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
+import java.sql.Statement;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.sql.DataSource;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.health.HealthCheckRegistry;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.metrics.CodaHaleMetricsTracker;
+import com.zaxxer.hikari.metrics.CodahaleHealthChecker;
+import com.zaxxer.hikari.metrics.MetricsTracker;
+import com.zaxxer.hikari.metrics.MetricsTracker.MetricsContext;
+import com.zaxxer.hikari.metrics.PoolStats;
+import com.zaxxer.hikari.proxy.ConnectionProxy;
+import com.zaxxer.hikari.proxy.IHikariConnectionProxy;
+import com.zaxxer.hikari.proxy.ProxyFactory;
+import com.zaxxer.hikari.util.ClockSource;
+import com.zaxxer.hikari.util.ConcurrentBag;
+import com.zaxxer.hikari.util.ConcurrentBag.IBagStateListener;
+import com.zaxxer.hikari.util.DefaultThreadFactory;
+import com.zaxxer.hikari.util.PropertyElf;
+
+
+public class HikariPool implements HikariPoolMBean, IBagStateListener
+{
+   private final Logger LOGGER = LoggerFactory.getLogger(getClass());
+
+   private static final ClockSource clockSource = ClockSource.INSTANCE;
+
+   private final long ALIVE_BYPASS_WINDOW_MS = Long.getLong("com.zaxxer.hikari.aliveBypassWindow", TimeUnit.SECONDS.toMillis(1));
+   private final long HOUSEKEEPING_PERIOD_MS = Long.getLong("com.zaxxer.hikari.housekeeping.periodMs", TimeUnit.SECONDS.toMillis(30));
+
+   private static final int POOL_NORMAL = 0;
+   private static final int POOL_SUSPENDED = 1;
+   private static final int POOL_SHUTDOWN = 2;
+
+   public int transactionIsolation;
+   public final String catalog;
+   public final boolean isReadOnly;
+   public final boolean isAutoCommit;
+   public final PoolElf poolUtils;
+
+   final HikariConfig config;
+   final ConcurrentBag<PoolBagEntry> connectionBag;
+   final ScheduledThreadPoolExecutor houseKeepingExecutorService;
+
+   private final AtomicInteger totalConnections;
+   private final ThreadPoolExecutor addConnectionExecutor;
+   private final ThreadPoolExecutor closeConnectionExecutor;
+
+   private final boolean isUseJdbc4Validation;
+   private final boolean isIsolateInternalQueries;
+
+   private volatile int poolState;
+   private long connectionTimeout;
+   
+   private final LeakTask leakTask;
+   private final DataSource dataSource;
+   private final SuspendResumeLock suspendResumeLock;
+   private final AtomicReference<Throwable> lastConnectionFailure;
+
+   private volatile MetricsTracker metricsTracker;
+   private boolean isRecordMetrics;
+
+
+   public HikariPool(HikariConfig config)
+    {
+      this.config = config;
+
+      this.poolUtils = new PoolElf(config);
+      this.dataSource = poolUtils.initializeDataSource();
+
+      this.connectionBag = new ConcurrentBag<>(this);
+      this.totalConnections = new AtomicInteger();
+      this.connectionTimeout = config.getConnectionTimeout();
+      this.lastConnectionFailure = new AtomicReference<>();
+
+      this.catalog = config.getCatalog();
+      this.isReadOnly = config.isReadOnly();
+      this.isAutoCommit = config.isAutoCommit();
+      this.isUseJdbc4Validation = config.getConnectionTestQuery() == null;
+      this.isIsolateInternalQueries = config.isIsolateInternalQueries();
+      this.transactionIsolation = getTransactionIsolation(config.getTransactionIsolation());
+
+      this.suspendResumeLock = config.isAllowPoolSuspension() ? new SuspendResumeLock(true) : SuspendResumeLock.FAUX_LOCK;
+
+      setMetricRegistry(config.getMetricRegistry());
+      setHealthCheckRegistry(config.getHealthCheckRegistry());
+
+      this.addConnectionExecutor = createThreadPoolExecutor(config.getMaximumPoolSize(), "Hikari connection filler (pool " + config.getPoolName() + ")", config.getThreadFactory(), new ThreadPoolExecutor.DiscardPolicy());
+      this.closeConnectionExecutor = createThreadPoolExecutor(4, "Hikari connection closer (pool " + config.getPoolName() + ")", config.getThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
+
+      if (config.getScheduledExecutorService() == null) {
+         ThreadFactory threadFactory = config.getThreadFactory() != null ? config.getThreadFactory() : new DefaultThreadFactory("Hikari housekeeper (pool " + config.getPoolName() + ")", true);
+         this.houseKeepingExecutorService = new ScheduledThreadPoolExecutor(1, threadFactory, new ThreadPoolExecutor.DiscardPolicy());
+         this.houseKeepingExecutorService.scheduleAtFixedRate(new HouseKeeper(), HOUSEKEEPING_PERIOD_MS, HOUSEKEEPING_PERIOD_MS, TimeUnit.MILLISECONDS);
+         this.houseKeepingExecutorService.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+         this.houseKeepingExecutorService.setRemoveOnCancelPolicy(true);
+      }
+      else {
+         this.houseKeepingExecutorService = config.getScheduledExecutorService();
+      }
+      this.leakTask = (config.getLeakDetectionThreshold() == 0) ? LeakTask.NO_LEAK : new LeakTask(config.getLeakDetectionThreshold(), houseKeepingExecutorService);
+
+      poolUtils.registerMBeans(this);
+
+      PropertyElf.flushCaches();  
+
+      initializeConnections();
+   }
+
+
+   public final Connection getConnection() throws SQLException
+   {
+      return getConnection(connectionTimeout);
+   }
+
+
+   public final Connection getConnection(final long hardTimeout) throws SQLException
+   {
+      suspendResumeLock.acquire();
+      final long startTime = clockSource.currentTime();
+
+      try {
+         long timeout = hardTimeout;
+         final MetricsContext metricsContext = (isRecordMetrics ? metricsTracker.recordConnectionRequest() : MetricsTracker.NO_CONTEXT);
+         do {
+            final PoolBagEntry bagEntry = connectionBag.borrow(timeout, TimeUnit.MILLISECONDS);
+            if (bagEntry == null) {
+               break; 
+            }
+
+            final long now = clockSource.currentTime();
+            if (bagEntry.evicted || (clockSource.elapsedMillis(bagEntry.lastAccess, now) > ALIVE_BYPASS_WINDOW_MS && !isConnectionAlive(bagEntry.connection))) {
+               closeConnection(bagEntry, "(connection evicted or dead)"); 
+               timeout = hardTimeout - clockSource.elapsedMillis(startTime, now);
+            }
+            else {
+               metricsContext.setConnectionLastOpen(bagEntry, now);
+               metricsContext.stop();
+               return ProxyFactory.getProxyConnection(bagEntry, leakTask.start(bagEntry), now);
+            }
+         }
+         while (timeout > 0L);
+      }
+      catch (InterruptedException e) {
+         throw new SQLException("Interrupted during connection acquisition", e);
+      }
+      finally {
+         suspendResumeLock.release();
+      }
+
+      logPoolState("Timeout failure ");
+      throw new SQLTimeoutException(String.format("Timeout after %dms of waiting for a connection.", clockSource.elapsedMillis(startTime), lastConnectionFailure.getAndSet(null)));
+   }
+
+
+   public final void releaseConnection(final PoolBagEntry bagEntry)
+   {
+      metricsTracker.recordConnectionUsage(bagEntry);
+
+      if (bagEntry.evicted) {
+         closeConnection(bagEntry, "(connection broken or evicted)");
+      }
+      else {
+         connectionBag.requite(bagEntry);
+      }
+   }
+
+
+   public final synchronized void shutdown() throws InterruptedException
+   {
+      try {
+         poolState = POOL_SHUTDOWN;
+
+         LOGGER.info("Hikari pool {} is shutting down.", config.getPoolName());
+
+         logPoolState("Before shutdown ");
+         connectionBag.close();
+         softEvictConnections();
+         houseKeepingExecutorService.shutdown();
+         addConnectionExecutor.shutdownNow();
+         houseKeepingExecutorService.awaitTermination(5L, TimeUnit.SECONDS);
+         addConnectionExecutor.awaitTermination(5L, TimeUnit.SECONDS);
+
+         final ExecutorService assassinExecutor = createThreadPoolExecutor(config.getMaximumPoolSize(), "Hikari connection assassin",
+                                                                           config.getThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
+         try {
+            final long start = clockSource.currentTime();
+            do {
+               softEvictConnections();
+               abortActiveConnections(assassinExecutor);
+            }
+            while (getTotalConnections() > 0 && clockSource.elapsedMillis(start) < TimeUnit.SECONDS.toMillis(5));
+         } finally {
+            assassinExecutor.shutdown();
+            assassinExecutor.awaitTermination(5L, TimeUnit.SECONDS);
+         }
+
+         closeConnectionExecutor.shutdown();
+         closeConnectionExecutor.awaitTermination(5L, TimeUnit.SECONDS);
+      }
+      finally {
+         logPoolState("After shutdown ");
+
+         poolUtils.unregisterMBeans();
+         metricsTracker.close();
+      }
+   }
+
+
+   public final void evictConnection(IHikariConnectionProxy proxyConnection)
+   {
+      closeConnection(proxyConnection.getPoolBagEntry(), "(connection evicted by user)");
+   }
+
+
+   public final DataSource getDataSource()
+   {
+      return dataSource;
+   }
+
+   public void setMetricRegistry(Object metricRegistry)
+   {
+      this.isRecordMetrics = metricRegistry != null;
+      if (isRecordMetrics) {
+         this.metricsTracker = new CodaHaleMetricsTracker(config.getPoolName(), getPoolStats(), (MetricRegistry) metricRegistry);
+      }
+      else {
+         this.metricsTracker = new MetricsTracker();
+      }
+   }
+
+   public void setHealthCheckRegistry(Object healthCheckRegistry)
+   {
+      if (healthCheckRegistry != null) {
+         CodahaleHealthChecker.registerHealthChecks(this, config, (HealthCheckRegistry) healthCheckRegistry);
+      }
+   }
+
+
+   public final void logPoolState(String... prefix)
+   {
+      if (LOGGER.isDebugEnabled()) {
+         LOGGER.debug("{}pool {} stats (total={}, active={}, idle={}, waiting={})",
+                      (prefix.length > 0 ? prefix[0] : ""), config.getPoolName(),
+                      getTotalConnections(), getActiveConnections(), getIdleConnections(), getThreadsAwaitingConnection());
+      }
+   }
+
+
+   @Override
+   public String toString()
+   {
+      return config.getPoolName();
+   }
+
+
+
+
+
+
+   @Override
+   public Future<Boolean> addBagItem()
+   {
+      FutureTask<Boolean> future = new FutureTask<>(new Runnable() {
+         @Override
+         public void run()
+         {
+            long sleepBackoff = 200L;
+            final int minimumIdle = config.getMinimumIdle();
+            final int maxPoolSize = config.getMaximumPoolSize();
+            while (poolState == POOL_NORMAL && totalConnections.get() < maxPoolSize && getIdleConnections() <= minimumIdle && !addConnection()) {
+
+               quietlySleep(sleepBackoff);
+               sleepBackoff = Math.min(connectionTimeout / 2, (long) ((double) sleepBackoff * 1.5));
+            }
+         }
+      }, true);
+
+      addConnectionExecutor.execute(future);
+      return future;
+   }
+
+
+
+
+
+
+   @Override
+   public final int getActiveConnections()
+   {
+      return connectionBag.getCount(STATE_IN_USE);
+   }
+
+
+   @Override
+   public final int getIdleConnections()
+   {
+      return connectionBag.getCount(STATE_NOT_IN_USE);
+   }
+
+
+   @Override
+   public final int getTotalConnections()
+   {
+      return connectionBag.size() - connectionBag.getCount(STATE_REMOVED);
+   }
+
+
+   @Override
+   public final int getThreadsAwaitingConnection()
+   {
+      return connectionBag.getPendingQueue();
+   }
+
+
+   @Override
+   public void softEvictConnections()
+   {
+      for (PoolBagEntry bagEntry : connectionBag.values()) {
+         bagEntry.evicted = true;
+      }
+
+      for (PoolBagEntry bagEntry : connectionBag.values(STATE_NOT_IN_USE)) {
+         if (connectionBag.reserve(bagEntry)) {
+            closeConnection(bagEntry, "(connection evicted by user)");
+         }
+      }
+   }
+
+
+   @Override
+   public final synchronized void suspendPool()
+   {
+      if (suspendResumeLock == SuspendResumeLock.FAUX_LOCK) {
+         throw new IllegalStateException("Pool " + config.getPoolName() + " is not suspendable");
+      }
+      else if (poolState != POOL_SUSPENDED) {
+         suspendResumeLock.suspend();
+         poolState = POOL_SUSPENDED;
+      }
+   }
+
+
+   @Override
+   public final synchronized void resumePool()
+   {
+      if (poolState == POOL_SUSPENDED) {
+         poolState = POOL_NORMAL;
+         fillPool();
+         suspendResumeLock.resume();
+      }
+   }
+
+
+
+
+
+
+   void closeConnection(final PoolBagEntry bagEntry, final String closureReason)
+   {
+      final Connection connection = bagEntry.connection;
+      bagEntry.connection = null;
+      bagEntry.cancelMaxLifeTermination();
+      if (connectionBag.remove(bagEntry)) {
+         final int tc = totalConnections.decrementAndGet();
+         if (tc < 0) {
+            LOGGER.warn("Internal accounting inconsistency, totalConnections={}", tc, new Exception());
+         }
+         
+         closeConnectionExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+               poolUtils.quietlyCloseConnection(connection, closureReason);
+            }
+         });
+      }
+   }
+
+
+
+
+
+
+   private boolean addConnection()
+   {
+
+      if (totalConnections.incrementAndGet() > config.getMaximumPoolSize()) {
+         totalConnections.decrementAndGet(); 
+         lastConnectionFailure.set(new SQLException("Hikari pool " + config.getPoolName() +" is at maximum capacity"));
+         return true;
+      }
+
+      Connection connection = null;
+      try {
+         String username = config.getUsername();
+         String password = config.getPassword();
+
+         connection = (username == null && password == null) ? dataSource.getConnection() : dataSource.getConnection(username, password);
+         
+         if (isUseJdbc4Validation && !poolUtils.isJdbc4ValidationSupported(connection)) {
+            throw new SQLException("JDBC4 Connection.isValid() method not supported, connection test query must be configured");
+         }
+
+         final int originalTimeout = poolUtils.getAndSetNetworkTimeout(connection, connectionTimeout);
+
+         transactionIsolation = (transactionIsolation < 0 ? connection.getTransactionIsolation() : transactionIsolation);
+         poolUtils.setupConnection(connection, config.getConnectionInitSql(), isAutoCommit, isReadOnly, transactionIsolation, catalog);
+
+         poolUtils.setNetworkTimeout(connection, originalTimeout);
+         
+         connectionBag.add(new PoolBagEntry(connection, originalTimeout, this));
+         lastConnectionFailure.set(null);
+         LOGGER.debug("Connection {} added to pool {} ", connection, config.getPoolName());
+         return true;
+      }
+      catch (Exception e) {
+         totalConnections.decrementAndGet(); 
+         lastConnectionFailure.set(e);
+         if (poolState == POOL_NORMAL) {
+            LOGGER.debug("Connection attempt to database in pool {} failed: {}", config.getPoolName(), e.getMessage(), e);
+         }
+         poolUtils.quietlyCloseConnection(connection, "(exception during connection creation)");
+         return false;
+      }
+   }
+
+
+   private void fillPool()
+   {
+      final int connectionsToAdd = Math.min(config.getMaximumPoolSize() - totalConnections.get(), config.getMinimumIdle() - getIdleConnections());
+      for (int i = 0; i < connectionsToAdd; i++) {
+         addBagItem();
+      }
+
+      if (connectionsToAdd > 0 && LOGGER.isDebugEnabled()) {
+         addConnectionExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+               logPoolState("After fill ");
+            }
+         });
+      }
+   }
+
+
+   private boolean isConnectionAlive(final Connection connection)
+   {
+      try {
+         int timeoutSec = (int) TimeUnit.MILLISECONDS.toSeconds(config.getValidationTimeout());
+
+         if (isUseJdbc4Validation) {
+            return connection.isValid(timeoutSec);
+         }
+
+         final int originalTimeout = poolUtils.getAndSetNetworkTimeout(connection, config.getValidationTimeout());
+
+         try (Statement statement = connection.createStatement()) {
+            poolUtils.setQueryTimeout(statement, timeoutSec);
+            try (ResultSet rs = statement.executeQuery(config.getConnectionTestQuery())) { 
+
+            }
+         }
+
+         if (isIsolateInternalQueries && !isAutoCommit) {
+            connection.rollback();
+         }
+
+         poolUtils.setNetworkTimeout(connection, originalTimeout);
+
+         return true;
+      }
+      catch (SQLException e) {
+         LOGGER.warn("Exception during alive check, Connection ({}) declared dead.", connection, e);
+         return false;
+      }
+   }
+
+
+   private void abortActiveConnections(final ExecutorService assassinExecutor)
+   {
+      for (PoolBagEntry bagEntry : connectionBag.values(STATE_IN_USE)) {
+         try {
+            bagEntry.aborted = bagEntry.evicted = true;
+            bagEntry.connection.abort(assassinExecutor);
+         }
+         catch (Throwable e) {
+            poolUtils.quietlyCloseConnection(bagEntry.connection, "(connection aborted during shutdown)");
+         }
+         finally {
+            bagEntry.connection = null;
+            if (connectionBag.remove(bagEntry)) {
+               totalConnections.decrementAndGet();
+            }
+         }
+      }
+   }
+   
+
+   private void initializeConnections()
+   {
+      if (config.isInitializationFailFast()) {
+         try {
+            if (!addConnection()) {
+               throw lastConnectionFailure.getAndSet(null);
+            }
+
+            ConnectionProxy connection = (ConnectionProxy) getConnection();
+            connection.getPoolBagEntry().evicted = (config.getMinimumIdle() == 0);
+            connection.close();
+         }
+         catch (Throwable e) {
+            try {
+               shutdown();
+            }
+            catch (Throwable ex) {
+               e.addSuppressed(ex);
+            }
+
+            throw new PoolInitializationException(e);
+         }
+      }
+
+      fillPool();
+   }
+
+   private PoolStats getPoolStats()
+   {
+      return new PoolStats(TimeUnit.SECONDS.toMillis(1)) {
+         @Override
+         protected void update() {
+            this.pendingThreads = HikariPool.this.getThreadsAwaitingConnection();
+            this.idleConnections = HikariPool.this.getIdleConnections();
+            this.totalConnections = HikariPool.this.getTotalConnections();
+            this.activeConnections = HikariPool.this.getActiveConnections();
+         }
+      };
+   }
+
+
+
+
+
+
+   private class HouseKeeper implements Runnable
+   {
+      private volatile long previous = clockSource.currentTime();
+
+      @Override
+      public void run()
+      {
+         connectionTimeout = config.getConnectionTimeout(); 
+
+         final long now = clockSource.currentTime();
+         final long idleTimeout = config.getIdleTimeout();
+
+
+         if (now < previous || now > clockSource.plusMillis(previous, (2 * HOUSEKEEPING_PERIOD_MS))) {
+            LOGGER.warn("Unusual system clock change detected, soft-evicting connections from pool.");
+            softEvictConnections();
+            fillPool();
+            return;
+         }
+
+         previous = now;
+
+         logPoolState("Before cleanup ");
+         for (PoolBagEntry bagEntry : connectionBag.values(STATE_NOT_IN_USE)) {
+            if (connectionBag.reserve(bagEntry)) {
+               if (bagEntry.evicted) {
+                  closeConnection(bagEntry, "(connection evicted)");
+               }
+               else if (idleTimeout > 0L && clockSource.elapsedMillis(bagEntry.lastAccess, now) > idleTimeout) {
+                  closeConnection(bagEntry, "(connection passed idleTimeout)");
+               }
+               else {
+                  connectionBag.unreserve(bagEntry);
+               }
+            }
+         }
+         
+         logPoolState("After cleanup ");
+
+         fillPool(); 
+      }
+   }
+}
+
+<code block>
+
+package com.zaxxer.hikari.pool;
+
+import java.sql.Connection;
+import java.sql.Statement;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.zaxxer.hikari.util.ClockSource;
+import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
+import com.zaxxer.hikari.util.FastList;
+
+
+public final class PoolBagEntry implements IConcurrentBagEntry
+{
+   public final AtomicInteger state = new AtomicInteger();
+   public final FastList<Statement> openStatements;
+   public final HikariPool parentPool;
+
+   public Connection connection;
+   public int networkTimeout;
+   public long lastAccess;
+   public volatile long lastOpenTime;
+   public volatile boolean evicted;
+   public volatile boolean aborted;
+
+   private volatile ScheduledFuture<?> endOfLife;
+
+   public PoolBagEntry(final Connection connection, final int networkTimeout, final HikariPool pool) {
+      this.connection = connection;
+      this.networkTimeout = networkTimeout;
+      this.parentPool = pool;
+      this.lastAccess = ClockSource.INSTANCE.currentTime();
+      this.openStatements = new FastList<>(Statement.class, 16);
+
+      final long variance = pool.config.getMaxLifetime() > 60_000 ? ThreadLocalRandom.current().nextLong(10_000) : 0;
+      final long maxLifetime = pool.config.getMaxLifetime() - variance;
+      if (maxLifetime > 0) {
+         endOfLife = pool.houseKeepingExecutorService.schedule(new Runnable() {
+            @Override
+            public void run()
+            {
+
+               if (pool.connectionBag.reserve(PoolBagEntry.this)) {
+                  pool.closeConnection(PoolBagEntry.this, "(connection reached maxLifetime)");
+               }
+               else {
+
+                  PoolBagEntry.this.evicted = true;
+               }
+            }
+         }, maxLifetime, TimeUnit.MILLISECONDS);
+      }
+   }
+
+   void cancelMaxLifeTermination()
+   {
+      if (endOfLife != null) {
+         endOfLife.cancel(false);
+      }
+   }
+
+
+
+   @Override
+   public AtomicInteger state()
+   {
+      return state;
+   }
+
+   @Override
+   public String toString()
+   {
+      return "Connection......" + connection + "\n"
+           + "  Last  access.." + lastAccess + "\n"
+           + "  Last open....." + lastOpenTime + "\n"
+           + "  State........." + stateToString();
+   }
+
+   private String stateToString()
+   {
+      switch (state.get()) {
+      case STATE_IN_USE:
+         return "IN_USE";
+      case STATE_NOT_IN_USE:
+         return "NOT_IN_USE";
+      case STATE_REMOVED:
+         return "REMOVED";
+      case STATE_RESERVED:
+         return "RESERVED";
+      default:
+         return "Invalid";
+      }
+   }
+}
+
+<code block>
+
+
+package com.zaxxer.hikari;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import com.zaxxer.hikari.pool.HikariPool;
+import com.zaxxer.hikari.pool.PoolBagEntry;
+import com.zaxxer.hikari.util.ConcurrentBag;
+import com.zaxxer.hikari.util.ConcurrentBag.IBagStateListener;
+
+
+public class TestConcurrentBag
+{
+   private static HikariDataSource ds;
+
+   @BeforeClass
+   public static void setup()
+   {
+      HikariConfig config = new HikariConfig();
+      config.setMinimumIdle(1);
+      config.setMaximumPoolSize(2);
+      config.setInitializationFailFast(true);
+      config.setConnectionTestQuery("VALUES 1");
+      config.setDataSourceClassName("com.zaxxer.hikari.mocks.StubDataSource");
+
+      ds = new HikariDataSource(config);      
+   }
+
+   @AfterClass
+   public static void teardown()
+   {
+      ds.close();
+   }
+
+   @Test
+   public void testConcurrentBag() throws InterruptedException
+   {
+      ConcurrentBag<PoolBagEntry> bag = new ConcurrentBag<PoolBagEntry>(new IBagStateListener() {
+         @Override
+         public Future<Boolean> addBagItem()
+         {
+            return new Future<Boolean>() {
+               @Override
+               public boolean isDone()
+               {
+                  return true;
+               }
+               
+               @Override
+               public boolean isCancelled()
+               {
+                  return false;
+               }
+               
+               @Override
+               public Boolean get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException
+               {
+                  return null;
+               }
+               
+               @Override
+               public Boolean get() throws InterruptedException, ExecutionException
+               {
+                  return true;
+               }
+               
+               @Override
+               public boolean cancel(boolean mayInterruptIfRunning)
+               {
+                  return false;
+               }
+            };
+         }
+      });
+      Assert.assertEquals(0, bag.values(8).size());
+
+      HikariPool pool = TestElf.getPool(ds);
+      PoolBagEntry reserved = new PoolBagEntry(null, 0, TestElf.getPool(ds));
+      bag.add(reserved);
+      bag.reserve(reserved);      
+
+      PoolBagEntry inuse = new PoolBagEntry(null, 0, pool);
+      bag.add(inuse);
+      bag.borrow(2, TimeUnit.MILLISECONDS); 
+      
+      PoolBagEntry notinuse = new PoolBagEntry(null, 0, pool);
+      bag.add(notinuse); 
+
+      bag.dumpState();
+
+      ByteArrayOutputStream baos = new ByteArrayOutputStream();
+      PrintStream ps = new PrintStream(baos, true);
+      TestElf.setSlf4jTargetStream(ConcurrentBag.class, ps);
+      
+      bag.requite(reserved);
+      Assert.assertTrue(new String(baos.toByteArray()).contains("does not exist"));
+
+      bag.remove(notinuse);
+      Assert.assertTrue(new String(baos.toByteArray()).contains("not borrowed or reserved"));
+
+      bag.unreserve(notinuse);
+      Assert.assertTrue(new String(baos.toByteArray()).contains("was not reserved"));
+
+      bag.remove(inuse);
+      bag.remove(inuse);
+      Assert.assertTrue(new String(baos.toByteArray()).contains("not borrowed or reserved"));
+
+      bag.close();
+      try {
+         PoolBagEntry bagEntry = new PoolBagEntry(null, 0, pool);
+         bag.add(bagEntry);
+         Assert.assertNotEquals(bagEntry, bag.borrow(100, TimeUnit.MILLISECONDS));
+      }
+      catch (IllegalStateException e) {
+         Assert.assertTrue(new String(baos.toByteArray()).contains("ignoring add()"));
+      }
+
+      Assert.assertNotNull(notinuse.toString());
    }
 }
 
@@ -2506,7 +2257,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
    private boolean isReadOnlyDirty;
    private boolean isTransactionIsolationDirty;
 
-   
+
    static {
       LOGGER = LoggerFactory.getLogger(ConnectionProxy.class);
 
@@ -2535,18 +2286,18 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       return String.format("%s(%s) wrapping %s", this.getClass().getSimpleName(), System.identityHashCode(this), delegate);
    }
 
-   
-   
-   
 
-   
+
+
+
+
    @Override
    public final PoolBagEntry getPoolBagEntry()
    {
       return bagEntry;
    }
 
-   
+
    @Override
    public final SQLException checkException(final SQLException sqle)
    {
@@ -2565,14 +2316,14 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       return sqle;
    }
 
-   
+
    @Override
    public final void untrackStatement(final Statement statement)
    {
       openStatements.remove(statement);
    }
 
-   
+
    @Override
    public final void markCommitStateDirty()
    {
@@ -2580,9 +2331,9 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       lastAccess = System.currentTimeMillis();
    }
 
-   
-   
-   
+
+
+
 
    private final <T extends Statement> T trackStatement(final T statement)
    {
@@ -2614,11 +2365,386 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       }
    }
 
-   
-   
-   
 
+
+
+
+
+   @Override
+   public final void close() throws SQLException
+   {
+      if (delegate != ClosedConnection.CLOSED_CONNECTION) {
+         leakTask.cancel();
+
+         final int size = openStatements.size();
+         if (size > 0) {
+            for (int i = 0; i < size; i++) {
+               try {
+                  openStatements.get(i).close();
+               }
+               catch (SQLException e) {
+                  checkException(e);
+               }
+            }
+         }
+
+         try {
+            if (isCommitStateDirty && !delegate.getAutoCommit()) {
+               LOGGER.debug("{} Performing rollback on {} due to dirty commit state.", parentPool, delegate);
+               delegate.rollback();
+            }
+
+            if (isConnectionStateDirty) {
+               resetConnectionState();
+            }
+
+            delegate.clearWarnings();
+         }
+         catch (SQLException e) {
+
+            if (!bagEntry.aborted) {
+               throw checkException(e);
+            }
+         }
+         finally {
+            delegate = ClosedConnection.CLOSED_CONNECTION;
+            bagEntry.lastAccess = lastAccess;
+            parentPool.releaseConnection(bagEntry);
+         }
+      }
+   }
+
+
+   @Override
+   public boolean isClosed() throws SQLException
+   {
+      return (delegate == ClosedConnection.CLOSED_CONNECTION);
+   }
+
+
+   @Override
+   public Statement createStatement() throws SQLException
+   {
+      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement()));
+   }
+
+
+   @Override
+   public Statement createStatement(int resultSetType, int concurrency) throws SQLException
+   {
+      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency)));
+   }
+
+
+   @Override
+   public Statement createStatement(int resultSetType, int concurrency, int holdability) throws SQLException
+   {
+      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency, holdability)));
+   }
+
+
+   @Override
+   public CallableStatement prepareCall(String sql) throws SQLException
+   {
+      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql)));
+   }
+
+
+   @Override
+   public CallableStatement prepareCall(String sql, int resultSetType, int concurrency) throws SQLException
+   {
+      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency)));
+   }
+
+
+   @Override
+   public CallableStatement prepareCall(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
+   {
+      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency, holdability)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, autoGeneratedKeys)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency, holdability)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql, int[] columnIndexes) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnIndexes)));
+   }
+
+
+   @Override
+   public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException
+   {
+      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnNames)));
+   }
+
+
+   @Override
+   public void commit() throws SQLException
+   {
+      delegate.commit();
+      isCommitStateDirty = false;
+   }
+
+
+   @Override
+   public void rollback() throws SQLException
+   {
+      delegate.rollback();
+      isCommitStateDirty = false;
+   }
+
+
+   @Override
+   public void rollback(Savepoint savepoint) throws SQLException
+   {
+      delegate.rollback(savepoint);
+      isCommitStateDirty = false;
+   }
+
+
+   @Override
+   public void setAutoCommit(boolean autoCommit) throws SQLException
+   {
+      delegate.setAutoCommit(autoCommit);
+      isConnectionStateDirty = true;
+      isAutoCommitDirty = (autoCommit != parentPool.isAutoCommit);
+   }
+
+
+   @Override
+   public void setReadOnly(boolean readOnly) throws SQLException
+   {
+      delegate.setReadOnly(readOnly);
+      isConnectionStateDirty = true;
+      isReadOnlyDirty = (readOnly != parentPool.isReadOnly);
+   }
+
+
+   @Override
+   public void setTransactionIsolation(int level) throws SQLException
+   {
+      delegate.setTransactionIsolation(level);
+      isConnectionStateDirty = true;
+      isTransactionIsolationDirty = (level != parentPool.transactionIsolation);
+   }
+
+
+   @Override
+   public void setCatalog(String catalog) throws SQLException
+   {
+      delegate.setCatalog(catalog);
+      isConnectionStateDirty = true;
+      isCatalogDirty = (catalog != null && !catalog.equals(parentPool.catalog)) || (catalog == null && parentPool.catalog != null);
+   }
+
+
+   @Override
+   public final boolean isWrapperFor(Class<?> iface) throws SQLException
+   {
+      return iface.isInstance(delegate) || (delegate instanceof Wrapper && delegate.isWrapperFor(iface));
+   }
+
+
+   @Override
+   @SuppressWarnings("unchecked")
+   public final <T> T unwrap(Class<T> iface) throws SQLException
+   {
+      if (iface.isInstance(delegate)) {
+         return (T) delegate;
+      }
+      else if (delegate instanceof Wrapper) {
+          return (T) delegate.unwrap(iface);
+      }
+
+      throw new SQLException("Wrapped connection is not an instance of " + iface);
+   }
+}
+
+<code block>
+
+
+package com.zaxxer.hikari.proxy;
+
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.sql.Statement;
+import java.sql.Wrapper;
+import java.util.HashSet;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.zaxxer.hikari.pool.HikariPool;
+import com.zaxxer.hikari.pool.LeakTask;
+import com.zaxxer.hikari.pool.PoolBagEntry;
+import com.zaxxer.hikari.util.FastList;
+
+
+public abstract class ConnectionProxy implements IHikariConnectionProxy
+{
+   private static final Logger LOGGER;
+   private static final Set<String> SQL_ERRORS;
+
+   protected Connection delegate;
+
+   private final LeakTask leakTask;
+   private final HikariPool parentPool;
+   private final PoolBagEntry bagEntry;
+   private final FastList<Statement> openStatements;
    
+   private long lastAccess;
+   private boolean isCommitStateDirty;
+   private boolean isConnectionStateDirty;
+   private boolean isAutoCommitDirty;
+   private boolean isCatalogDirty;
+   private boolean isReadOnlyDirty;
+   private boolean isTransactionIsolationDirty;
+
+
+   static {
+      LOGGER = LoggerFactory.getLogger(ConnectionProxy.class);
+
+      SQL_ERRORS = new HashSet<String>();
+      SQL_ERRORS.add("57P01"); 
+      SQL_ERRORS.add("57P02"); 
+      SQL_ERRORS.add("57P03"); 
+      SQL_ERRORS.add("01002"); 
+      SQL_ERRORS.add("JZ0C0"); 
+      SQL_ERRORS.add("JZ0C1"); 
+   }
+
+   protected ConnectionProxy(final HikariPool pool, final PoolBagEntry bagEntry, final LeakTask leakTask) {
+      this.parentPool = pool;
+      this.bagEntry = bagEntry;
+      this.delegate = bagEntry.connection;
+      this.leakTask = leakTask;
+      this.lastAccess = bagEntry.lastAccess;
+
+      this.openStatements = new FastList<Statement>(Statement.class, 16);
+   }
+
+   @Override
+   public String toString()
+   {
+      return String.format("%s(%s) wrapping %s", this.getClass().getSimpleName(), System.identityHashCode(this), delegate);
+   }
+
+
+
+
+
+
+   @Override
+   public final PoolBagEntry getPoolBagEntry()
+   {
+      return bagEntry;
+   }
+
+
+   @Override
+   public final SQLException checkException(final SQLException sqle)
+   {
+      String sqlState = sqle.getSQLState();
+      if (sqlState != null) {
+         boolean isForceClose = sqlState.startsWith("08") | SQL_ERRORS.contains(sqlState);
+         if (isForceClose) {
+            bagEntry.evicted = true;
+            LOGGER.warn("Connection {} ({}) marked as broken because of SQLSTATE({}), ErrorCode({}).", delegate,
+                                      parentPool, sqlState, sqle.getErrorCode(), sqle);
+         }
+         else if (sqle.getNextException() != null && sqle != sqle.getNextException()) {
+            checkException(sqle.getNextException());
+         }
+      }
+      return sqle;
+   }
+
+
+   @Override
+   public final void untrackStatement(final Statement statement)
+   {
+      openStatements.remove(statement);
+   }
+
+
+   @Override
+   public final void markCommitStateDirty()
+   {
+      isCommitStateDirty = true;
+      lastAccess = System.currentTimeMillis();
+   }
+
+
+
+
+
+   private final <T extends Statement> T trackStatement(final T statement)
+   {
+      lastAccess = System.currentTimeMillis();
+      openStatements.add(statement);
+
+      return statement;
+   }
+
+   private final void resetConnectionState() throws SQLException
+   {
+      LOGGER.debug("{} Resetting dirty on {} (readOnlyDirty={},autoCommitDirty={},isolationDirty={},catalogDirty={})",
+                   parentPool, delegate, isReadOnlyDirty, isAutoCommitDirty, isTransactionIsolationDirty, isCatalogDirty);
+
+      if (isReadOnlyDirty) {
+         delegate.setReadOnly(parentPool.isReadOnly);
+      }
+
+      if (isAutoCommitDirty) {
+         delegate.setAutoCommit(parentPool.isAutoCommit);
+      }
+
+      if (isTransactionIsolationDirty) {
+         delegate.setTransactionIsolation(parentPool.transactionIsolation);
+      }
+
+      if (isCatalogDirty && parentPool.catalog != null) {
+         delegate.setCatalog(parentPool.catalog);
+      }
+   }
+
+
+
+
+
+
    @Override
    public final void close() throws SQLException
    {
@@ -2640,7 +2766,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
             delegate.clearWarnings();
          }
          catch (SQLException e) {
-            
+
             if (!bagEntry.aborted) {
                throw checkException(e);
             }
@@ -2673,98 +2799,98 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       }
    }
 
-   
+
    @Override
    public boolean isClosed() throws SQLException
    {
       return (delegate == ClosedConnection.CLOSED_CONNECTION);
    }
 
-   
+
    @Override
    public Statement createStatement() throws SQLException
    {
       return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement()));
    }
 
-   
+
    @Override
    public Statement createStatement(int resultSetType, int concurrency) throws SQLException
    {
       return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency)));
    }
 
-   
+
    @Override
    public Statement createStatement(int resultSetType, int concurrency, int holdability) throws SQLException
    {
       return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency, holdability)));
    }
 
-   
+
    @Override
    public CallableStatement prepareCall(String sql) throws SQLException
    {
       return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql)));
    }
 
-   
+
    @Override
    public CallableStatement prepareCall(String sql, int resultSetType, int concurrency) throws SQLException
    {
       return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency)));
    }
 
-   
+
    @Override
    public CallableStatement prepareCall(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
    {
       return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency, holdability)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, autoGeneratedKeys)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency, holdability)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql, int[] columnIndexes) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnIndexes)));
    }
 
-   
+
    @Override
    public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException
    {
       return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnNames)));
    }
 
-   
+
    @Override
    public void commit() throws SQLException
    {
@@ -2772,7 +2898,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isCommitStateDirty = false;
    }
 
-   
+
    @Override
    public void rollback() throws SQLException
    {
@@ -2780,7 +2906,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isCommitStateDirty = false;
    }
 
-   
+
    @Override
    public void rollback(Savepoint savepoint) throws SQLException
    {
@@ -2788,7 +2914,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isCommitStateDirty = false;
    }
 
-   
+
    @Override
    public void setAutoCommit(boolean autoCommit) throws SQLException
    {
@@ -2797,7 +2923,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isAutoCommitDirty = (autoCommit != parentPool.isAutoCommit);
    }
 
-   
+
    @Override
    public void setReadOnly(boolean readOnly) throws SQLException
    {
@@ -2806,7 +2932,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isReadOnlyDirty = (readOnly != parentPool.isReadOnly);
    }
 
-   
+
    @Override
    public void setTransactionIsolation(int level) throws SQLException
    {
@@ -2815,7 +2941,7 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isTransactionIsolationDirty = (level != parentPool.transactionIsolation);
    }
 
-   
+
    @Override
    public void setCatalog(String catalog) throws SQLException
    {
@@ -2824,14 +2950,14 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
       isCatalogDirty = (catalog != null && !catalog.equals(parentPool.catalog)) || (catalog == null && parentPool.catalog != null);
    }
 
-   
+
    @Override
    public final boolean isWrapperFor(Class<?> iface) throws SQLException
    {
       return iface.isInstance(delegate) || (delegate instanceof Wrapper && delegate.isWrapperFor(iface));
    }
 
-   
+
    @Override
    @SuppressWarnings("unchecked")
    public final <T> T unwrap(Class<T> iface) throws SQLException
@@ -2850,374 +2976,248 @@ public abstract class ConnectionProxy implements IHikariConnectionProxy
 <code block>
 
 
-package com.zaxxer.hikari.proxy;
-
-import java.sql.CallableStatement;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Savepoint;
-import java.sql.Statement;
-import java.sql.Wrapper;
-import java.util.HashSet;
-import java.util.Set;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.zaxxer.hikari.pool.HikariPool;
-import com.zaxxer.hikari.pool.LeakTask;
-import com.zaxxer.hikari.pool.PoolBagEntry;
-import com.zaxxer.hikari.util.FastList;
+package com.zaxxer.hikari.util;
 
 
-public abstract class ConnectionProxy implements IHikariConnectionProxy
+
+class MillisecondClockSource implements ClockSource
 {
-   private static final Logger LOGGER;
-   private static final Set<String> SQL_ERRORS;
-
-   protected Connection delegate;
-
-   private final LeakTask leakTask;
-   private final HikariPool parentPool;
-   private final PoolBagEntry bagEntry;
-   private final FastList<Statement> openStatements;
-   
-   private long lastAccess;
-   private boolean isCommitStateDirty;
-   private boolean isConnectionStateDirty;
-   private boolean isAutoCommitDirty;
-   private boolean isCatalogDirty;
-   private boolean isReadOnlyDirty;
-   private boolean isTransactionIsolationDirty;
-
-   
-   static {
-      LOGGER = LoggerFactory.getLogger(ConnectionProxy.class);
-
-      SQL_ERRORS = new HashSet<String>();
-      SQL_ERRORS.add("57P01"); 
-      SQL_ERRORS.add("57P02"); 
-      SQL_ERRORS.add("57P03"); 
-      SQL_ERRORS.add("01002"); 
-      SQL_ERRORS.add("JZ0C0"); 
-      SQL_ERRORS.add("JZ0C1"); 
-   }
-
-   protected ConnectionProxy(final HikariPool pool, final PoolBagEntry bagEntry, final LeakTask leakTask) {
-      this.parentPool = pool;
-      this.bagEntry = bagEntry;
-      this.delegate = bagEntry.connection;
-      this.leakTask = leakTask;
-      this.lastAccess = bagEntry.lastAccess;
-
-      this.openStatements = new FastList<Statement>(Statement.class, 16);
-   }
 
    @Override
-   public String toString()
+   public long currentTime()
    {
-      return String.format("%s(%s) wrapping %s", this.getClass().getSimpleName(), System.identityHashCode(this), delegate);
+      return System.currentTimeMillis();
    }
 
-   
-   
-   
 
-   
    @Override
-   public final PoolBagEntry getPoolBagEntry()
+   public long elapsedMillis(final long startTime)
    {
-      return bagEntry;
+      return System.currentTimeMillis() - startTime;
    }
 
-   
+
    @Override
-   public final SQLException checkException(final SQLException sqle)
+   public long elapsedMillis(final long startTime, final long endTime)
    {
-      String sqlState = sqle.getSQLState();
-      if (sqlState != null) {
-         boolean isForceClose = sqlState.startsWith("08") | SQL_ERRORS.contains(sqlState);
-         if (isForceClose) {
-            bagEntry.evicted = true;
-            LOGGER.warn("Connection {} ({}) marked as broken because of SQLSTATE({}), ErrorCode({}).", delegate,
-                                      parentPool, sqlState, sqle.getErrorCode(), sqle);
-         }
-         else if (sqle.getNextException() != null && sqle != sqle.getNextException()) {
-            checkException(sqle.getNextException());
-         }
-      }
-      return sqle;
+      return endTime - startTime;
    }
 
-   
+
    @Override
-   public final void untrackStatement(final Statement statement)
+   public long toMillis(long time)
    {
-      openStatements.remove(statement);
+      return time;
    }
 
-   
+
    @Override
-   public final void markCommitStateDirty()
+   public long plusMillis(long time, long millis)
    {
-      isCommitStateDirty = true;
-      lastAccess = System.currentTimeMillis();
+      return time + millis;
    }
+}
 
-   
-   
-   
+<code block>
 
-   private final <T extends Statement> T trackStatement(final T statement)
-   {
-      lastAccess = System.currentTimeMillis();
-      openStatements.add(statement);
 
-      return statement;
-   }
+package com.zaxxer.hikari.util;
 
-   private final void resetConnectionState() throws SQLException
-   {
-      LOGGER.debug("{} Resetting dirty on {} (readOnlyDirty={},autoCommitDirty={},isolationDirty={},catalogDirty={})",
-                   parentPool, delegate, isReadOnlyDirty, isAutoCommitDirty, isTransactionIsolationDirty, isCatalogDirty);
+import java.util.concurrent.TimeUnit;
 
-      if (isReadOnlyDirty) {
-         delegate.setReadOnly(parentPool.isReadOnly);
-      }
 
-      if (isAutoCommitDirty) {
-         delegate.setAutoCommit(parentPool.isAutoCommit);
-      }
+class NanosecondClockSource implements ClockSource
+{
 
-      if (isTransactionIsolationDirty) {
-         delegate.setTransactionIsolation(parentPool.transactionIsolation);
-      }
-
-      if (isCatalogDirty && parentPool.catalog != null) {
-         delegate.setCatalog(parentPool.catalog);
-      }
-   }
-
-   
-   
-   
-
-   
    @Override
-   public final void close() throws SQLException
+   public long currentTime()
    {
-      if (delegate != ClosedConnection.CLOSED_CONNECTION) {
-         leakTask.cancel();
+      return System.nanoTime();
+   }
 
-         final int size = openStatements.size();
-         if (size > 0) {
-            for (int i = 0; i < size; i++) {
-               try {
-                  openStatements.get(i).close();
-               }
-               catch (SQLException e) {
-                  checkException(e);
-               }
-            }
+
+   @Override
+   public final long toMillis(final long time)
+   {
+      return TimeUnit.NANOSECONDS.toMillis(time);
+   }
+
+
+   @Override
+   public long elapsedMillis(final long startTime)
+   {
+      return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
+   }
+
+
+   @Override
+   public long elapsedMillis(final long startTime, final long endTime)
+   {
+      return TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
+   }
+
+
+   @Override
+   public long plusMillis(final long time, final long millis)
+   {
+      return time + TimeUnit.MILLISECONDS.toNanos(millis);
+   }
+}
+
+<code block>
+
+
+package com.zaxxer.hikari.util;
+
+
+public interface ClockSource
+{
+   final ClockSource INSTANCE = Factory.create();
+
+
+   long currentTime();
+
+
+   long toMillis(long time);
+
+
+   long elapsedMillis(long startTime);
+
+
+   long elapsedMillis(long startTime, long endTime);
+
+
+   long plusMillis(long time, long millis);
+
+
+   class Factory
+   {
+      private static ClockSource create()
+      {
+         String os = System.getProperty("os.name");
+         if ("Mac OS X".equals(os)) {
+            return new MillisecondClockSource();
          }
 
-         try {
-            if (isCommitStateDirty && !delegate.getAutoCommit()) {
-               LOGGER.debug("{} Performing rollback on {} due to dirty commit state.", parentPool, delegate);
-               delegate.rollback();
-            }
+         return new NanosecondClockSource();
+      }
+   }
+}
 
-            if (isConnectionStateDirty) {
-               resetConnectionState();
-            }
+<code block>
 
-            delegate.clearWarnings();
+
+package com.zaxxer.hikari.util;
+
+import java.util.concurrent.TimeUnit;
+
+
+public interface ClockSource
+{
+   final ClockSource INSTANCE = Factory.create();
+
+
+   long currentTime();
+
+
+   long toMillis(long time);
+
+
+   long elapsedMillis(long startTime);
+
+
+   long elapsedMillis(long startTime, long endTime);
+
+
+   long plusMillis(long time, long millis);
+
+
+   class Factory
+   {
+      private static ClockSource create()
+      {
+         String os = System.getProperty("os.name");
+         if ("Mac OS X".equals(os)) {
+            return new MillisecondClockSource();
          }
-         catch (SQLException e) {
-            
-            if (!bagEntry.aborted) {
-               throw checkException(e);
-            }
-         }
-         finally {
-            delegate = ClosedConnection.CLOSED_CONNECTION;
-            bagEntry.lastAccess = lastAccess;
-            parentPool.releaseConnection(bagEntry);
-         }
+
+         return new NanosecondClockSource();
       }
    }
 
-   
-   @Override
-   public boolean isClosed() throws SQLException
+   final class MillisecondClockSource implements ClockSource
    {
-      return (delegate == ClosedConnection.CLOSED_CONNECTION);
-   }
 
-   
-   @Override
-   public Statement createStatement() throws SQLException
-   {
-      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement()));
-   }
-
-   
-   @Override
-   public Statement createStatement(int resultSetType, int concurrency) throws SQLException
-   {
-      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency)));
-   }
-
-   
-   @Override
-   public Statement createStatement(int resultSetType, int concurrency, int holdability) throws SQLException
-   {
-      return ProxyFactory.getProxyStatement(this, trackStatement(delegate.createStatement(resultSetType, concurrency, holdability)));
-   }
-
-   
-   @Override
-   public CallableStatement prepareCall(String sql) throws SQLException
-   {
-      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql)));
-   }
-
-   
-   @Override
-   public CallableStatement prepareCall(String sql, int resultSetType, int concurrency) throws SQLException
-   {
-      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency)));
-   }
-
-   
-   @Override
-   public CallableStatement prepareCall(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
-   {
-      return ProxyFactory.getProxyCallableStatement(this, trackStatement(delegate.prepareCall(sql, resultSetType, concurrency, holdability)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, autoGeneratedKeys)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql, int resultSetType, int concurrency, int holdability) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, resultSetType, concurrency, holdability)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql, int[] columnIndexes) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnIndexes)));
-   }
-
-   
-   @Override
-   public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException
-   {
-      return ProxyFactory.getProxyPreparedStatement(this, trackStatement(delegate.prepareStatement(sql, columnNames)));
-   }
-
-   
-   @Override
-   public void commit() throws SQLException
-   {
-      delegate.commit();
-      isCommitStateDirty = false;
-   }
-
-   
-   @Override
-   public void rollback() throws SQLException
-   {
-      delegate.rollback();
-      isCommitStateDirty = false;
-   }
-
-   
-   @Override
-   public void rollback(Savepoint savepoint) throws SQLException
-   {
-      delegate.rollback(savepoint);
-      isCommitStateDirty = false;
-   }
-
-   
-   @Override
-   public void setAutoCommit(boolean autoCommit) throws SQLException
-   {
-      delegate.setAutoCommit(autoCommit);
-      isConnectionStateDirty = true;
-      isAutoCommitDirty = (autoCommit != parentPool.isAutoCommit);
-   }
-
-   
-   @Override
-   public void setReadOnly(boolean readOnly) throws SQLException
-   {
-      delegate.setReadOnly(readOnly);
-      isConnectionStateDirty = true;
-      isReadOnlyDirty = (readOnly != parentPool.isReadOnly);
-   }
-
-   
-   @Override
-   public void setTransactionIsolation(int level) throws SQLException
-   {
-      delegate.setTransactionIsolation(level);
-      isConnectionStateDirty = true;
-      isTransactionIsolationDirty = (level != parentPool.transactionIsolation);
-   }
-
-   
-   @Override
-   public void setCatalog(String catalog) throws SQLException
-   {
-      delegate.setCatalog(catalog);
-      isConnectionStateDirty = true;
-      isCatalogDirty = (catalog != null && !catalog.equals(parentPool.catalog)) || (catalog == null && parentPool.catalog != null);
-   }
-
-   
-   @Override
-   public final boolean isWrapperFor(Class<?> iface) throws SQLException
-   {
-      return iface.isInstance(delegate) || (delegate instanceof Wrapper && delegate.isWrapperFor(iface));
-   }
-
-   
-   @Override
-   @SuppressWarnings("unchecked")
-   public final <T> T unwrap(Class<T> iface) throws SQLException
-   {
-      if (iface.isInstance(delegate)) {
-         return (T) delegate;
-      }
-      else if (delegate instanceof Wrapper) {
-          return (T) delegate.unwrap(iface);
+      @Override
+      public long currentTime()
+      {
+         return System.currentTimeMillis();
       }
 
-      throw new SQLException("Wrapped connection is not an instance of " + iface);
+
+      @Override
+      public long elapsedMillis(final long startTime)
+      {
+         return System.currentTimeMillis() - startTime;
+      }
+
+
+      @Override
+      public long elapsedMillis(final long startTime, final long endTime)
+      {
+         return endTime - startTime;
+      }
+
+
+      @Override
+      public long toMillis(long time)
+      {
+         return time;
+      }
+
+
+      @Override
+      public long plusMillis(long time, long millis)
+      {
+         return time + millis;
+      }
+   }
+
+   final class NanosecondClockSource implements ClockSource
+   {
+
+      @Override
+      public long currentTime()
+      {
+         return System.nanoTime();
+      }
+
+
+      @Override
+      public final long toMillis(final long time)
+      {
+         return TimeUnit.NANOSECONDS.toMillis(time);
+      }
+
+
+      @Override
+      public long elapsedMillis(final long startTime)
+      {
+         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
+      }
+
+
+      @Override
+      public long elapsedMillis(final long startTime, final long endTime)
+      {
+         return TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
+      }
+
+
+      @Override
+      public long plusMillis(final long time, final long millis)
+      {
+         return time + TimeUnit.MILLISECONDS.toNanos(millis);
+      }
    }
 }

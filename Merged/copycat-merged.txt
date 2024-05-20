@@ -13,31 +13,211 @@ import java.util.stream.Collectors;
 
 
 abstract class ActiveState extends PassiveState {
+  protected boolean transition;
 
   protected ActiveState(RaftStateContext context) {
     super(context);
   }
 
-  @Override
-  protected void transition(RaftState state) {
+
+  protected CompletableFuture<RaftState> transition(RaftState state) {
     switch (state) {
       case START:
-        context.transition(StartState.class);
-        break;
+        return context.transition(StartState.class);
       case PASSIVE:
-        context.transition(PassiveState.class);
-        break;
+        return context.transition(PassiveState.class);
       case FOLLOWER:
-        context.transition(FollowerState.class);
-        break;
+        return context.transition(FollowerState.class);
       case CANDIDATE:
-        context.transition(CandidateState.class);
-        break;
+        return context.transition(CandidateState.class);
       case LEADER:
-        context.transition(LeaderState.class);
-        break;
+        return context.transition(LeaderState.class);
       default:
         throw new IllegalStateException();
+    }
+  }
+
+  @Override
+  protected CompletableFuture<AppendResponse> append(final AppendRequest request) {
+    context.checkThread();
+    CompletableFuture<AppendResponse> future = CompletableFuture.completedFuture(logResponse(handleAppend(logRequest(request))));
+
+
+    if (transition) {
+      transition(RaftState.FOLLOWER);
+      transition = false;
+    }
+    return future;
+  }
+
+
+  private AppendResponse handleAppend(AppendRequest request) {
+
+
+    if (request.term() > context.getTerm() || (request.term() == context.getTerm() && context.getLeader() == 0)) {
+      context.setTerm(request.term());
+      context.setLeader(request.leader());
+      transition = true;
+    }
+
+
+
+
+    if (request.term() < context.getTerm()) {
+      LOGGER.warn("{} - Rejected {}: request term is less than the current term ({})", context.getCluster().member().id(), request, context.getTerm());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    } else if (request.logIndex() != 0 && request.logTerm() != 0) {
+      return doCheckPreviousEntry(request);
+    } else {
+      return doAppendEntries(request);
+    }
+  }
+
+
+  private AppendResponse doCheckPreviousEntry(AppendRequest request) {
+    if (request.logIndex() != 0 && context.getLog().isEmpty()) {
+      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    } else if (request.logIndex() != 0 && context.getLog().lastIndex() != 0 && request.logIndex() > context.getLog().lastIndex()) {
+      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    }
+
+
+    Entry entry = context.getLog().getEntry(request.logIndex());
+    if (entry == null || entry.getTerm() != request.logTerm()) {
+      LOGGER.warn("{} - Rejected {}: Request log term does not match local log term {} for the same entry", context.getCluster().member().id(), request, entry.getTerm());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(request.logIndex() <= context.getLog().lastIndex() ? request.logIndex() - 1 : context.getLog().lastIndex())
+        .build();
+    } else {
+      return doAppendEntries(request);
+    }
+  }
+
+
+  @SuppressWarnings("unchecked")
+  private AppendResponse doAppendEntries(AppendRequest request) {
+
+
+    if (!request.entries().isEmpty()) {
+
+
+      for (Entry entry : request.entries()) {
+
+
+
+        if (context.getLog().containsIndex(entry.getIndex())) {
+
+          Entry match = context.getLog().getEntry(entry.getIndex());
+          if (match != null) {
+            if (entry.getTerm() != match.getTerm()) {
+
+
+              LOGGER.warn("{} - Appended entry term does not match local log, removing incorrect entries", context.getCluster().member().id());
+              context.getLog().truncate(entry.getIndex() - 1);
+              context.getLog().appendEntry(entry);
+              LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+            }
+          } else {
+            context.getLog().truncate(entry.getIndex() - 1);
+            context.getLog().appendEntry(entry);
+            LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+          }
+        } else {
+
+          context.getLog().skip(entry.getIndex() - context.getLog().lastIndex() - 1).appendEntry(entry);
+          LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+        }
+      }
+    }
+
+
+    context.getContext().execute(() -> {
+      applyCommits(request.commitIndex())
+        .thenRun(() -> applyIndex(request.globalIndex()))
+        .thenRun(request::close);
+    });
+
+    return AppendResponse.builder()
+      .withStatus(Response.Status.OK)
+      .withTerm(context.getTerm())
+      .withSucceeded(true)
+      .withLogIndex(context.getLog().lastIndex())
+      .build();
+  }
+
+
+  @SuppressWarnings("unchecked")
+  private CompletableFuture<Void> applyCommits(long commitIndex) {
+
+
+
+
+
+
+    if (commitIndex != 0 && !context.getLog().isEmpty()) {
+      if (context.getCommitIndex() == 0 || commitIndex > context.getCommitIndex()) {
+        long lastIndex = context.getLog().lastIndex();
+        int commits = (int) (Math.min(commitIndex, lastIndex) - Math.max(context.getCommitIndex(), context.getLog().firstIndex()));
+
+        LOGGER.debug("{} - Applying {} commits", context.getCluster().member().id(), commits);
+
+
+        long previousCommitIndex = context.getCommitIndex();
+        if (lastIndex != 0) {
+          context.setCommitIndex(Math.min(Math.max(commitIndex, previousCommitIndex != 0 ? previousCommitIndex : commitIndex), lastIndex));
+
+
+
+          if (context.getCommitIndex() > previousCommitIndex) {
+
+
+            CompletableFuture<?>[] futures = new CompletableFuture[commits];
+            int j = 0;
+            for (long i = Math.max(previousCommitIndex + 1, context.getLog().firstIndex()); i <= Math.min(context.getCommitIndex(), lastIndex); i++) {
+              Entry entry = context.getLog().getEntry(i);
+              if (entry != null) {
+                futures[j++] = context.getStateMachine().apply(entry).whenCompleteAsync((result, error) -> {
+                  if (isOpen() && error != null) {
+                    LOGGER.info("{} - An application error occurred: {}", context.getCluster().member().id(), error);
+                  }
+                  entry.close();
+                }, context.getContext());
+              }
+            }
+            return CompletableFuture.allOf(futures);
+          }
+        }
+      }
+    } else {
+      context.setCommitIndex(commitIndex);
+    }
+    return CompletableFuture.completedFuture(null);
+  }
+
+
+  private void applyIndex(long globalIndex) {
+    if (globalIndex > 0) {
+      context.setGlobalIndex(globalIndex);
     }
   }
 
@@ -47,7 +227,7 @@ abstract class ActiveState extends PassiveState {
     return CompletableFuture.completedFuture(logResponse(handlePoll(logRequest(request))));
   }
 
-  
+
   protected PollResponse handlePoll(PollRequest request) {
     if (logUpToDate(request.logIndex(), request.logTerm(), request)) {
       return PollResponse.builder()
@@ -70,17 +250,17 @@ abstract class ActiveState extends PassiveState {
     return CompletableFuture.completedFuture(logResponse(handleVote(logRequest(request))));
   }
 
-  
+
   protected VoteResponse handleVote(VoteRequest request) {
-    
-    
+
+
     if (request.term() > context.getTerm()) {
       context.setTerm(request.term());
     }
 
-    
-    
-    
+
+
+
     if (request.term() < context.getTerm()) {
       LOGGER.debug("{} - Rejected {}: candidate's term is less than the current term", context.getCluster().member().id(), request);
       return VoteResponse.builder()
@@ -89,9 +269,9 @@ abstract class ActiveState extends PassiveState {
         .withVoted(false)
         .build();
     }
-    
-    
-    
+
+
+
     else if (request.candidate() == context.getCluster().member().id()) {
       context.setLastVotedFor(context.getCluster().member().id());
       LOGGER.debug("{} - Accepted {}: candidate is the local member", context.getCluster().member().id(), request);
@@ -101,8 +281,8 @@ abstract class ActiveState extends PassiveState {
         .withVoted(true)
         .build();
     }
-    
-    
+
+
     else if (!context.getCluster().members().stream().map(Member::id).collect(Collectors.toSet()).contains(request.candidate())) {
       LOGGER.debug("{} - Rejected {}: candidate is not known to the local member", context.getCluster().member().id(), request);
       return VoteResponse.builder()
@@ -111,7 +291,7 @@ abstract class ActiveState extends PassiveState {
         .withVoted(false)
         .build();
     }
-    
+
     else if (context.getLastVotedFor() == 0 || context.getLastVotedFor() == request.candidate()) {
       if (logUpToDate(request.logIndex(), request.logTerm(), request)) {
         context.setLastVotedFor(request.candidate());
@@ -128,7 +308,7 @@ abstract class ActiveState extends PassiveState {
           .build();
       }
     }
-    
+
     else {
       LOGGER.debug("{} - Rejected {}: already voted for {}", context.getCluster().member().id(), request, context.getLastVotedFor());
       return VoteResponse.builder()
@@ -139,15 +319,15 @@ abstract class ActiveState extends PassiveState {
     }
   }
 
-  
+
   private boolean logUpToDate(long index, long term, Request request) {
-    
+
     if (context.getLog().isEmpty()) {
       LOGGER.debug("{} - Accepted {}: candidate's log is up-to-date", context.getCluster().member().id(), request);
       return true;
     } else {
-      
-      
+
+
       long lastIndex = context.getLog().lastIndex();
       Entry entry = context.getLog().getEntry(lastIndex);
       if (entry == null) {
@@ -184,7 +364,7 @@ abstract class ActiveState extends PassiveState {
     }
   }
 
-  
+
   private CompletableFuture<QueryResponse> queryForward(QueryRequest request) {
     if (context.getLeader() == 0) {
       return CompletableFuture.completedFuture(logResponse(QueryResponse.builder()
@@ -195,10 +375,10 @@ abstract class ActiveState extends PassiveState {
     return context.getCluster().member(context.getLeader()).send(request);
   }
 
-  
+
   private CompletableFuture<QueryResponse> querySequential(QueryRequest request) {
-    
-    
+
+
     if (context.getLog().lastIndex() < context.getCommitIndex()) {
       LOGGER.debug("{} - State appears to be out of sync, forwarding query to leader");
       return queryForward(request);
@@ -234,10 +414,10 @@ abstract class ActiveState extends PassiveState {
     return future;
   }
 
-  
+
   private CompletableFuture<QueryResponse> querySerializable(QueryRequest request) {
-    
-    
+
+
     if (context.getLog().lastIndex() < context.getCommitIndex()) {
       LOGGER.debug("{} - State appears to be out of sync, forwarding query to leader");
       return queryForward(request);
@@ -280,14 +460,12 @@ abstract class ActiveState extends PassiveState {
 package net.kuujo.copycat.raft.state;
 
 import net.kuujo.copycat.raft.RaftError;
-import net.kuujo.copycat.raft.log.entry.Entry;
 import net.kuujo.copycat.raft.rpc.*;
 
 import java.util.concurrent.CompletableFuture;
 
 
 public class PassiveState extends AbstractState {
-  protected boolean transition;
 
   public PassiveState(RaftStateContext context) {
     super(context);
@@ -298,193 +476,14 @@ public class PassiveState extends AbstractState {
     return RaftState.PASSIVE;
   }
 
-  
-  protected void transition(RaftState state) {
-    
-  }
-
   @Override
-  protected CompletableFuture<AppendResponse> append(final AppendRequest request) {
+  protected CompletableFuture<AppendResponse> append(AppendRequest request) {
     context.checkThread();
-    CompletableFuture<AppendResponse> future = CompletableFuture.completedFuture(logResponse(handleAppend(logRequest(request))));
-    
-    
-    if (transition) {
-      transition(RaftState.FOLLOWER);
-      transition = false;
-    }
-    return future;
-  }
-
-  
-  private AppendResponse handleAppend(AppendRequest request) {
-    
-    
-    if (request.term() > context.getTerm() || (request.term() == context.getTerm() && context.getLeader() == 0)) {
-      context.setTerm(request.term());
-      context.setLeader(request.leader());
-      transition = true;
-    }
-
-    
-    
-    
-    if (request.term() < context.getTerm()) {
-      LOGGER.warn("{} - Rejected {}: request term is less than the current term ({})", context.getCluster().member().id(), request, context.getTerm());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    } else if (request.logIndex() != 0 && request.logTerm() != 0) {
-      return doCheckPreviousEntry(request);
-    } else {
-      return doAppendEntries(request);
-    }
-  }
-
-  
-  private AppendResponse doCheckPreviousEntry(AppendRequest request) {
-    if (request.logIndex() != 0 && context.getLog().isEmpty()) {
-      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    } else if (request.logIndex() != 0 && context.getLog().lastIndex() != 0 && request.logIndex() > context.getLog().lastIndex()) {
-      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    }
-
-    
-    Entry entry = context.getLog().getEntry(request.logIndex());
-    if (entry == null || entry.getTerm() != request.logTerm()) {
-      LOGGER.warn("{} - Rejected {}: Request log term does not match local log term {} for the same entry", context.getCluster().member().id(), request, entry.getTerm());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(request.logIndex() <= context.getLog().lastIndex() ? request.logIndex() - 1 : context.getLog().lastIndex())
-        .build();
-    } else {
-      return doAppendEntries(request);
-    }
-  }
-
-  
-  @SuppressWarnings("unchecked")
-  private AppendResponse doAppendEntries(AppendRequest request) {
-    
-    
-    if (!request.entries().isEmpty()) {
-
-      
-      for (Entry entry : request.entries()) {
-        
-        
-        
-        if (context.getLog().containsIndex(entry.getIndex())) {
-          
-          Entry match = context.getLog().getEntry(entry.getIndex());
-          if (match != null) {
-            if (entry.getTerm() != match.getTerm()) {
-              
-              
-              LOGGER.warn("{} - Appended entry term does not match local log, removing incorrect entries", context.getCluster().member().id());
-              context.getLog().truncate(entry.getIndex() - 1);
-              context.getLog().appendEntry(entry);
-              LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-            }
-          } else {
-            context.getLog().truncate(entry.getIndex() - 1);
-            context.getLog().appendEntry(entry);
-            LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-          }
-        } else {
-          
-          context.getLog().skip(entry.getIndex() - context.getLog().lastIndex() - 1).appendEntry(entry);
-          LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-        }
-      }
-    }
-
-    
-    context.getContext().execute(() -> {
-      applyCommits(request.commitIndex())
-        .thenRun(() -> applyIndex(request.globalIndex()))
-        .thenRun(request::close);
-    });
-
-    return AppendResponse.builder()
-      .withStatus(Response.Status.OK)
-      .withTerm(context.getTerm())
-      .withSucceeded(true)
-      .withLogIndex(context.getLog().lastIndex())
-      .build();
-  }
-
-  
-  @SuppressWarnings("unchecked")
-  private CompletableFuture<Void> applyCommits(long commitIndex) {
-    
-    
-    
-    
-    
-    
-    if (commitIndex != 0 && !context.getLog().isEmpty()) {
-      if (context.getCommitIndex() == 0 || commitIndex > context.getCommitIndex()) {
-        long lastIndex = context.getLog().lastIndex();
-        int commits = (int) (Math.min(commitIndex, lastIndex) - Math.max(context.getCommitIndex(), context.getLog().firstIndex()));
-
-        LOGGER.debug("{} - Applying {} commits", context.getCluster().member().id(), commits);
-
-        
-        long previousCommitIndex = context.getCommitIndex();
-        if (lastIndex != 0) {
-          context.setCommitIndex(Math.min(Math.max(commitIndex, previousCommitIndex != 0 ? previousCommitIndex : commitIndex), lastIndex));
-
-          
-          
-          if (context.getCommitIndex() > previousCommitIndex) {
-            
-            
-            CompletableFuture<?>[] futures = new CompletableFuture[commits];
-            int j = 0;
-            for (long i = Math.max(previousCommitIndex + 1, context.getLog().firstIndex()); i <= Math.min(context.getCommitIndex(), lastIndex); i++) {
-              Entry entry = context.getLog().getEntry(i);
-              if (entry != null) {
-                futures[j++] = context.getStateMachine().apply(entry).whenCompleteAsync((result, error) -> {
-                  if (isOpen() && error != null) {
-                    LOGGER.info("{} - An application error occurred: {}", context.getCluster().member().id(), error);
-                  }
-                  entry.close();
-                }, context.getContext());
-              }
-            }
-            return CompletableFuture.allOf(futures);
-          }
-        }
-      }
-    } else {
-      context.setCommitIndex(commitIndex);
-    }
-    return CompletableFuture.completedFuture(null);
-  }
-
-  
-  private void applyIndex(long globalIndex) {
-    if (globalIndex > 0) {
-      context.setGlobalIndex(globalIndex);
-    }
+    logRequest(request);
+    return CompletableFuture.completedFuture(logResponse(AppendResponse.builder()
+      .withStatus(Response.Status.ERROR)
+      .withError(RaftError.Type.ILLEGAL_MEMBER_STATE_ERROR)
+      .build()));
   }
 
   @Override
@@ -623,211 +622,31 @@ import java.util.stream.Collectors;
 
 
 abstract class ActiveState extends PassiveState {
-  protected boolean transition;
 
   protected ActiveState(RaftStateContext context) {
     super(context);
   }
 
-  
-  protected CompletableFuture<RaftState> transition(RaftState state) {
+  @Override
+  protected void transition(RaftState state) {
     switch (state) {
       case START:
-        return context.transition(StartState.class);
+        context.transition(StartState.class);
+        break;
       case PASSIVE:
-        return context.transition(PassiveState.class);
+        context.transition(PassiveState.class);
+        break;
       case FOLLOWER:
-        return context.transition(FollowerState.class);
+        context.transition(FollowerState.class);
+        break;
       case CANDIDATE:
-        return context.transition(CandidateState.class);
+        context.transition(CandidateState.class);
+        break;
       case LEADER:
-        return context.transition(LeaderState.class);
+        context.transition(LeaderState.class);
+        break;
       default:
         throw new IllegalStateException();
-    }
-  }
-
-  @Override
-  protected CompletableFuture<AppendResponse> append(final AppendRequest request) {
-    context.checkThread();
-    CompletableFuture<AppendResponse> future = CompletableFuture.completedFuture(logResponse(handleAppend(logRequest(request))));
-    
-    
-    if (transition) {
-      transition(RaftState.FOLLOWER);
-      transition = false;
-    }
-    return future;
-  }
-
-  
-  private AppendResponse handleAppend(AppendRequest request) {
-    
-    
-    if (request.term() > context.getTerm() || (request.term() == context.getTerm() && context.getLeader() == 0)) {
-      context.setTerm(request.term());
-      context.setLeader(request.leader());
-      transition = true;
-    }
-
-    
-    
-    
-    if (request.term() < context.getTerm()) {
-      LOGGER.warn("{} - Rejected {}: request term is less than the current term ({})", context.getCluster().member().id(), request, context.getTerm());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    } else if (request.logIndex() != 0 && request.logTerm() != 0) {
-      return doCheckPreviousEntry(request);
-    } else {
-      return doAppendEntries(request);
-    }
-  }
-
-  
-  private AppendResponse doCheckPreviousEntry(AppendRequest request) {
-    if (request.logIndex() != 0 && context.getLog().isEmpty()) {
-      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    } else if (request.logIndex() != 0 && context.getLog().lastIndex() != 0 && request.logIndex() > context.getLog().lastIndex()) {
-      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(context.getLog().lastIndex())
-        .build();
-    }
-
-    
-    Entry entry = context.getLog().getEntry(request.logIndex());
-    if (entry == null || entry.getTerm() != request.logTerm()) {
-      LOGGER.warn("{} - Rejected {}: Request log term does not match local log term {} for the same entry", context.getCluster().member().id(), request, entry.getTerm());
-      return AppendResponse.builder()
-        .withStatus(Response.Status.OK)
-        .withTerm(context.getTerm())
-        .withSucceeded(false)
-        .withLogIndex(request.logIndex() <= context.getLog().lastIndex() ? request.logIndex() - 1 : context.getLog().lastIndex())
-        .build();
-    } else {
-      return doAppendEntries(request);
-    }
-  }
-
-  
-  @SuppressWarnings("unchecked")
-  private AppendResponse doAppendEntries(AppendRequest request) {
-    
-    
-    if (!request.entries().isEmpty()) {
-
-      
-      for (Entry entry : request.entries()) {
-        
-        
-        
-        if (context.getLog().containsIndex(entry.getIndex())) {
-          
-          Entry match = context.getLog().getEntry(entry.getIndex());
-          if (match != null) {
-            if (entry.getTerm() != match.getTerm()) {
-              
-              
-              LOGGER.warn("{} - Appended entry term does not match local log, removing incorrect entries", context.getCluster().member().id());
-              context.getLog().truncate(entry.getIndex() - 1);
-              context.getLog().appendEntry(entry);
-              LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-            }
-          } else {
-            context.getLog().truncate(entry.getIndex() - 1);
-            context.getLog().appendEntry(entry);
-            LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-          }
-        } else {
-          
-          context.getLog().skip(entry.getIndex() - context.getLog().lastIndex() - 1).appendEntry(entry);
-          LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
-        }
-      }
-    }
-
-    
-    context.getContext().execute(() -> {
-      applyCommits(request.commitIndex())
-        .thenRun(() -> applyIndex(request.globalIndex()))
-        .thenRun(request::close);
-    });
-
-    return AppendResponse.builder()
-      .withStatus(Response.Status.OK)
-      .withTerm(context.getTerm())
-      .withSucceeded(true)
-      .withLogIndex(context.getLog().lastIndex())
-      .build();
-  }
-
-  
-  @SuppressWarnings("unchecked")
-  private CompletableFuture<Void> applyCommits(long commitIndex) {
-    
-    
-    
-    
-    
-    
-    if (commitIndex != 0 && !context.getLog().isEmpty()) {
-      if (context.getCommitIndex() == 0 || commitIndex > context.getCommitIndex()) {
-        long lastIndex = context.getLog().lastIndex();
-        int commits = (int) (Math.min(commitIndex, lastIndex) - Math.max(context.getCommitIndex(), context.getLog().firstIndex()));
-
-        LOGGER.debug("{} - Applying {} commits", context.getCluster().member().id(), commits);
-
-        
-        long previousCommitIndex = context.getCommitIndex();
-        if (lastIndex != 0) {
-          context.setCommitIndex(Math.min(Math.max(commitIndex, previousCommitIndex != 0 ? previousCommitIndex : commitIndex), lastIndex));
-
-          
-          
-          if (context.getCommitIndex() > previousCommitIndex) {
-            
-            
-            CompletableFuture<?>[] futures = new CompletableFuture[commits];
-            int j = 0;
-            for (long i = Math.max(previousCommitIndex + 1, context.getLog().firstIndex()); i <= Math.min(context.getCommitIndex(), lastIndex); i++) {
-              Entry entry = context.getLog().getEntry(i);
-              if (entry != null) {
-                futures[j++] = context.getStateMachine().apply(entry).whenCompleteAsync((result, error) -> {
-                  if (isOpen() && error != null) {
-                    LOGGER.info("{} - An application error occurred: {}", context.getCluster().member().id(), error);
-                  }
-                  entry.close();
-                }, context.getContext());
-              }
-            }
-            return CompletableFuture.allOf(futures);
-          }
-        }
-      }
-    } else {
-      context.setCommitIndex(commitIndex);
-    }
-    return CompletableFuture.completedFuture(null);
-  }
-
-  
-  private void applyIndex(long globalIndex) {
-    if (globalIndex > 0) {
-      context.setGlobalIndex(globalIndex);
     }
   }
 
@@ -837,7 +656,7 @@ abstract class ActiveState extends PassiveState {
     return CompletableFuture.completedFuture(logResponse(handlePoll(logRequest(request))));
   }
 
-  
+
   protected PollResponse handlePoll(PollRequest request) {
     if (logUpToDate(request.logIndex(), request.logTerm(), request)) {
       return PollResponse.builder()
@@ -860,17 +679,17 @@ abstract class ActiveState extends PassiveState {
     return CompletableFuture.completedFuture(logResponse(handleVote(logRequest(request))));
   }
 
-  
+
   protected VoteResponse handleVote(VoteRequest request) {
-    
-    
+
+
     if (request.term() > context.getTerm()) {
       context.setTerm(request.term());
     }
 
-    
-    
-    
+
+
+
     if (request.term() < context.getTerm()) {
       LOGGER.debug("{} - Rejected {}: candidate's term is less than the current term", context.getCluster().member().id(), request);
       return VoteResponse.builder()
@@ -879,9 +698,9 @@ abstract class ActiveState extends PassiveState {
         .withVoted(false)
         .build();
     }
-    
-    
-    
+
+
+
     else if (request.candidate() == context.getCluster().member().id()) {
       context.setLastVotedFor(context.getCluster().member().id());
       LOGGER.debug("{} - Accepted {}: candidate is the local member", context.getCluster().member().id(), request);
@@ -891,8 +710,8 @@ abstract class ActiveState extends PassiveState {
         .withVoted(true)
         .build();
     }
-    
-    
+
+
     else if (!context.getCluster().members().stream().map(Member::id).collect(Collectors.toSet()).contains(request.candidate())) {
       LOGGER.debug("{} - Rejected {}: candidate is not known to the local member", context.getCluster().member().id(), request);
       return VoteResponse.builder()
@@ -901,7 +720,7 @@ abstract class ActiveState extends PassiveState {
         .withVoted(false)
         .build();
     }
-    
+
     else if (context.getLastVotedFor() == 0 || context.getLastVotedFor() == request.candidate()) {
       if (logUpToDate(request.logIndex(), request.logTerm(), request)) {
         context.setLastVotedFor(request.candidate());
@@ -918,7 +737,7 @@ abstract class ActiveState extends PassiveState {
           .build();
       }
     }
-    
+
     else {
       LOGGER.debug("{} - Rejected {}: already voted for {}", context.getCluster().member().id(), request, context.getLastVotedFor());
       return VoteResponse.builder()
@@ -929,15 +748,15 @@ abstract class ActiveState extends PassiveState {
     }
   }
 
-  
+
   private boolean logUpToDate(long index, long term, Request request) {
-    
+
     if (context.getLog().isEmpty()) {
       LOGGER.debug("{} - Accepted {}: candidate's log is up-to-date", context.getCluster().member().id(), request);
       return true;
     } else {
-      
-      
+
+
       long lastIndex = context.getLog().lastIndex();
       Entry entry = context.getLog().getEntry(lastIndex);
       if (entry == null) {
@@ -974,7 +793,7 @@ abstract class ActiveState extends PassiveState {
     }
   }
 
-  
+
   private CompletableFuture<QueryResponse> queryForward(QueryRequest request) {
     if (context.getLeader() == 0) {
       return CompletableFuture.completedFuture(logResponse(QueryResponse.builder()
@@ -985,10 +804,10 @@ abstract class ActiveState extends PassiveState {
     return context.getCluster().member(context.getLeader()).send(request);
   }
 
-  
+
   private CompletableFuture<QueryResponse> querySequential(QueryRequest request) {
-    
-    
+
+
     if (context.getLog().lastIndex() < context.getCommitIndex()) {
       LOGGER.debug("{} - State appears to be out of sync, forwarding query to leader");
       return queryForward(request);
@@ -1024,10 +843,10 @@ abstract class ActiveState extends PassiveState {
     return future;
   }
 
-  
+
   private CompletableFuture<QueryResponse> querySerializable(QueryRequest request) {
-    
-    
+
+
     if (context.getLog().lastIndex() < context.getCommitIndex()) {
       LOGGER.debug("{} - State appears to be out of sync, forwarding query to leader");
       return queryForward(request);
@@ -1070,12 +889,14 @@ abstract class ActiveState extends PassiveState {
 package net.kuujo.copycat.raft.state;
 
 import net.kuujo.copycat.raft.RaftError;
+import net.kuujo.copycat.raft.log.entry.Entry;
 import net.kuujo.copycat.raft.rpc.*;
 
 import java.util.concurrent.CompletableFuture;
 
 
 public class PassiveState extends AbstractState {
+  protected boolean transition;
 
   public PassiveState(RaftStateContext context) {
     super(context);
@@ -1086,14 +907,193 @@ public class PassiveState extends AbstractState {
     return RaftState.PASSIVE;
   }
 
+
+  protected void transition(RaftState state) {
+
+  }
+
   @Override
-  protected CompletableFuture<AppendResponse> append(AppendRequest request) {
+  protected CompletableFuture<AppendResponse> append(final AppendRequest request) {
     context.checkThread();
-    logRequest(request);
-    return CompletableFuture.completedFuture(logResponse(AppendResponse.builder()
-      .withStatus(Response.Status.ERROR)
-      .withError(RaftError.Type.ILLEGAL_MEMBER_STATE_ERROR)
-      .build()));
+    CompletableFuture<AppendResponse> future = CompletableFuture.completedFuture(logResponse(handleAppend(logRequest(request))));
+
+
+    if (transition) {
+      transition(RaftState.FOLLOWER);
+      transition = false;
+    }
+    return future;
+  }
+
+
+  private AppendResponse handleAppend(AppendRequest request) {
+
+
+    if (request.term() > context.getTerm() || (request.term() == context.getTerm() && context.getLeader() == 0)) {
+      context.setTerm(request.term());
+      context.setLeader(request.leader());
+      transition = true;
+    }
+
+
+
+
+    if (request.term() < context.getTerm()) {
+      LOGGER.warn("{} - Rejected {}: request term is less than the current term ({})", context.getCluster().member().id(), request, context.getTerm());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    } else if (request.logIndex() != 0 && request.logTerm() != 0) {
+      return doCheckPreviousEntry(request);
+    } else {
+      return doAppendEntries(request);
+    }
+  }
+
+
+  private AppendResponse doCheckPreviousEntry(AppendRequest request) {
+    if (request.logIndex() != 0 && context.getLog().isEmpty()) {
+      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    } else if (request.logIndex() != 0 && context.getLog().lastIndex() != 0 && request.logIndex() > context.getLog().lastIndex()) {
+      LOGGER.warn("{} - Rejected {}: Previous index ({}) is greater than the local log's last index ({})", context.getCluster().member().id(), request, request.logIndex(), context.getLog().lastIndex());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(context.getLog().lastIndex())
+        .build();
+    }
+
+
+    Entry entry = context.getLog().getEntry(request.logIndex());
+    if (entry == null || entry.getTerm() != request.logTerm()) {
+      LOGGER.warn("{} - Rejected {}: Request log term does not match local log term {} for the same entry", context.getCluster().member().id(), request, entry.getTerm());
+      return AppendResponse.builder()
+        .withStatus(Response.Status.OK)
+        .withTerm(context.getTerm())
+        .withSucceeded(false)
+        .withLogIndex(request.logIndex() <= context.getLog().lastIndex() ? request.logIndex() - 1 : context.getLog().lastIndex())
+        .build();
+    } else {
+      return doAppendEntries(request);
+    }
+  }
+
+
+  @SuppressWarnings("unchecked")
+  private AppendResponse doAppendEntries(AppendRequest request) {
+
+
+    if (!request.entries().isEmpty()) {
+
+
+      for (Entry entry : request.entries()) {
+
+
+
+        if (context.getLog().containsIndex(entry.getIndex())) {
+
+          Entry match = context.getLog().getEntry(entry.getIndex());
+          if (match != null) {
+            if (entry.getTerm() != match.getTerm()) {
+
+
+              LOGGER.warn("{} - Appended entry term does not match local log, removing incorrect entries", context.getCluster().member().id());
+              context.getLog().truncate(entry.getIndex() - 1);
+              context.getLog().appendEntry(entry);
+              LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+            }
+          } else {
+            context.getLog().truncate(entry.getIndex() - 1);
+            context.getLog().appendEntry(entry);
+            LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+          }
+        } else {
+
+          context.getLog().skip(entry.getIndex() - context.getLog().lastIndex() - 1).appendEntry(entry);
+          LOGGER.debug("{} - Appended {} to log at index {}", context.getCluster().member().id(), entry, entry.getIndex());
+        }
+      }
+    }
+
+
+    context.getContext().execute(() -> {
+      applyCommits(request.commitIndex())
+        .thenRun(() -> applyIndex(request.globalIndex()))
+        .thenRun(request::close);
+    });
+
+    return AppendResponse.builder()
+      .withStatus(Response.Status.OK)
+      .withTerm(context.getTerm())
+      .withSucceeded(true)
+      .withLogIndex(context.getLog().lastIndex())
+      .build();
+  }
+
+
+  @SuppressWarnings("unchecked")
+  private CompletableFuture<Void> applyCommits(long commitIndex) {
+
+
+
+
+
+
+    if (commitIndex != 0 && !context.getLog().isEmpty()) {
+      if (context.getCommitIndex() == 0 || commitIndex > context.getCommitIndex()) {
+        long lastIndex = context.getLog().lastIndex();
+        int commits = (int) (Math.min(commitIndex, lastIndex) - Math.max(context.getCommitIndex(), context.getLog().firstIndex()));
+
+        LOGGER.debug("{} - Applying {} commits", context.getCluster().member().id(), commits);
+
+
+        long previousCommitIndex = context.getCommitIndex();
+        if (lastIndex != 0) {
+          context.setCommitIndex(Math.min(Math.max(commitIndex, previousCommitIndex != 0 ? previousCommitIndex : commitIndex), lastIndex));
+
+
+
+          if (context.getCommitIndex() > previousCommitIndex) {
+
+
+            CompletableFuture<?>[] futures = new CompletableFuture[commits];
+            int j = 0;
+            for (long i = Math.max(previousCommitIndex + 1, context.getLog().firstIndex()); i <= Math.min(context.getCommitIndex(), lastIndex); i++) {
+              Entry entry = context.getLog().getEntry(i);
+              if (entry != null) {
+                futures[j++] = context.getStateMachine().apply(entry).whenCompleteAsync((result, error) -> {
+                  if (isOpen() && error != null) {
+                    LOGGER.info("{} - An application error occurred: {}", context.getCluster().member().id(), error);
+                  }
+                  entry.close();
+                }, context.getContext());
+              }
+            }
+            return CompletableFuture.allOf(futures);
+          }
+        }
+      }
+    } else {
+      context.setCommitIndex(commitIndex);
+    }
+    return CompletableFuture.completedFuture(null);
+  }
+
+
+  private void applyIndex(long globalIndex) {
+    if (globalIndex > 0) {
+      context.setGlobalIndex(globalIndex);
+    }
   }
 
   @Override

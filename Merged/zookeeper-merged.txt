@@ -2,1137 +2,6 @@
 
 package org.apache.zookeeper.server;
 
-import java.io.BufferedWriter;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.Writer;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.CancelledKeyException;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
-import java.security.cert.Certificate;
-import java.util.Queue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.jute.BinaryInputArchive;
-import org.apache.jute.BinaryOutputArchive;
-import org.apache.jute.Record;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.data.Id;
-import org.apache.zookeeper.proto.ReplyHeader;
-import org.apache.zookeeper.proto.RequestHeader;
-import org.apache.zookeeper.proto.WatcherEvent;
-import org.apache.zookeeper.server.NIOServerCnxnFactory.SelectorThread;
-import org.apache.zookeeper.server.command.CommandExecutor;
-import org.apache.zookeeper.server.command.FourLetterCommands;
-import org.apache.zookeeper.server.command.SetTraceMaskCommand;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-public class NIOServerCnxn extends ServerCnxn {
-    private static final Logger LOG = LoggerFactory.getLogger(NIOServerCnxn.class);
-
-    private final NIOServerCnxnFactory factory;
-
-    private final SocketChannel sock;
-
-    private final SelectorThread selectorThread;
-
-    private final SelectionKey sk;
-
-    private boolean initialized;
-
-    private final ByteBuffer lenBuffer = ByteBuffer.allocate(4);
-
-    private ByteBuffer incomingBuffer = lenBuffer;
-
-    private final Queue<ByteBuffer> outgoingBuffers =
-        new LinkedBlockingQueue<ByteBuffer>();
-
-    private int sessionTimeout;
-
-    private final ZooKeeperServer zkServer;
-
-    
-    private final AtomicInteger outstandingRequests = new AtomicInteger(0);
-
-    
-    private long sessionId;
-
-    private final int outstandingLimit;
-
-    public NIOServerCnxn(ZooKeeperServer zk, SocketChannel sock,
-                         SelectionKey sk, NIOServerCnxnFactory factory,
-                         SelectorThread selectorThread) throws IOException {
-        this.zkServer = zk;
-        this.sock = sock;
-        this.sk = sk;
-        this.factory = factory;
-        this.selectorThread = selectorThread;
-        if (this.factory.login != null) {
-            this.zooKeeperSaslServer = new ZooKeeperSaslServer(factory.login);
-        }
-        if (zk != null) {
-            outstandingLimit = zk.getGlobalOutstandingLimit();
-        } else {
-            outstandingLimit = 1;
-        }
-        sock.socket().setTcpNoDelay(true);
-        
-        sock.socket().setSoLinger(false, -1);
-        InetAddress addr = ((InetSocketAddress) sock.socket()
-                .getRemoteSocketAddress()).getAddress();
-        authInfo.add(new Id("ip", addr.getHostAddress()));
-        this.sessionTimeout = factory.sessionlessCnxnTimeout;
-    }
-
-    
-    public void sendCloseSession() {
-        sendBuffer(ServerCnxnFactory.closeConn);
-    }
-
-    
-    void sendBufferSync(ByteBuffer bb) {
-       try {
-           
-           if (bb != ServerCnxnFactory.closeConn) {
-               if (sock.isOpen()) {
-                   sock.configureBlocking(true);
-                   sock.write(bb);
-               }
-               packetSent();
-           }
-       } catch (IOException ie) {
-           LOG.error("Error sending data synchronously ", ie);
-       }
-    }
-
-    
-    public void sendBuffer(ByteBuffer bb) {
-        if (LOG.isTraceEnabled()) {
-            LOG.trace("Add a buffer to outgoingBuffers, sk " + sk
-                      + " is valid: " + sk.isValid());
-        }
-        outgoingBuffers.add(bb);
-        requestInterestOpsUpdate();
-    }
-
-    
-    private void readPayload() throws IOException, InterruptedException {
-        if (incomingBuffer.remaining() != 0) { 
-            int rc = sock.read(incomingBuffer); 
-            if (rc < 0) {
-                throw new EndOfStreamException(
-                        "Unable to read additional data from client sessionid 0x"
-                        + Long.toHexString(sessionId)
-                        + ", likely client has closed socket");
-            }
-        }
-
-        if (incomingBuffer.remaining() == 0) { 
-            packetReceived();
-            incomingBuffer.flip();
-            if (!initialized) {
-                readConnectRequest();
-            } else {
-                readRequest();
-            }
-            lenBuffer.clear();
-            incomingBuffer = lenBuffer;
-        }
-    }
-
-    
-    private final AtomicBoolean selectable = new AtomicBoolean(true);
-
-    public boolean isSelectable() {
-        return sk.isValid() && selectable.get();
-    }
-
-    public void disableSelectable() {
-        selectable.set(false);
-    }
-
-    public void enableSelectable() {
-        selectable.set(true);
-    }
-
-    private void requestInterestOpsUpdate() {
-        if (isSelectable()) {
-            selectorThread.addInterestOpsUpdateRequest(sk);
-        }
-    }
-
-    void handleWrite(SelectionKey k) throws IOException, CloseRequestException {
-        if (outgoingBuffers.isEmpty()) {
-            return;
-        }
-
-        
-        ByteBuffer directBuffer = NIOServerCnxnFactory.getDirectBuffer();
-        if (directBuffer == null) {
-            ByteBuffer[] bufferList = new ByteBuffer[outgoingBuffers.size()];
-            
-            
-            sock.write(outgoingBuffers.toArray(bufferList));
-
-            
-            ByteBuffer bb;
-            while ((bb = outgoingBuffers.peek()) != null) {
-                if (bb == ServerCnxnFactory.closeConn) {
-                    throw new CloseRequestException("close requested");
-                }
-                if (bb.remaining() > 0) {
-                    break;
-                }
-                packetSent();
-                outgoingBuffers.remove();
-            }
-         } else {
-            directBuffer.clear();
-
-            for (ByteBuffer b : outgoingBuffers) {
-                if (directBuffer.remaining() < b.remaining()) {
-                    
-                    b = (ByteBuffer) b.slice().limit(
-                        directBuffer.remaining());
-                }
-                
-                int p = b.position();
-                directBuffer.put(b);
-                b.position(p);
-                if (directBuffer.remaining() == 0) {
-                    break;
-                }
-            }
-            
-            directBuffer.flip();
-
-            int sent = sock.write(directBuffer);
-
-            ByteBuffer bb;
-
-            
-            while ((bb = outgoingBuffers.peek()) != null) {
-                if (bb == ServerCnxnFactory.closeConn) {
-                    throw new CloseRequestException("close requested");
-                }
-                if (sent < bb.remaining()) {
-                    
-                    bb.position(bb.position() + sent);
-                    break;
-                }
-                packetSent();
-                
-                sent -= bb.remaining();
-                outgoingBuffers.remove();
-            }
-        }
-    }
-
-    
-    protected boolean isSocketOpen() {
-        return sock.isOpen();
-    }
-
-    
-    void doIO(SelectionKey k) throws InterruptedException {
-        try {
-            if (isSocketOpen() == false) {
-                LOG.warn("trying to do i/o on a null socket for session:0x"
-                         + Long.toHexString(sessionId));
-
-                return;
-            }
-            if (k.isReadable()) {
-                int rc = sock.read(incomingBuffer);
-                if (rc < 0) {
-                    throw new EndOfStreamException(
-                            "Unable to read additional data from client sessionid 0x"
-                            + Long.toHexString(sessionId)
-                            + ", likely client has closed socket");
-                }
-                if (incomingBuffer.remaining() == 0) {
-                    boolean isPayload;
-                    if (incomingBuffer == lenBuffer) { 
-                        incomingBuffer.flip();
-                        isPayload = readLength(k);
-                        incomingBuffer.clear();
-                    } else {
-                        
-                        isPayload = true;
-                    }
-                    if (isPayload) { 
-                        readPayload();
-                    }
-                    else {
-                        
-                        
-                        return;
-                    }
-                }
-            }
-            if (k.isWritable()) {
-                handleWrite(k);
-
-                if (!initialized && !getReadInterest() && !getWriteInterest()) {
-                    throw new CloseRequestException("responded to info probe");
-                }
-            }
-        } catch (CancelledKeyException e) {
-            LOG.warn("CancelledKeyException causing close of session 0x"
-                     + Long.toHexString(sessionId));
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("CancelledKeyException stack trace", e);
-            }
-            close();
-        } catch (CloseRequestException e) {
-            
-            close();
-        } catch (EndOfStreamException e) {
-            LOG.warn(e.getMessage());
-            
-            close();
-        } catch (IOException e) {
-            LOG.warn("Exception causing close of session 0x"
-                     + Long.toHexString(sessionId) + ": " + e.getMessage());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("IOException stack trace", e);
-            }
-            close();
-        }
-    }
-
-    private void readRequest() throws IOException {
-        zkServer.processPacket(this, incomingBuffer);
-    }
-
-    
-    protected void incrOutstandingRequests(RequestHeader h) {
-        if (h.getXid() >= 0) {
-            outstandingRequests.incrementAndGet();
-            
-            int inProcess = zkServer.getInProcess();
-            if (inProcess > outstandingLimit) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Throttling recv " + inProcess);
-                }
-                disableRecv();
-            }
-        }
-    }
-
-    
-    
-    private boolean getWriteInterest() {
-        return !outgoingBuffers.isEmpty();
-    }
-
-    
-    
-    private boolean getReadInterest() {
-        return !throttled.get();
-    }
-
-    private final AtomicBoolean throttled = new AtomicBoolean(false);
-
-    
-    
-    public void disableRecv() {
-        if (throttled.compareAndSet(false, true)) {
-            requestInterestOpsUpdate();
-        }
-    }
-
-    
-    
-    
-    public void enableRecv() {
-        if (throttled.compareAndSet(true, false)) {
-            requestInterestOpsUpdate();
-        }
-    }
-
-    private void readConnectRequest() throws IOException, InterruptedException {
-        if (zkServer == null) {
-            throw new IOException("ZooKeeperServer not running");
-        }
-        zkServer.processConnectRequest(this, incomingBuffer);
-        initialized = true;
-    }
-
-    
-    private class SendBufferWriter extends Writer {
-        private StringBuffer sb = new StringBuffer();
-
-        
-        private void checkFlush(boolean force) {
-            if ((force && sb.length() > 0) || sb.length() > 2048) {
-                sendBufferSync(ByteBuffer.wrap(sb.toString().getBytes()));
-                
-                sb.setLength(0);
-            }
-        }
-
-        @Override
-        public void close() throws IOException {
-            if (sb == null) return;
-            checkFlush(true);
-            sb = null; 
-        }
-
-        @Override
-        public void flush() throws IOException {
-            checkFlush(true);
-        }
-
-        @Override
-        public void write(char[] cbuf, int off, int len) throws IOException {
-            sb.append(cbuf, off, len);
-            checkFlush(false);
-        }
-    }
-    
-    private boolean checkFourLetterWord(final SelectionKey k, final int len)
-    throws IOException
-    {
-        
-        
-        String cmd = FourLetterCommands.cmd2String.get(len);
-        if (cmd == null) {
-            return false;
-        }
-        LOG.info("Processing " + cmd + " command from "
-                + sock.socket().getRemoteSocketAddress());
-        packetReceived();
-
-        
-        if (k != null) {
-            try {
-                k.cancel();
-            } catch(Exception e) {
-                LOG.error("Error cancelling command selection key ", e);
-            }
-        }
-
-        final PrintWriter pwriter = new PrintWriter(
-                new BufferedWriter(new SendBufferWriter()));
-        if (len == FourLetterCommands.setTraceMaskCmd) {
-            int rc = sock.read(incomingBuffer);
-            if (rc < 0) {
-                throw new IOException("Read error");
-            }
-            incomingBuffer.flip();
-            long traceMask = incomingBuffer.getLong();
-            ZooTrace.setTextTraceLevel(traceMask);
-            SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, this, traceMask);
-            setMask.start();
-            return true;
-        } else {
-            CommandExecutor commandExecutor = new CommandExecutor();
-            return commandExecutor.execute(this, pwriter, len, zkServer, factory);
-        }
-    }
-
-    
-    private boolean readLength(SelectionKey k) throws IOException {
-        
-        int len = lenBuffer.getInt();
-        if (!initialized && checkFourLetterWord(sk, len)) {
-            return false;
-        }
-        if (len < 0 || len > BinaryInputArchive.maxBuffer) {
-            throw new IOException("Len error " + len);
-        }
-        if (zkServer == null) {
-            throw new IOException("ZooKeeperServer not running");
-        }
-        incomingBuffer = ByteBuffer.allocate(len);
-        return true;
-    }
-
-    public long getOutstandingRequests() {
-        return outstandingRequests.get();
-    }
-
-    
-    public int getSessionTimeout() {
-        return sessionTimeout;
-    }
-
-    
-    @Override
-    public String toString() {
-        return "ip: " + sock.socket().getRemoteSocketAddress() +
-               " sessionId: 0x" + Long.toHexString(sessionId);
-    }
-
-    
-    @Override
-    public void close() {
-        if (!factory.removeCnxn(this)) {
-            return;
-        }
-
-        if (zkServer != null) {
-            zkServer.removeCnxn(this);
-        }
-
-        if (sk != null) {
-            try {
-                
-                sk.cancel();
-            } catch (Exception e) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("ignoring exception during selectionkey cancel", e);
-                }
-            }
-        }
-
-        closeSock();
-    }
-
-    
-    private void closeSock() {
-        if (sock.isOpen() == false) {
-            return;
-        }
-
-        LOG.info("Closed socket connection for client "
-                + sock.socket().getRemoteSocketAddress()
-                + (sessionId != 0 ?
-                        " which had sessionid 0x" + Long.toHexString(sessionId) :
-                        " (no session established for client)"));
-        closeSock(sock);
-    }
-
-    
-    public static void closeSock(SocketChannel sock) {
-        if (sock.isOpen() == false) {
-            return;
-        }
-
-        try {
-            
-            sock.socket().shutdownOutput();
-        } catch (IOException e) {
-            
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("ignoring exception during output shutdown", e);
-            }
-        }
-        try {
-            sock.socket().shutdownInput();
-        } catch (IOException e) {
-            
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("ignoring exception during input shutdown", e);
-            }
-        }
-        try {
-            sock.socket().close();
-        } catch (IOException e) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("ignoring exception during socket close", e);
-            }
-        }
-        try {
-            sock.close();
-        } catch (IOException e) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("ignoring exception during socketchannel close", e);
-            }
-        }
-    }
-
-    private final static byte fourBytes[] = new byte[4];
-
-    
-    @Override
-    public void sendResponse(ReplyHeader h, Record r, String tag) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            
-            BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
-            try {
-                baos.write(fourBytes);
-                bos.writeRecord(h, "header");
-                if (r != null) {
-                    bos.writeRecord(r, tag);
-                }
-                baos.close();
-            } catch (IOException e) {
-                LOG.error("Error serializing response");
-            }
-            byte b[] = baos.toByteArray();
-            ByteBuffer bb = ByteBuffer.wrap(b);
-            bb.putInt(b.length - 4).rewind();
-            sendBuffer(bb);
-            if (h.getXid() > 0) {
-                
-                if (outstandingRequests.decrementAndGet() < 1 ||
-                    zkServer.getInProcess() < outstandingLimit) {
-                    enableRecv();
-                }
-            }
-         } catch(Exception e) {
-            LOG.warn("Unexpected exception. Destruction averted.", e);
-         }
-    }
-
-    
-    @Override
-    public void process(WatchedEvent event) {
-        ReplyHeader h = new ReplyHeader(-1, -1L, 0);
-        if (LOG.isTraceEnabled()) {
-            ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK,
-                                     "Deliver event " + event + " to 0x"
-                                     + Long.toHexString(this.sessionId)
-                                     + " through " + this);
-        }
-
-        
-        WatcherEvent e = event.getWrapper();
-
-        sendResponse(h, e, "notification");
-    }
-
-    
-    @Override
-    public long getSessionId() {
-        return sessionId;
-    }
-
-    @Override
-    public void setSessionId(long sessionId) {
-        this.sessionId = sessionId;
-        factory.addSession(sessionId, this);
-    }
-
-    @Override
-    public void setSessionTimeout(int sessionTimeout) {
-        this.sessionTimeout = sessionTimeout;
-        factory.touchCnxn(this);
-    }
-
-    @Override
-    public int getInterestOps() {
-        if (!isSelectable()) {
-            return 0;
-        }
-        int interestOps = 0;
-        if (getReadInterest()) {
-            interestOps |= SelectionKey.OP_READ;
-        }
-        if (getWriteInterest()) {
-            interestOps |= SelectionKey.OP_WRITE;
-        }
-        return interestOps;
-    }
-
-    @Override
-    public InetSocketAddress getRemoteSocketAddress() {
-        if (sock.isOpen() == false) {
-            return null;
-        }
-        return (InetSocketAddress) sock.socket().getRemoteSocketAddress();
-    }
-
-    public InetAddress getSocketAddress() {
-        if (sock.isOpen() == false) {
-            return null;
-        }
-        return sock.socket().getInetAddress();
-    }
-
-    @Override
-    protected ServerStats serverStats() {
-        if (zkServer == null) {
-            return null;
-        }
-        return zkServer.serverStats();
-    }
-
-    @Override
-    public boolean isSecure() {
-        return false;
-    }
-
-    @Override
-    public Certificate[] getClientCertificateChain() {
-        throw new UnsupportedOperationException(
-                "SSL is unsupported in NIOServerCnxn");
-    }
-
-    @Override
-    public void setClientCertificateChain(Certificate[] chain) {
-        throw new UnsupportedOperationException(
-                "SSL is unsupported in NIOServerCnxn");
-    }
-
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server;
-
-import static org.jboss.netty.buffer.ChannelBuffers.wrappedBuffer;
-
-import java.io.BufferedWriter;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.Writer;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.security.cert.Certificate;
-import java.util.Arrays;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.jute.BinaryInputArchive;
-import org.apache.jute.BinaryOutputArchive;
-import org.apache.jute.Record;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.proto.ReplyHeader;
-import org.apache.zookeeper.proto.WatcherEvent;
-import org.apache.zookeeper.server.command.CommandExecutor;
-import org.apache.zookeeper.server.command.FourLetterCommands;
-import org.apache.zookeeper.server.command.SetTraceMaskCommand;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.channel.MessageEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class NettyServerCnxn extends ServerCnxn {
-    private static final Logger LOG = LoggerFactory.getLogger(NettyServerCnxn.class);
-    Channel channel;
-    ChannelBuffer queuedBuffer;
-    volatile boolean throttled;
-    ByteBuffer bb;
-    ByteBuffer bbLen = ByteBuffer.allocate(4);
-    long sessionId;
-    int sessionTimeout;
-    AtomicLong outstandingCount = new AtomicLong();
-    Certificate[] clientChain;
-
-    
-    private volatile ZooKeeperServer zkServer;
-
-    NettyServerCnxnFactory factory;
-    boolean initialized;
-    
-    NettyServerCnxn(Channel channel, ZooKeeperServer zks, NettyServerCnxnFactory factory) {
-        this.channel = channel;
-        this.zkServer = zks;
-        this.factory = factory;
-        if (this.factory.login != null) {
-            this.zooKeeperSaslServer = new ZooKeeperSaslServer(factory.login);
-        }
-    }
-    
-    @Override
-    public void close() {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("close called for sessionid:0x"
-                    + Long.toHexString(sessionId));
-        }
-        synchronized(factory.cnxns){
-            
-            if (!factory.cnxns.remove(this)) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("cnxns size:" + factory.cnxns.size());
-                }
-                return;
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("close in progress for sessionid:0x"
-                        + Long.toHexString(sessionId));
-            }
-
-            synchronized (factory.ipMap) {
-                Set<NettyServerCnxn> s =
-                    factory.ipMap.get(((InetSocketAddress)channel
-                            .getRemoteAddress()).getAddress());
-                s.remove(this);
-            }
-        }
-
-        if (channel.isOpen()) {
-            channel.close();
-        }
-        factory.unregisterConnection(this);
-    }
-
-    @Override
-    public long getSessionId() {
-        return sessionId;
-    }
-
-    @Override
-    public int getSessionTimeout() {
-        return sessionTimeout;
-    }
-
-    @Override
-    public void process(WatchedEvent event) {
-        ReplyHeader h = new ReplyHeader(-1, -1L, 0);
-        if (LOG.isTraceEnabled()) {
-            ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK,
-                                     "Deliver event " + event + " to 0x"
-                                     + Long.toHexString(this.sessionId)
-                                     + " through " + this);
-        }
-
-        
-        WatcherEvent e = event.getWrapper();
-
-        try {
-            sendResponse(h, e, "notification");
-        } catch (IOException e1) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Problem sending to " + getRemoteSocketAddress(), e1);
-            }
-            close();
-        }
-    }
-
-    private static final byte[] fourBytes = new byte[4];
-    static class ResumeMessageEvent implements MessageEvent {
-        Channel channel;
-        ResumeMessageEvent(Channel channel) {
-            this.channel = channel;
-        }
-        @Override
-        public Object getMessage() {return null;}
-        @Override
-        public SocketAddress getRemoteAddress() {return null;}
-        @Override
-        public Channel getChannel() {return channel;}
-        @Override
-        public ChannelFuture getFuture() {return null;}
-    };
-    
-    @Override
-    public void sendResponse(ReplyHeader h, Record r, String tag)
-            throws IOException {
-        if (!channel.isOpen()) {
-            return;
-        }
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        
-        BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
-        try {
-            baos.write(fourBytes);
-            bos.writeRecord(h, "header");
-            if (r != null) {
-                bos.writeRecord(r, tag);
-            }
-            baos.close();
-        } catch (IOException e) {
-            LOG.error("Error serializing response");
-        }
-        byte b[] = baos.toByteArray();
-        ByteBuffer bb = ByteBuffer.wrap(b);
-        bb.putInt(b.length - 4).rewind();
-        sendBuffer(bb);
-        if (h.getXid() > 0) {
-            
-            if (!zkServer.shouldThrottle(outstandingCount.decrementAndGet())) {
-                enableRecv();
-            }
-        }
-    }
-
-    @Override
-    public void setSessionId(long sessionId) {
-        this.sessionId = sessionId;
-    }
-
-    @Override
-    public void enableRecv() {
-        if (throttled) {
-            throttled = false;
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Sending unthrottle event " + this);
-            }
-            channel.getPipeline().sendUpstream(new ResumeMessageEvent(channel));
-        }
-    }
-
-    @Override
-    public void sendBuffer(ByteBuffer sendBuffer) {
-        if (sendBuffer == ServerCnxnFactory.closeConn) {
-            close();
-            return;
-        }
-        channel.write(wrappedBuffer(sendBuffer));
-        packetSent();
-    }
-
-
-
-    
-    private class SendBufferWriter extends Writer {
-        private StringBuffer sb = new StringBuffer();
-        
-        
-        private void checkFlush(boolean force) {
-            if ((force && sb.length() > 0) || sb.length() > 2048) {
-                sendBuffer(ByteBuffer.wrap(sb.toString().getBytes()));
-                
-                sb.setLength(0);
-            }
-        }
-
-        @Override
-        public void close() throws IOException {
-            if (sb == null) return;
-            checkFlush(true);
-            sb = null; 
-        }
-
-        @Override
-        public void flush() throws IOException {
-            checkFlush(true);
-        }
-
-        @Override
-        public void write(char[] cbuf, int off, int len) throws IOException {
-            sb.append(cbuf, off, len);
-            checkFlush(false);
-        }
-    }
-
-    
-    private boolean checkFourLetterWord(final Channel channel,
-            ChannelBuffer message, final int len) throws IOException
-    {
-        
-        
-        String cmd = FourLetterCommands.cmd2String.get(len);
-        if (cmd == null) {
-            return false;
-        }
-        channel.setInterestOps(0).awaitUninterruptibly();
-        LOG.info("Processing " + cmd + " command from "
-                + channel.getRemoteAddress());
-        packetReceived();
-
-        final PrintWriter pwriter = new PrintWriter(
-                new BufferedWriter(new SendBufferWriter()));
-       if (len == FourLetterCommands.setTraceMaskCmd) {
-            ByteBuffer mask = ByteBuffer.allocate(4);
-            message.readBytes(mask);
-
-            bb.flip();
-            long traceMask = mask.getLong();
-            ZooTrace.setTextTraceLevel(traceMask);
-            SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, this, traceMask);
-            setMask.start();
-            return true;
-        } else {
-            CommandExecutor commandExecutor = new CommandExecutor();
-            return commandExecutor.execute(this, pwriter, len, zkServer,factory);
-        }
-    }
-
-    public void receiveMessage(ChannelBuffer message) {
-        try {
-            while(message.readable() && !throttled) {
-                if (bb != null) {
-                    if (LOG.isTraceEnabled()) {
-                        LOG.trace("message readable " + message.readableBytes()
-                                + " bb len " + bb.remaining() + " " + bb);
-                        ByteBuffer dat = bb.duplicate();
-                        dat.flip();
-                        LOG.trace(Long.toHexString(sessionId)
-                                + " bb 0x"
-                                + ChannelBuffers.hexDump(
-                                        ChannelBuffers.copiedBuffer(dat)));
-                    }
-
-                    if (bb.remaining() > message.readableBytes()) {
-                        int newLimit = bb.position() + message.readableBytes();
-                        bb.limit(newLimit);
-                    }
-                    message.readBytes(bb);
-                    bb.limit(bb.capacity());
-
-                    if (LOG.isTraceEnabled()) {
-                        LOG.trace("after readBytes message readable "
-                                + message.readableBytes()
-                                + " bb len " + bb.remaining() + " " + bb);
-                        ByteBuffer dat = bb.duplicate();
-                        dat.flip();
-                        LOG.trace("after readbytes "
-                                + Long.toHexString(sessionId)
-                                + " bb 0x"
-                                + ChannelBuffers.hexDump(
-                                        ChannelBuffers.copiedBuffer(dat)));
-                    }
-                    if (bb.remaining() == 0) {
-                        packetReceived();
-                        bb.flip();
-
-                        ZooKeeperServer zks = this.zkServer;
-                        if (zks == null) {
-                            throw new IOException("ZK down");
-                        }
-                        if (initialized) {
-                            zks.processPacket(this, bb);
-
-                            if (zks.shouldThrottle(outstandingCount.incrementAndGet())) {
-                                disableRecvNoWait();
-                            }
-                        } else {
-                            LOG.debug("got conn req request from "
-                                    + getRemoteSocketAddress());
-                            zks.processConnectRequest(this, bb);
-                            initialized = true;
-                        }
-                        bb = null;
-                    }
-                } else {
-                    if (LOG.isTraceEnabled()) {
-                        LOG.trace("message readable "
-                                + message.readableBytes()
-                                + " bblenrem " + bbLen.remaining());
-                        ByteBuffer dat = bbLen.duplicate();
-                        dat.flip();
-                        LOG.trace(Long.toHexString(sessionId)
-                                + " bbLen 0x"
-                                + ChannelBuffers.hexDump(
-                                        ChannelBuffers.copiedBuffer(dat)));
-                    }
-
-                    if (message.readableBytes() < bbLen.remaining()) {
-                        bbLen.limit(bbLen.position() + message.readableBytes());
-                    }
-                    message.readBytes(bbLen);
-                    bbLen.limit(bbLen.capacity());
-                    if (bbLen.remaining() == 0) {
-                        bbLen.flip();
-
-                        if (LOG.isTraceEnabled()) {
-                            LOG.trace(Long.toHexString(sessionId)
-                                    + " bbLen 0x"
-                                    + ChannelBuffers.hexDump(
-                                            ChannelBuffers.copiedBuffer(bbLen)));
-                        }
-                        int len = bbLen.getInt();
-                        if (LOG.isTraceEnabled()) {
-                            LOG.trace(Long.toHexString(sessionId)
-                                    + " bbLen len is " + len);
-                        }
-
-                        bbLen.clear();
-                        if (!initialized) {
-                            if (checkFourLetterWord(channel, message, len)) {
-                                return;
-                            }
-                        }
-                        if (len < 0 || len > BinaryInputArchive.maxBuffer) {
-                            throw new IOException("Len error " + len);
-                        }
-                        bb = ByteBuffer.allocate(len);
-                    }
-                }
-            }
-        } catch(IOException e) {
-            LOG.warn("Closing connection to " + getRemoteSocketAddress(), e);
-            close();
-        }
-    }
-
-    @Override
-    public void disableRecv() {
-        disableRecvNoWait().awaitUninterruptibly();
-    }
-    
-    private ChannelFuture disableRecvNoWait() {
-        throttled = true;
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Throttling - disabling recv " + this);
-        }
-        return channel.setReadable(false);
-    }
-    
-    @Override
-    public long getOutstandingRequests() {
-        return outstandingCount.longValue();
-    }
-
-    @Override
-    public void setSessionTimeout(int sessionTimeout) {
-        this.sessionTimeout = sessionTimeout;
-    }
-
-    @Override
-    public int getInterestOps() {
-        return channel.getInterestOps();
-    }
-
-    @Override
-    public InetSocketAddress getRemoteSocketAddress() {
-        return (InetSocketAddress)channel.getRemoteAddress();
-    }
-
-    
-    @Override
-    public void sendCloseSession() {
-        sendBuffer(ServerCnxnFactory.closeConn);
-    }
-
-    @Override
-    protected ServerStats serverStats() {
-        if (zkServer == null) {
-            return null;
-        }
-        return zkServer.serverStats();
-    }
-
-    @Override
-    public boolean isSecure() {
-        return factory.secure;
-    }
-
-    @Override
-    public Certificate[] getClientCertificateChain() {
-        if (clientChain == null)
-        {
-            return null;
-        }
-        return Arrays.copyOf(clientChain, clientChain.length);
-    }
-
-    @Override
-    public void setClientCertificateChain(Certificate[] chain) {
-        if (chain == null)
-        {
-            clientChain = null;
-        } else {
-            clientChain = Arrays.copyOf(chain, chain.length);
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server;
-
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -1142,6 +11,7 @@ import java.security.cert.Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1153,19 +23,16 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.RequestHeader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 public abstract class ServerCnxn implements Stats, Watcher {
-    
-    
+
+
     final public static Object me = new Object();
-    private static final Logger LOG = LoggerFactory.getLogger(ServerCnxn.class);
     
     protected ArrayList<Id> authInfo = new ArrayList<Id>();
 
-    
+
     boolean isOldClient = true;
 
     abstract int getSessionTimeout();
@@ -1175,7 +42,7 @@ public abstract class ServerCnxn implements Stats, Watcher {
     public abstract void sendResponse(ReplyHeader h, Record r, String tag)
         throws IOException;
 
-    
+
     abstract void sendCloseSession();
 
     public abstract void process(WatchedEvent event);
@@ -1184,7 +51,7 @@ public abstract class ServerCnxn implements Stats, Watcher {
 
     abstract void setSessionId(long sessionId);
 
-    
+
     public List<Id> getAuthInfo() {
         return Collections.unmodifiableList(authInfo);
     }
@@ -1227,6 +94,96 @@ public abstract class ServerCnxn implements Stats, Watcher {
         public String toString() {
             return "EndOfStreamException: " + getMessage();
         }
+    }
+
+
+    protected final static int confCmd =
+        ByteBuffer.wrap("conf".getBytes()).getInt();
+
+
+    protected final static int consCmd =
+        ByteBuffer.wrap("cons".getBytes()).getInt();
+
+
+    protected final static int crstCmd =
+        ByteBuffer.wrap("crst".getBytes()).getInt();
+
+
+    protected final static int dumpCmd =
+        ByteBuffer.wrap("dump".getBytes()).getInt();
+
+
+    protected final static int enviCmd =
+        ByteBuffer.wrap("envi".getBytes()).getInt();
+
+
+    protected final static int getTraceMaskCmd =
+        ByteBuffer.wrap("gtmk".getBytes()).getInt();
+
+
+    protected final static int ruokCmd =
+        ByteBuffer.wrap("ruok".getBytes()).getInt();
+
+    protected final static int setTraceMaskCmd =
+        ByteBuffer.wrap("stmk".getBytes()).getInt();
+
+
+    protected final static int srvrCmd =
+        ByteBuffer.wrap("srvr".getBytes()).getInt();
+
+
+    protected final static int srstCmd =
+        ByteBuffer.wrap("srst".getBytes()).getInt();
+
+
+    protected final static int statCmd =
+        ByteBuffer.wrap("stat".getBytes()).getInt();
+
+
+    protected final static int wchcCmd =
+        ByteBuffer.wrap("wchc".getBytes()).getInt();
+
+
+    protected final static int wchpCmd =
+        ByteBuffer.wrap("wchp".getBytes()).getInt();
+
+
+    protected final static int wchsCmd =
+        ByteBuffer.wrap("wchs".getBytes()).getInt();
+
+
+    protected final static int mntrCmd = ByteBuffer.wrap("mntr".getBytes())
+            .getInt();
+
+
+    protected final static int isroCmd = ByteBuffer.wrap("isro".getBytes())
+            .getInt();
+
+
+    protected final static int telnetCloseCmd = 0xfff4fffd;
+
+    protected final static HashMap<Integer, String> cmd2String =
+        new HashMap<Integer, String>();
+
+
+    static {
+        cmd2String.put(confCmd, "conf");
+        cmd2String.put(consCmd, "cons");
+        cmd2String.put(crstCmd, "crst");
+        cmd2String.put(dumpCmd, "dump");
+        cmd2String.put(enviCmd, "envi");
+        cmd2String.put(getTraceMaskCmd, "gtmk");
+        cmd2String.put(ruokCmd, "ruok");
+        cmd2String.put(setTraceMaskCmd, "stmk");
+        cmd2String.put(srstCmd, "srst");
+        cmd2String.put(srvrCmd, "srvr");
+        cmd2String.put(statCmd, "stat");
+        cmd2String.put(wchcCmd, "wchc");
+        cmd2String.put(wchpCmd, "wchp");
+        cmd2String.put(wchsCmd, "wchs");
+        cmd2String.put(mntrCmd, "mntr");
+        cmd2String.put(isroCmd, "isro");
+        cmd2String.put(telnetCloseCmd, "telnet close");
     }
 
     protected void packetReceived() {
@@ -1292,8 +249,8 @@ public abstract class ServerCnxn implements Stats, Watcher {
     protected synchronized void updateStatsForResponse(long cxid, long zxid,
             String op, long start, long end)
     {
-        
-        
+
+
         if (cxid >= 0) {
             lastCxid = cxid;
         }
@@ -1358,7 +315,7 @@ public abstract class ServerCnxn implements Stats, Watcher {
         return lastLatency;
     }
 
-    
+
     @Override
     public String toString() {
         StringWriter sw = new StringWriter();
@@ -1375,8 +332,8 @@ public abstract class ServerCnxn implements Stats, Watcher {
     public abstract Certificate[] getClientCertificateChain();
     public abstract void setClientCertificateChain(Certificate[] chain);
     
-    
-    public synchronized void
+
+    protected synchronized void
     dumpConnectionInfo(PrintWriter pwriter, boolean brief) {
         pwriter.print(" ");
         pwriter.print(getRemoteSocketAddress());
@@ -1445,825 +402,6 @@ public abstract class ServerCnxn implements Stats, Watcher {
         }
         return info;
     }
-
-    
-    public void cleanupWriterSocket(PrintWriter pwriter) {
-        try {
-            if (pwriter != null) {
-                pwriter.flush();
-                pwriter.close();
-            }
-        } catch (Exception e) {
-            LOG.info("Error closing PrintWriter ", e);
-        } finally {
-            try {
-                close();
-            } catch (Exception e) {
-                LOG.error("Error closing a command socket ", e);
-            }
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-import java.util.List;
-
-import org.apache.zookeeper.Environment;
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class EnvCommand extends AbstractFourLetterCommand {
-    EnvCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        List<Environment.Entry> env = Environment.list();
-
-        pw.println("Environment:");
-        for (Environment.Entry e : env) {
-            pw.print(e.getKey());
-            pw.print("=");
-            pw.println(e.getValue());
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class RuokCommand extends AbstractFourLetterCommand {
-    public RuokCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        pw.print("imok");
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class ConfCommand extends AbstractFourLetterCommand {
-    ConfCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw,serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            zkServer.dumpConf(pw);
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class ConsCommand extends AbstractFourLetterCommand {
-    public ConsCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            for (ServerCnxn c : factory.getConnections()) {
-                c.dumpConnectionInfo(pw, false);
-                pw.println();
-            }
-            pw.println();
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.IOException;
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.ServerCnxnFactory;
-import org.apache.zookeeper.server.ZooKeeperServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-public abstract class AbstractFourLetterCommand {
-    private static final Logger LOG = LoggerFactory
-        .getLogger(AbstractFourLetterCommand.class);
-    protected static final String ZK_NOT_SERVING = "This ZooKeeper instance is not currently serving requests";
-    protected PrintWriter pw;
-    protected ServerCnxn serverCnxn;
-    protected ZooKeeperServer zkServer;
-    protected ServerCnxnFactory factory;
-
-    public AbstractFourLetterCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        this.pw = pw;
-        this.serverCnxn = serverCnxn;
-    }
-
-    public void start() {
-        run();
-    }
-
-    public void run() {
-        try {
-            commandRun();
-        } catch (IOException ie) {
-            LOG.error("Error in running command ", ie);
-        } finally {
-            serverCnxn.cleanupWriterSocket(pw);
-        }
-    }
-
-    public void setZkServer(ZooKeeperServer zkServer) {
-        this.zkServer = zkServer;
-    }
-
-    public void setFactory(ServerCnxnFactory factory) {
-        this.factory = factory;
-    }
-
-    public abstract void commandRun() throws IOException;
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class CnxnStatResetCommand extends AbstractFourLetterCommand {
-    public CnxnStatResetCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            factory.resetAllConnectionStats();
-            pw.println("Connection stats reset.");
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.Version;
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.ServerStats;
-import org.apache.zookeeper.server.ZKDatabase;
-import org.apache.zookeeper.server.quorum.Leader;
-import org.apache.zookeeper.server.quorum.LeaderZooKeeperServer;
-import org.apache.zookeeper.server.util.OSMXBean;
-
-public class MonitorCommand extends AbstractFourLetterCommand {
-
-    MonitorCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-            return;
-        }
-        ZKDatabase zkdb = zkServer.getZKDatabase();
-        ServerStats stats = zkServer.serverStats();
-
-        print("version", Version.getFullVersion());
-
-        print("avg_latency", stats.getAvgLatency());
-        print("max_latency", stats.getMaxLatency());
-        print("min_latency", stats.getMinLatency());
-
-        print("packets_received", stats.getPacketsReceived());
-        print("packets_sent", stats.getPacketsSent());
-        print("num_alive_connections", stats.getNumAliveClientConnections());
-
-        print("outstanding_requests", stats.getOutstandingRequests());
-
-        print("server_state", stats.getServerState());
-        print("znode_count", zkdb.getNodeCount());
-
-        print("watch_count", zkdb.getDataTree().getWatchCount());
-        print("ephemerals_count", zkdb.getDataTree().getEphemeralsCount());
-        print("approximate_data_size", zkdb.getDataTree().approximateDataSize());
-
-        OSMXBean osMbean = new OSMXBean();
-        if (osMbean != null && osMbean.getUnix() == true) {
-            print("open_file_descriptor_count", osMbean.getOpenFileDescriptorCount());
-            print("max_file_descriptor_count", osMbean.getMaxFileDescriptorCount());
-        }
-
-        if (stats.getServerState().equals("leader")) {
-            Leader leader = ((LeaderZooKeeperServer)zkServer).getLeader();
-
-            print("followers", leader.getLearners().size());
-            print("synced_followers", leader.getForwardingFollowers().size());
-            print("pending_syncs", leader.getNumPendingSyncs());
-        }
-    }
-
-    private void print(String key, long number) {
-        print(key, "" + number);
-    }
-
-    private void print(String key, String value) {
-        pw.print("zk_");
-        pw.print(key);
-        pw.print("\t");
-        pw.println(value);
-    }
-
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.nio.ByteBuffer;
-import java.util.HashMap;
-
-
-public class FourLetterCommands {
-    
-    public final static int confCmd =
-        ByteBuffer.wrap("conf".getBytes()).getInt();
-
-    
-    public final static int consCmd =
-        ByteBuffer.wrap("cons".getBytes()).getInt();
-
-    
-    public final static int crstCmd =
-        ByteBuffer.wrap("crst".getBytes()).getInt();
-
-    
-    public final static int dumpCmd =
-        ByteBuffer.wrap("dump".getBytes()).getInt();
-
-    
-    public final static int enviCmd =
-        ByteBuffer.wrap("envi".getBytes()).getInt();
-
-    
-    public final static int getTraceMaskCmd =
-        ByteBuffer.wrap("gtmk".getBytes()).getInt();
-
-    
-    public final static int ruokCmd =
-        ByteBuffer.wrap("ruok".getBytes()).getInt();
-    
-    public final static int setTraceMaskCmd =
-        ByteBuffer.wrap("stmk".getBytes()).getInt();
-
-    
-    public final static int srvrCmd =
-        ByteBuffer.wrap("srvr".getBytes()).getInt();
-
-    
-    public final static int srstCmd =
-        ByteBuffer.wrap("srst".getBytes()).getInt();
-
-    
-    public final static int statCmd =
-        ByteBuffer.wrap("stat".getBytes()).getInt();
-
-    
-    public final static int wchcCmd =
-        ByteBuffer.wrap("wchc".getBytes()).getInt();
-
-    
-    public final static int wchpCmd =
-        ByteBuffer.wrap("wchp".getBytes()).getInt();
-
-    
-    public final static int wchsCmd =
-        ByteBuffer.wrap("wchs".getBytes()).getInt();
-
-    
-    public final static int mntrCmd = ByteBuffer.wrap("mntr".getBytes())
-            .getInt();
-
-    
-    public final static int isroCmd = ByteBuffer.wrap("isro".getBytes())
-            .getInt();
-
-    
-    public final static int telnetCloseCmd = 0xfff4fffd;
-
-    public final static HashMap<Integer, String> cmd2String =
-        new HashMap<Integer, String>();
-
-    
-    static {
-        cmd2String.put(confCmd, "conf");
-        cmd2String.put(consCmd, "cons");
-        cmd2String.put(crstCmd, "crst");
-        cmd2String.put(dumpCmd, "dump");
-        cmd2String.put(enviCmd, "envi");
-        cmd2String.put(getTraceMaskCmd, "gtmk");
-        cmd2String.put(ruokCmd, "ruok");
-        cmd2String.put(setTraceMaskCmd, "stmk");
-        cmd2String.put(srstCmd, "srst");
-        cmd2String.put(srvrCmd, "srvr");
-        cmd2String.put(statCmd, "stat");
-        cmd2String.put(wchcCmd, "wchc");
-        cmd2String.put(wchpCmd, "wchp");
-        cmd2String.put(wchsCmd, "wchs");
-        cmd2String.put(mntrCmd, "mntr");
-        cmd2String.put(isroCmd, "isro");
-        cmd2String.put(telnetCloseCmd, "telnet close");
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class SetTraceMaskCommand extends AbstractFourLetterCommand {
-    long trace = 0;
-    public SetTraceMaskCommand(PrintWriter pw, ServerCnxn serverCnxn, long trace) {
-        super(pw, serverCnxn);
-        this.trace = trace;
-    }
-
-    @Override
-    public void commandRun() {
-        pw.print(trace);
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.ServerCnxnFactory;
-import org.apache.zookeeper.server.ZooKeeperServer;
-
-public class CommandExecutor {
-    
-    public boolean execute(ServerCnxn serverCnxn, PrintWriter pwriter,
-            final int commandCode, ZooKeeperServer zkServer, ServerCnxnFactory factory) {
-        AbstractFourLetterCommand command = getCommand(serverCnxn,pwriter, commandCode);
-
-        if (command == null) {
-            return false;
-        }
-
-        command.setZkServer(zkServer);
-        command.setFactory(factory);
-        command.start();
-        return true;
-    }
-
-    private AbstractFourLetterCommand getCommand(ServerCnxn serverCnxn,
-            PrintWriter pwriter, final int commandCode) {
-        AbstractFourLetterCommand command = null;
-        if (commandCode == FourLetterCommands.ruokCmd) {
-            command = new RuokCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.getTraceMaskCmd) {
-            command = new TraceMaskCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.enviCmd) {
-            command = new EnvCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.confCmd) {
-            command = new ConfCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.srstCmd) {
-            command = new StatResetCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.crstCmd) {
-            command = new CnxnStatResetCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.dumpCmd) {
-            command = new DumpCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.statCmd
-                || commandCode == FourLetterCommands.srvrCmd) {
-            command = new StatCommand(pwriter, serverCnxn, commandCode);
-        } else if (commandCode == FourLetterCommands.consCmd) {
-            command = new ConsCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.wchpCmd
-                || commandCode == FourLetterCommands.wchcCmd
-                || commandCode == FourLetterCommands.wchsCmd) {
-            command = new WatchCommand(pwriter, serverCnxn, commandCode);
-        } else if (commandCode == FourLetterCommands.mntrCmd) {
-            command = new MonitorCommand(pwriter, serverCnxn);
-        } else if (commandCode == FourLetterCommands.isroCmd) {
-            command = new IsroCommand(pwriter, serverCnxn);
-        }
-        return command;
-    }
-
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.NIOServerCnxnFactory;
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class DumpCommand extends AbstractFourLetterCommand {
-    public DumpCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            pw.println("SessionTracker dump:");
-            zkServer.getSessionTracker().dumpSessions(pw);
-            pw.println("ephemeral nodes dump:");
-            zkServer.dumpEphemerals(pw);
-            pw.println("Connections dump:");
-            
-            if (factory instanceof NIOServerCnxnFactory) {
-                ((NIOServerCnxnFactory)factory).dumpConnections(pw);
-            }
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.ZooTrace;
-
-public class TraceMaskCommand extends AbstractFourLetterCommand {
-    TraceMaskCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        long traceMask = ZooTrace.getTextTraceLevel();
-        pw.print(traceMask);
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.DataTree;
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class WatchCommand extends AbstractFourLetterCommand {
-    int len = 0;
-    public WatchCommand(PrintWriter pw, ServerCnxn serverCnxn, int len) {
-        super(pw, serverCnxn);
-        this.len = len;
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            DataTree dt = zkServer.getZKDatabase().getDataTree();
-            if (len == FourLetterCommands.wchsCmd) {
-                dt.dumpWatchesSummary(pw);
-            } else if (len == FourLetterCommands.wchpCmd) {
-                dt.dumpWatches(pw, true);
-            } else {
-                dt.dumpWatches(pw, false);
-            }
-            pw.println();
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
-
-public class IsroCommand extends AbstractFourLetterCommand {
-
-    public IsroCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.print("null");
-        } else if (zkServer instanceof ReadOnlyZooKeeperServer) {
-            pw.print("ro");
-        } else {
-            pw.print("rw");
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.server.ServerCnxn;
-
-public class StatResetCommand extends AbstractFourLetterCommand {
-    public StatResetCommand(PrintWriter pw, ServerCnxn serverCnxn) {
-        super(pw, serverCnxn);
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            zkServer.serverStats().reset();
-            pw.println("Server stats reset.");
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.server.command;
-
-import java.io.PrintWriter;
-
-import org.apache.zookeeper.Version;
-import org.apache.zookeeper.server.ServerCnxn;
-import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class StatCommand extends AbstractFourLetterCommand {
-    private static final Logger LOG = LoggerFactory
-            .getLogger(AbstractFourLetterCommand.class);
-    private int len;
-    public StatCommand(PrintWriter pw, ServerCnxn serverCnxn, int len) {
-        super(pw, serverCnxn);
-        this.len = len;
-    }
-
-    @Override
-    public void commandRun() {
-        if (zkServer == null) {
-            pw.println(ZK_NOT_SERVING);
-        } else {
-            pw.print("Zookeeper version: ");
-            pw.println(Version.getFullVersion());
-            if (zkServer instanceof ReadOnlyZooKeeperServer) {
-                pw.println("READ-ONLY mode; serving only read-only clients");
-            }
-            if (len == FourLetterCommands.statCmd) {
-                LOG.info("Stat command output");
-                pw.println("Clients:");
-                for(ServerCnxn c : factory.getConnections()){
-                    c.dumpConnectionInfo(pw, true);
-                    pw.println();
-                }
-                pw.println();
-            }
-            pw.print(zkServer.serverStats().toString());
-            pw.print("Node count: ");
-            pw.println(zkServer.getZKDatabase().getNodeCount());
-        }
-    }
-}
-
-<code block>
-
-
-package org.apache.zookeeper.test;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.StringReader;
-import java.util.regex.Pattern;
-
-import org.apache.zookeeper.TestableZooKeeper;
-import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.common.X509Exception.SSLContextException;
-
-import static org.apache.zookeeper.client.FourLetterWordMain.send4LetterWord;
-
-import org.junit.Assert;
-import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class FourLetterWordsTest extends ClientBase {
-    protected static final Logger LOG =
-        LoggerFactory.getLogger(FourLetterWordsTest.class);
-
-    
-    @Test
-    public void testFourLetterWords() throws Exception {
-        verify("ruok", "imok");
-        verify("envi", "java.version");
-        verify("conf", "clientPort");
-        verify("stat", "Outstanding");
-        verify("srvr", "Outstanding");
-        verify("cons", "queued");
-        verify("dump", "Session");
-        verify("wchs", "watches");
-        verify("wchp", "");
-        verify("wchc", "");
-
-        verify("srst", "reset");
-        verify("crst", "reset");
-
-        verify("stat", "Outstanding");
-        verify("srvr", "Outstanding");
-        verify("cons", "queued");
-        verify("gtmk", "306");
-        verify("isro", "rw");
-
-        TestableZooKeeper zk = createClient();
-        String sid = getHexSessionId(zk.getSessionId());
-
-        verify("stat", "queued");
-        verify("srvr", "Outstanding");
-        verify("cons", sid);
-        verify("dump", sid);
-
-        zk.getData("/", true, null);
-
-        verify("stat", "queued");
-        verify("srvr", "Outstanding");
-        verify("cons", sid);
-        verify("dump", sid);
-
-        verify("wchs", "watching 1");
-        verify("wchp", sid);
-        verify("wchc", sid);
-        zk.close();
-
-        verify("ruok", "imok");
-        verify("envi", "java.version");
-        verify("conf", "clientPort");
-        verify("stat", "Outstanding");
-        verify("srvr", "Outstanding");
-        verify("cons", "queued");
-        verify("dump", "Session");
-        verify("wchs", "watch");
-        verify("wchp", "");
-        verify("wchc", "");
-
-        verify("srst", "reset");
-        verify("crst", "reset");
-
-        verify("stat", "Outstanding");
-        verify("srvr", "Outstanding");
-        verify("cons", "queued");
-        verify("mntr", "zk_server_state\tstandalone");
-        verify("mntr", "num_alive_connections");
-        verify("stat", "Connections");
-        verify("srvr", "Connections");
-    }
-
-    private String sendRequest(String cmd) throws IOException, SSLContextException {
-      HostPort hpobj = ClientBase.parseHostPortList(hostPort).get(0);
-      return send4LetterWord(hpobj.host, hpobj.port, cmd);
-    }
-
-    private void verify(String cmd, String expected) throws IOException, SSLContextException {
-        String resp = sendRequest(cmd);
-        LOG.info("cmd " + cmd + " expected " + expected + " got " + resp);
-        Assert.assertTrue(resp.contains(expected));
-    }
-    
-    @Test
-    public void validateStatOutput() throws Exception {
-        ZooKeeper zk1 = createClient();
-        ZooKeeper zk2 = createClient();
-        
-        String resp = sendRequest("stat");
-        BufferedReader in = new BufferedReader(new StringReader(resp));
-
-        String line;
-        
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^.*\\s\\d+\\.\\d+\\.\\d+-.*$", line));
-        Assert.assertTrue(Pattern.matches("^Clients:$", in.readLine()));
-
-        int count = 0;
-        while ((line = in.readLine()).length() > 0) {
-            count++;
-            Assert.assertTrue(Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+\\)$", line));
-        }
-        
-        Assert.assertTrue(count >= 2);
-
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Latency min/avg/max: \\d+/\\d+/\\d+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Received: \\d+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Sent: \\d+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Connections: \\d+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Outstanding: \\d+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Zxid: 0x[\\da-fA-F]+$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Mode: .*$", line));
-        line = in.readLine();
-        Assert.assertTrue(Pattern.matches("^Node count: \\d+$", line));
-
-        zk1.close();
-        zk2.close();
-    }
-
-    @Test
-    public void validateConsOutput() throws Exception {
-        ZooKeeper zk1 = createClient();
-        ZooKeeper zk2 = createClient();
-        
-        String resp = sendRequest("cons");
-        BufferedReader in = new BufferedReader(new StringReader(resp));
-
-        String line;
-        int count = 0;
-        while ((line = in.readLine()) != null && line.length() > 0) {
-            count++;
-            Assert.assertTrue(line, Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+.*\\)$", line));
-        }
-        
-        Assert.assertTrue(count >= 2);
-
-        zk1.close();
-        zk2.close();
-    }
 }
 
 <code block>
@@ -2332,10 +470,10 @@ public class NIOServerCnxn extends ServerCnxn {
 
     private final ZooKeeperServer zkServer;
 
-    
+
     private final AtomicInteger outstandingRequests = new AtomicInteger(0);
 
-    
+
     private long sessionId;
 
     private final int outstandingLimit;
@@ -2357,7 +495,7 @@ public class NIOServerCnxn extends ServerCnxn {
             outstandingLimit = 1;
         }
         sock.socket().setTcpNoDelay(true);
-        
+
         sock.socket().setSoLinger(false, -1);
         InetAddress addr = ((InetSocketAddress) sock.socket()
                 .getRemoteSocketAddress()).getAddress();
@@ -2365,15 +503,15 @@ public class NIOServerCnxn extends ServerCnxn {
         this.sessionTimeout = factory.sessionlessCnxnTimeout;
     }
 
-    
+
     public void sendCloseSession() {
         sendBuffer(ServerCnxnFactory.closeConn);
     }
 
-    
+
     void sendBufferSync(ByteBuffer bb) {
        try {
-           
+
            if (bb != ServerCnxnFactory.closeConn) {
                if (sock.isOpen()) {
                    sock.configureBlocking(true);
@@ -2386,7 +524,7 @@ public class NIOServerCnxn extends ServerCnxn {
        }
     }
 
-    
+
     public void sendBuffer(ByteBuffer bb) {
         if (LOG.isTraceEnabled()) {
             LOG.trace("Add a buffer to outgoingBuffers, sk " + sk
@@ -2396,7 +534,7 @@ public class NIOServerCnxn extends ServerCnxn {
         requestInterestOpsUpdate();
     }
 
-    
+
     private void readPayload() throws IOException, InterruptedException {
         if (incomingBuffer.remaining() != 0) { 
             int rc = sock.read(incomingBuffer); 
@@ -2421,7 +559,7 @@ public class NIOServerCnxn extends ServerCnxn {
         }
     }
 
-    
+
     private final AtomicBoolean selectable = new AtomicBoolean(true);
 
     public boolean isSelectable() {
@@ -2447,15 +585,15 @@ public class NIOServerCnxn extends ServerCnxn {
             return;
         }
 
-        
+
         ByteBuffer directBuffer = NIOServerCnxnFactory.getDirectBuffer();
         if (directBuffer == null) {
             ByteBuffer[] bufferList = new ByteBuffer[outgoingBuffers.size()];
-            
-            
+
+
             sock.write(outgoingBuffers.toArray(bufferList));
 
-            
+
             ByteBuffer bb;
             while ((bb = outgoingBuffers.peek()) != null) {
                 if (bb == ServerCnxnFactory.closeConn) {
@@ -2472,11 +610,11 @@ public class NIOServerCnxn extends ServerCnxn {
 
             for (ByteBuffer b : outgoingBuffers) {
                 if (directBuffer.remaining() < b.remaining()) {
-                    
+
                     b = (ByteBuffer) b.slice().limit(
                         directBuffer.remaining());
                 }
-                
+
                 int p = b.position();
                 directBuffer.put(b);
                 b.position(p);
@@ -2484,37 +622,37 @@ public class NIOServerCnxn extends ServerCnxn {
                     break;
                 }
             }
-            
+
             directBuffer.flip();
 
             int sent = sock.write(directBuffer);
 
             ByteBuffer bb;
 
-            
+
             while ((bb = outgoingBuffers.peek()) != null) {
                 if (bb == ServerCnxnFactory.closeConn) {
                     throw new CloseRequestException("close requested");
                 }
                 if (sent < bb.remaining()) {
-                    
+
                     bb.position(bb.position() + sent);
                     break;
                 }
                 packetSent();
-                
+
                 sent -= bb.remaining();
                 outgoingBuffers.remove();
             }
         }
     }
 
-    
+
     protected boolean isSocketOpen() {
         return sock.isOpen();
     }
 
-    
+
     void doIO(SelectionKey k) throws InterruptedException {
         try {
             if (isSocketOpen() == false) {
@@ -2538,15 +676,15 @@ public class NIOServerCnxn extends ServerCnxn {
                         isPayload = readLength(k);
                         incomingBuffer.clear();
                     } else {
-                        
+
                         isPayload = true;
                     }
                     if (isPayload) { 
                         readPayload();
                     }
                     else {
-                        
-                        
+
+
                         return;
                     }
                 }
@@ -2566,11 +704,11 @@ public class NIOServerCnxn extends ServerCnxn {
             }
             close();
         } catch (CloseRequestException e) {
-            
+
             close();
         } catch (EndOfStreamException e) {
             LOG.warn(e.getMessage());
-            
+
             close();
         } catch (IOException e) {
             LOG.warn("Exception causing close of session 0x"
@@ -2586,11 +724,11 @@ public class NIOServerCnxn extends ServerCnxn {
         zkServer.processPacket(this, incomingBuffer);
     }
 
-    
+
     protected void incrOutstandingRequests(RequestHeader h) {
         if (h.getXid() >= 0) {
             outstandingRequests.incrementAndGet();
-            
+
             int inProcess = zkServer.getInProcess();
             if (inProcess > outstandingLimit) {
                 if (LOG.isDebugEnabled()) {
@@ -2601,31 +739,31 @@ public class NIOServerCnxn extends ServerCnxn {
         }
     }
 
-    
-    
+
+
     private boolean getWriteInterest() {
         return !outgoingBuffers.isEmpty();
     }
 
-    
-    
+
+
     private boolean getReadInterest() {
         return !throttled.get();
     }
 
     private final AtomicBoolean throttled = new AtomicBoolean(false);
 
-    
-    
+
+
     public void disableRecv() {
         if (throttled.compareAndSet(false, true)) {
             requestInterestOpsUpdate();
         }
     }
 
-    
-    
-    
+
+
+
     public void enableRecv() {
         if (throttled.compareAndSet(true, false)) {
             requestInterestOpsUpdate();
@@ -2640,7 +778,7 @@ public class NIOServerCnxn extends ServerCnxn {
         initialized = true;
     }
 
-    
+
     private void cleanupWriterSocket(PrintWriter pwriter) {
         try {
             if (pwriter != null) {
@@ -2658,15 +796,15 @@ public class NIOServerCnxn extends ServerCnxn {
         }
     }
 
-    
+
     private class SendBufferWriter extends Writer {
         private StringBuffer sb = new StringBuffer();
 
-        
+
         private void checkFlush(boolean force) {
             if ((force && sb.length() > 0) || sb.length() > 2048) {
                 sendBufferSync(ByteBuffer.wrap(sb.toString().getBytes()));
-                
+
                 sb.setLength(0);
             }
         }
@@ -2693,7 +831,7 @@ public class NIOServerCnxn extends ServerCnxn {
     private static final String ZK_NOT_SERVING =
         "This ZooKeeper instance is not currently serving requests";
 
-    
+
     private abstract class CommandThread {
         PrintWriter pw;
 
@@ -3007,12 +1145,12 @@ public class NIOServerCnxn extends ServerCnxn {
         }
     }
 
-    
+
     private boolean checkFourLetterWord(final SelectionKey k, final int len)
     throws IOException
     {
-        
-        
+
+
         String cmd = cmd2String.get(len);
         if (cmd == null) {
             return false;
@@ -3021,7 +1159,7 @@ public class NIOServerCnxn extends ServerCnxn {
                 + sock.socket().getRemoteSocketAddress());
         packetReceived();
 
-        
+
         if (k != null) {
             try {
                 k.cancel();
@@ -3099,9 +1237,9 @@ public class NIOServerCnxn extends ServerCnxn {
         return false;
     }
 
-    
+
     private boolean readLength(SelectionKey k) throws IOException {
-        
+
         int len = lenBuffer.getInt();
         if (!initialized && checkFourLetterWord(sk, len)) {
             return false;
@@ -3120,19 +1258,19 @@ public class NIOServerCnxn extends ServerCnxn {
         return outstandingRequests.get();
     }
 
-    
+
     public int getSessionTimeout() {
         return sessionTimeout;
     }
 
-    
+
     @Override
     public String toString() {
         return "ip: " + sock.socket().getRemoteSocketAddress() +
                " sessionId: 0x" + Long.toHexString(sessionId);
     }
 
-    
+
     @Override
     public void close() {
         if (!factory.removeCnxn(this)) {
@@ -3145,7 +1283,7 @@ public class NIOServerCnxn extends ServerCnxn {
 
         if (sk != null) {
             try {
-                
+
                 sk.cancel();
             } catch (Exception e) {
                 if (LOG.isDebugEnabled()) {
@@ -3157,7 +1295,7 @@ public class NIOServerCnxn extends ServerCnxn {
         closeSock();
     }
 
-    
+
     private void closeSock() {
         if (sock.isOpen() == false) {
             return;
@@ -3171,17 +1309,17 @@ public class NIOServerCnxn extends ServerCnxn {
         closeSock(sock);
     }
 
-    
+
     public static void closeSock(SocketChannel sock) {
         if (sock.isOpen() == false) {
             return;
         }
 
         try {
-            
+
             sock.socket().shutdownOutput();
         } catch (IOException e) {
-            
+
             if (LOG.isDebugEnabled()) {
                 LOG.debug("ignoring exception during output shutdown", e);
             }
@@ -3189,7 +1327,7 @@ public class NIOServerCnxn extends ServerCnxn {
         try {
             sock.socket().shutdownInput();
         } catch (IOException e) {
-            
+
             if (LOG.isDebugEnabled()) {
                 LOG.debug("ignoring exception during input shutdown", e);
             }
@@ -3212,12 +1350,12 @@ public class NIOServerCnxn extends ServerCnxn {
 
     private final static byte fourBytes[] = new byte[4];
 
-    
+
     @Override
     public void sendResponse(ReplyHeader h, Record r, String tag) {
         try {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            
+
             BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
             try {
                 baos.write(fourBytes);
@@ -3234,7 +1372,7 @@ public class NIOServerCnxn extends ServerCnxn {
             bb.putInt(b.length - 4).rewind();
             sendBuffer(bb);
             if (h.getXid() > 0) {
-                
+
                 if (outstandingRequests.decrementAndGet() < 1 ||
                     zkServer.getInProcess() < outstandingLimit) {
                     enableRecv();
@@ -3245,7 +1383,7 @@ public class NIOServerCnxn extends ServerCnxn {
          }
     }
 
-    
+
     @Override
     public void process(WatchedEvent event) {
         ReplyHeader h = new ReplyHeader(-1, -1L, 0);
@@ -3256,13 +1394,13 @@ public class NIOServerCnxn extends ServerCnxn {
                                      + " through " + this);
         }
 
-        
+
         WatcherEvent e = event.getWrapper();
 
         sendResponse(h, e, "notification");
     }
 
-    
+
     @Override
     public long getSessionId() {
         return sessionId;
@@ -3391,7 +1529,7 @@ public class NettyServerCnxn extends ServerCnxn {
     AtomicLong outstandingCount = new AtomicLong();
     Certificate[] clientChain;
 
-    
+
     private volatile ZooKeeperServer zkServer;
 
     NettyServerCnxnFactory factory;
@@ -3413,7 +1551,7 @@ public class NettyServerCnxn extends ServerCnxn {
                     + Long.toHexString(sessionId));
         }
         synchronized(factory.cnxns){
-            
+
             if (!factory.cnxns.remove(this)) {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("cnxns size:" + factory.cnxns.size());
@@ -3459,7 +1597,7 @@ public class NettyServerCnxn extends ServerCnxn {
                                      + " through " + this);
         }
 
-        
+
         WatcherEvent e = event.getWrapper();
 
         try {
@@ -3495,7 +1633,7 @@ public class NettyServerCnxn extends ServerCnxn {
             return;
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        
+
         BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
         try {
             baos.write(fourBytes);
@@ -3512,7 +1650,7 @@ public class NettyServerCnxn extends ServerCnxn {
         bb.putInt(b.length - 4).rewind();
         sendBuffer(bb);
         if (h.getXid() > 0) {
-            
+
             if (!zkServer.shouldThrottle(outstandingCount.decrementAndGet())) {
                 enableRecv();
             }
@@ -3545,7 +1683,7 @@ public class NettyServerCnxn extends ServerCnxn {
         packetSent();
     }
 
-    
+
     private void cleanupWriterSocket(PrintWriter pwriter) {
         try {
             if (pwriter != null) {
@@ -3563,15 +1701,15 @@ public class NettyServerCnxn extends ServerCnxn {
         }
     }
 
-    
+
     private class SendBufferWriter extends Writer {
         private StringBuffer sb = new StringBuffer();
         
-        
+
         private void checkFlush(boolean force) {
             if ((force && sb.length() > 0) || sb.length() > 2048) {
                 sendBuffer(ByteBuffer.wrap(sb.toString().getBytes()));
-                
+
                 sb.setLength(0);
             }
         }
@@ -3598,7 +1736,7 @@ public class NettyServerCnxn extends ServerCnxn {
     private static final String ZK_NOT_SERVING =
         "This ZooKeeper instance is not currently serving requests";
     
-    
+
     private abstract class CommandThread  {
         PrintWriter pw;
         
@@ -3772,8 +1910,8 @@ public class NettyServerCnxn extends ServerCnxn {
                 if (len == statCmd) {
                     LOG.info("Stat command output");
                     pw.println("Clients:");
-                    
-                    
+
+
                     HashSet<ServerCnxn> cnxns;
                     synchronized(factory.cnxns){
                         cnxns = new HashSet<ServerCnxn>(factory.cnxns);
@@ -3802,8 +1940,8 @@ public class NettyServerCnxn extends ServerCnxn {
             if (zkServer == null) {
                 pw.println(ZK_NOT_SERVING);
             } else {
-                
-                
+
+
                 AbstractSet<ServerCnxn> cnxns;
                 synchronized (factory.cnxns) {
                     cnxns = new HashSet<ServerCnxn>(factory.cnxns);
@@ -3922,12 +2060,12 @@ public class NettyServerCnxn extends ServerCnxn {
         }
     }
 
-    
+
     private boolean checkFourLetterWord(final Channel channel,
             ChannelBuffer message, final int len) throws IOException
     {
-        
-        
+
+
         String cmd = cmd2String.get(len);
         if (cmd == null) {
             return false;
@@ -4142,7 +2280,7 @@ public class NettyServerCnxn extends ServerCnxn {
         return (InetSocketAddress)channel.getRemoteAddress();
     }
 
-    
+
     @Override
     public void sendCloseSession() {
         sendBuffer(ServerCnxnFactory.closeConn);
@@ -4185,413 +2323,6 @@ public class NettyServerCnxn extends ServerCnxn {
 <code block>
 
 
-package org.apache.zookeeper.server;
-
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.security.cert.Certificate;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.jute.Record;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.data.Id;
-import org.apache.zookeeper.proto.ReplyHeader;
-import org.apache.zookeeper.proto.RequestHeader;
-
-
-public abstract class ServerCnxn implements Stats, Watcher {
-    
-    
-    final public static Object me = new Object();
-    
-    protected ArrayList<Id> authInfo = new ArrayList<Id>();
-
-    
-    boolean isOldClient = true;
-
-    abstract int getSessionTimeout();
-
-    abstract void close();
-
-    public abstract void sendResponse(ReplyHeader h, Record r, String tag)
-        throws IOException;
-
-    
-    abstract void sendCloseSession();
-
-    public abstract void process(WatchedEvent event);
-
-    public abstract long getSessionId();
-
-    abstract void setSessionId(long sessionId);
-
-    
-    public List<Id> getAuthInfo() {
-        return Collections.unmodifiableList(authInfo);
-    }
-
-    public void addAuthInfo(Id id) {
-        if (authInfo.contains(id) == false) {
-            authInfo.add(id);
-        }
-    }
-
-    public boolean removeAuthInfo(Id id) {
-        return authInfo.remove(id);
-    }
-
-    abstract void sendBuffer(ByteBuffer closeConn);
-
-    abstract void enableRecv();
-
-    abstract void disableRecv();
-
-    abstract void setSessionTimeout(int sessionTimeout);
-
-    protected ZooKeeperSaslServer zooKeeperSaslServer = null;
-
-    protected static class CloseRequestException extends IOException {
-        private static final long serialVersionUID = -7854505709816442681L;
-
-        public CloseRequestException(String msg) {
-            super(msg);
-        }
-    }
-
-    protected static class EndOfStreamException extends IOException {
-        private static final long serialVersionUID = -8255690282104294178L;
-
-        public EndOfStreamException(String msg) {
-            super(msg);
-        }
-
-        public String toString() {
-            return "EndOfStreamException: " + getMessage();
-        }
-    }
-
-    
-    protected final static int confCmd =
-        ByteBuffer.wrap("conf".getBytes()).getInt();
-
-    
-    protected final static int consCmd =
-        ByteBuffer.wrap("cons".getBytes()).getInt();
-
-    
-    protected final static int crstCmd =
-        ByteBuffer.wrap("crst".getBytes()).getInt();
-
-    
-    protected final static int dumpCmd =
-        ByteBuffer.wrap("dump".getBytes()).getInt();
-
-    
-    protected final static int enviCmd =
-        ByteBuffer.wrap("envi".getBytes()).getInt();
-
-    
-    protected final static int getTraceMaskCmd =
-        ByteBuffer.wrap("gtmk".getBytes()).getInt();
-
-    
-    protected final static int ruokCmd =
-        ByteBuffer.wrap("ruok".getBytes()).getInt();
-    
-    protected final static int setTraceMaskCmd =
-        ByteBuffer.wrap("stmk".getBytes()).getInt();
-
-    
-    protected final static int srvrCmd =
-        ByteBuffer.wrap("srvr".getBytes()).getInt();
-
-    
-    protected final static int srstCmd =
-        ByteBuffer.wrap("srst".getBytes()).getInt();
-
-    
-    protected final static int statCmd =
-        ByteBuffer.wrap("stat".getBytes()).getInt();
-
-    
-    protected final static int wchcCmd =
-        ByteBuffer.wrap("wchc".getBytes()).getInt();
-
-    
-    protected final static int wchpCmd =
-        ByteBuffer.wrap("wchp".getBytes()).getInt();
-
-    
-    protected final static int wchsCmd =
-        ByteBuffer.wrap("wchs".getBytes()).getInt();
-
-    
-    protected final static int mntrCmd = ByteBuffer.wrap("mntr".getBytes())
-            .getInt();
-
-    
-    protected final static int isroCmd = ByteBuffer.wrap("isro".getBytes())
-            .getInt();
-
-    
-    protected final static int telnetCloseCmd = 0xfff4fffd;
-
-    protected final static HashMap<Integer, String> cmd2String =
-        new HashMap<Integer, String>();
-
-    
-    static {
-        cmd2String.put(confCmd, "conf");
-        cmd2String.put(consCmd, "cons");
-        cmd2String.put(crstCmd, "crst");
-        cmd2String.put(dumpCmd, "dump");
-        cmd2String.put(enviCmd, "envi");
-        cmd2String.put(getTraceMaskCmd, "gtmk");
-        cmd2String.put(ruokCmd, "ruok");
-        cmd2String.put(setTraceMaskCmd, "stmk");
-        cmd2String.put(srstCmd, "srst");
-        cmd2String.put(srvrCmd, "srvr");
-        cmd2String.put(statCmd, "stat");
-        cmd2String.put(wchcCmd, "wchc");
-        cmd2String.put(wchpCmd, "wchp");
-        cmd2String.put(wchsCmd, "wchs");
-        cmd2String.put(mntrCmd, "mntr");
-        cmd2String.put(isroCmd, "isro");
-        cmd2String.put(telnetCloseCmd, "telnet close");
-    }
-
-    protected void packetReceived() {
-        incrPacketsReceived();
-        ServerStats serverStats = serverStats();
-        if (serverStats != null) {
-            serverStats().incrementPacketsReceived();
-        }
-    }
-
-    protected void packetSent() {
-        incrPacketsSent();
-        ServerStats serverStats = serverStats();
-        if (serverStats != null) {
-            serverStats().incrementPacketsSent();
-        }
-    }
-
-    protected abstract ServerStats serverStats();
-    
-    protected final Date established = new Date();
-
-    protected final AtomicLong packetsReceived = new AtomicLong();
-    protected final AtomicLong packetsSent = new AtomicLong();
-
-    protected long minLatency;
-    protected long maxLatency;
-    protected String lastOp;
-    protected long lastCxid;
-    protected long lastZxid;
-    protected long lastResponseTime;
-    protected long lastLatency;
-
-    protected long count;
-    protected long totalLatency;
-
-    public synchronized void resetStats() {
-        packetsReceived.set(0);
-        packetsSent.set(0);
-        minLatency = Long.MAX_VALUE;
-        maxLatency = 0;
-        lastOp = "NA";
-        lastCxid = -1;
-        lastZxid = -1;
-        lastResponseTime = 0;
-        lastLatency = 0;
-
-        count = 0;
-        totalLatency = 0;
-    }
-
-    protected long incrPacketsReceived() {
-        return packetsReceived.incrementAndGet();
-    }
-    
-    protected void incrOutstandingRequests(RequestHeader h) {
-    }
-
-    protected long incrPacketsSent() {
-        return packetsSent.incrementAndGet();
-    }
-
-    protected synchronized void updateStatsForResponse(long cxid, long zxid,
-            String op, long start, long end)
-    {
-        
-        
-        if (cxid >= 0) {
-            lastCxid = cxid;
-        }
-        lastZxid = zxid;
-        lastOp = op;
-        lastResponseTime = end;
-        long elapsed = end - start;
-        lastLatency = elapsed;
-        if (elapsed < minLatency) {
-            minLatency = elapsed;
-        }
-        if (elapsed > maxLatency) {
-            maxLatency = elapsed;
-        }
-        count++;
-        totalLatency += elapsed;
-    }
-
-    public Date getEstablished() {
-        return (Date)established.clone();
-    }
-
-    public abstract long getOutstandingRequests();
-
-    public long getPacketsReceived() {
-        return packetsReceived.longValue();
-    }
-
-    public long getPacketsSent() {
-        return packetsSent.longValue();
-    }
-
-    public synchronized long getMinLatency() {
-        return minLatency == Long.MAX_VALUE ? 0 : minLatency;
-    }
-
-    public synchronized long getAvgLatency() {
-        return count == 0 ? 0 : totalLatency / count;
-    }
-
-    public synchronized long getMaxLatency() {
-        return maxLatency;
-    }
-
-    public synchronized String getLastOperation() {
-        return lastOp;
-    }
-
-    public synchronized long getLastCxid() {
-        return lastCxid;
-    }
-
-    public synchronized long getLastZxid() {
-        return lastZxid;
-    }
-
-    public synchronized long getLastResponseTime() {
-        return lastResponseTime;
-    }
-
-    public synchronized long getLastLatency() {
-        return lastLatency;
-    }
-
-    
-    @Override
-    public String toString() {
-        StringWriter sw = new StringWriter();
-        PrintWriter pwriter = new PrintWriter(sw);
-        dumpConnectionInfo(pwriter, false);
-        pwriter.flush();
-        pwriter.close();
-        return sw.toString();
-    }
-
-    public abstract InetSocketAddress getRemoteSocketAddress();
-    public abstract int getInterestOps();
-    public abstract boolean isSecure();
-    public abstract Certificate[] getClientCertificateChain();
-    public abstract void setClientCertificateChain(Certificate[] chain);
-    
-    
-    protected synchronized void
-    dumpConnectionInfo(PrintWriter pwriter, boolean brief) {
-        pwriter.print(" ");
-        pwriter.print(getRemoteSocketAddress());
-        pwriter.print("[");
-        int interestOps = getInterestOps();
-        pwriter.print(interestOps == 0 ? "0" : Integer.toHexString(interestOps));
-        pwriter.print("](queued=");
-        pwriter.print(getOutstandingRequests());
-        pwriter.print(",recved=");
-        pwriter.print(getPacketsReceived());
-        pwriter.print(",sent=");
-        pwriter.print(getPacketsSent());
-
-        if (!brief) {
-            long sessionId = getSessionId();
-            if (sessionId != 0) {
-                pwriter.print(",sid=0x");
-                pwriter.print(Long.toHexString(sessionId));
-                pwriter.print(",lop=");
-                pwriter.print(getLastOperation());
-                pwriter.print(",est=");
-                pwriter.print(getEstablished().getTime());
-                pwriter.print(",to=");
-                pwriter.print(getSessionTimeout());
-                long lastCxid = getLastCxid();
-                if (lastCxid >= 0) {
-                    pwriter.print(",lcxid=0x");
-                    pwriter.print(Long.toHexString(lastCxid));
-                }
-                pwriter.print(",lzxid=0x");
-                pwriter.print(Long.toHexString(getLastZxid()));
-                pwriter.print(",lresp=");
-                pwriter.print(getLastResponseTime());
-                pwriter.print(",llat=");
-                pwriter.print(getLastLatency());
-                pwriter.print(",minlat=");
-                pwriter.print(getMinLatency());
-                pwriter.print(",avglat=");
-                pwriter.print(getAvgLatency());
-                pwriter.print(",maxlat=");
-                pwriter.print(getMaxLatency());
-            }
-        }
-        pwriter.print(")");
-    }
-
-    public synchronized Map<String, Object> getConnectionInfo(boolean brief) {
-        Map<String, Object> info = new LinkedHashMap<String, Object>();
-        info.put("remote_socket_address", getRemoteSocketAddress());
-        info.put("interest_ops", getInterestOps());
-        info.put("outstanding_requests", getOutstandingRequests());
-        info.put("packets_received", getPacketsReceived());
-        info.put("packets_sent", getPacketsSent());
-        if (!brief) {
-            info.put("session_id", getSessionId());
-            info.put("last_operation", getLastOperation());
-            info.put("established", getEstablished());
-            info.put("session_timeout", getSessionTimeout());
-            info.put("last_cxid", getLastCxid());
-            info.put("last_zxid", getLastZxid());
-            info.put("last_response_time", getLastResponseTime());
-            info.put("last_latency", getLastLatency());
-            info.put("min_latency", getMinLatency());
-            info.put("avg_latency", getAvgLatency());
-            info.put("max_latency", getMaxLatency());
-        }
-        return info;
-    }
-}
-
-<code block>
-
-
 package org.apache.zookeeper.test;
 
 import java.io.BufferedReader;
@@ -4614,7 +2345,7 @@ public class FourLetterWordsTest extends ClientBase {
     protected static final Logger LOG =
         LoggerFactory.getLogger(FourLetterWordsTest.class);
 
-    
+
     @Test
     public void testFourLetterWords() throws Exception {
         verify("ruok", "imok");
@@ -4698,7 +2429,7 @@ public class FourLetterWordsTest extends ClientBase {
         BufferedReader in = new BufferedReader(new StringReader(resp));
 
         String line;
-        
+
         line = in.readLine();
         Assert.assertTrue(Pattern.matches("^.*\\s\\d+\\.\\d+\\.\\d+-.*$", line));
         Assert.assertTrue(Pattern.matches("^Clients:$", in.readLine()));
@@ -4708,7 +2439,7 @@ public class FourLetterWordsTest extends ClientBase {
             count++;
             Assert.assertTrue(Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+\\)$", line));
         }
-        
+
         Assert.assertTrue(count >= 2);
 
         line = in.readLine();
@@ -4746,7 +2477,2276 @@ public class FourLetterWordsTest extends ClientBase {
             count++;
             Assert.assertTrue(line, Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+.*\\)$", line));
         }
+
+        Assert.assertTrue(count >= 2);
+
+        zk1.close();
+        zk2.close();
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server;
+
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.security.cert.Certificate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.jute.Record;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.RequestHeader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+public abstract class ServerCnxn implements Stats, Watcher {
+
+
+    final public static Object me = new Object();
+    private static final Logger LOG = LoggerFactory.getLogger(ServerCnxn.class);
+    
+    protected ArrayList<Id> authInfo = new ArrayList<Id>();
+
+
+    boolean isOldClient = true;
+
+    abstract int getSessionTimeout();
+
+    abstract void close();
+
+    public abstract void sendResponse(ReplyHeader h, Record r, String tag)
+        throws IOException;
+
+
+    abstract void sendCloseSession();
+
+    public abstract void process(WatchedEvent event);
+
+    public abstract long getSessionId();
+
+    abstract void setSessionId(long sessionId);
+
+
+    public List<Id> getAuthInfo() {
+        return Collections.unmodifiableList(authInfo);
+    }
+
+    public void addAuthInfo(Id id) {
+        if (authInfo.contains(id) == false) {
+            authInfo.add(id);
+        }
+    }
+
+    public boolean removeAuthInfo(Id id) {
+        return authInfo.remove(id);
+    }
+
+    abstract void sendBuffer(ByteBuffer closeConn);
+
+    abstract void enableRecv();
+
+    abstract void disableRecv();
+
+    abstract void setSessionTimeout(int sessionTimeout);
+
+    protected ZooKeeperSaslServer zooKeeperSaslServer = null;
+
+    protected static class CloseRequestException extends IOException {
+        private static final long serialVersionUID = -7854505709816442681L;
+
+        public CloseRequestException(String msg) {
+            super(msg);
+        }
+    }
+
+    protected static class EndOfStreamException extends IOException {
+        private static final long serialVersionUID = -8255690282104294178L;
+
+        public EndOfStreamException(String msg) {
+            super(msg);
+        }
+
+        public String toString() {
+            return "EndOfStreamException: " + getMessage();
+        }
+    }
+
+    protected void packetReceived() {
+        incrPacketsReceived();
+        ServerStats serverStats = serverStats();
+        if (serverStats != null) {
+            serverStats().incrementPacketsReceived();
+        }
+    }
+
+    protected void packetSent() {
+        incrPacketsSent();
+        ServerStats serverStats = serverStats();
+        if (serverStats != null) {
+            serverStats().incrementPacketsSent();
+        }
+    }
+
+    protected abstract ServerStats serverStats();
+    
+    protected final Date established = new Date();
+
+    protected final AtomicLong packetsReceived = new AtomicLong();
+    protected final AtomicLong packetsSent = new AtomicLong();
+
+    protected long minLatency;
+    protected long maxLatency;
+    protected String lastOp;
+    protected long lastCxid;
+    protected long lastZxid;
+    protected long lastResponseTime;
+    protected long lastLatency;
+
+    protected long count;
+    protected long totalLatency;
+
+    public synchronized void resetStats() {
+        packetsReceived.set(0);
+        packetsSent.set(0);
+        minLatency = Long.MAX_VALUE;
+        maxLatency = 0;
+        lastOp = "NA";
+        lastCxid = -1;
+        lastZxid = -1;
+        lastResponseTime = 0;
+        lastLatency = 0;
+
+        count = 0;
+        totalLatency = 0;
+    }
+
+    protected long incrPacketsReceived() {
+        return packetsReceived.incrementAndGet();
+    }
+    
+    protected void incrOutstandingRequests(RequestHeader h) {
+    }
+
+    protected long incrPacketsSent() {
+        return packetsSent.incrementAndGet();
+    }
+
+    protected synchronized void updateStatsForResponse(long cxid, long zxid,
+            String op, long start, long end)
+    {
+
+
+        if (cxid >= 0) {
+            lastCxid = cxid;
+        }
+        lastZxid = zxid;
+        lastOp = op;
+        lastResponseTime = end;
+        long elapsed = end - start;
+        lastLatency = elapsed;
+        if (elapsed < minLatency) {
+            minLatency = elapsed;
+        }
+        if (elapsed > maxLatency) {
+            maxLatency = elapsed;
+        }
+        count++;
+        totalLatency += elapsed;
+    }
+
+    public Date getEstablished() {
+        return (Date)established.clone();
+    }
+
+    public abstract long getOutstandingRequests();
+
+    public long getPacketsReceived() {
+        return packetsReceived.longValue();
+    }
+
+    public long getPacketsSent() {
+        return packetsSent.longValue();
+    }
+
+    public synchronized long getMinLatency() {
+        return minLatency == Long.MAX_VALUE ? 0 : minLatency;
+    }
+
+    public synchronized long getAvgLatency() {
+        return count == 0 ? 0 : totalLatency / count;
+    }
+
+    public synchronized long getMaxLatency() {
+        return maxLatency;
+    }
+
+    public synchronized String getLastOperation() {
+        return lastOp;
+    }
+
+    public synchronized long getLastCxid() {
+        return lastCxid;
+    }
+
+    public synchronized long getLastZxid() {
+        return lastZxid;
+    }
+
+    public synchronized long getLastResponseTime() {
+        return lastResponseTime;
+    }
+
+    public synchronized long getLastLatency() {
+        return lastLatency;
+    }
+
+
+    @Override
+    public String toString() {
+        StringWriter sw = new StringWriter();
+        PrintWriter pwriter = new PrintWriter(sw);
+        dumpConnectionInfo(pwriter, false);
+        pwriter.flush();
+        pwriter.close();
+        return sw.toString();
+    }
+
+    public abstract InetSocketAddress getRemoteSocketAddress();
+    public abstract int getInterestOps();
+    public abstract boolean isSecure();
+    public abstract Certificate[] getClientCertificateChain();
+    public abstract void setClientCertificateChain(Certificate[] chain);
+    
+
+    public synchronized void
+    dumpConnectionInfo(PrintWriter pwriter, boolean brief) {
+        pwriter.print(" ");
+        pwriter.print(getRemoteSocketAddress());
+        pwriter.print("[");
+        int interestOps = getInterestOps();
+        pwriter.print(interestOps == 0 ? "0" : Integer.toHexString(interestOps));
+        pwriter.print("](queued=");
+        pwriter.print(getOutstandingRequests());
+        pwriter.print(",recved=");
+        pwriter.print(getPacketsReceived());
+        pwriter.print(",sent=");
+        pwriter.print(getPacketsSent());
+
+        if (!brief) {
+            long sessionId = getSessionId();
+            if (sessionId != 0) {
+                pwriter.print(",sid=0x");
+                pwriter.print(Long.toHexString(sessionId));
+                pwriter.print(",lop=");
+                pwriter.print(getLastOperation());
+                pwriter.print(",est=");
+                pwriter.print(getEstablished().getTime());
+                pwriter.print(",to=");
+                pwriter.print(getSessionTimeout());
+                long lastCxid = getLastCxid();
+                if (lastCxid >= 0) {
+                    pwriter.print(",lcxid=0x");
+                    pwriter.print(Long.toHexString(lastCxid));
+                }
+                pwriter.print(",lzxid=0x");
+                pwriter.print(Long.toHexString(getLastZxid()));
+                pwriter.print(",lresp=");
+                pwriter.print(getLastResponseTime());
+                pwriter.print(",llat=");
+                pwriter.print(getLastLatency());
+                pwriter.print(",minlat=");
+                pwriter.print(getMinLatency());
+                pwriter.print(",avglat=");
+                pwriter.print(getAvgLatency());
+                pwriter.print(",maxlat=");
+                pwriter.print(getMaxLatency());
+            }
+        }
+        pwriter.print(")");
+    }
+
+    public synchronized Map<String, Object> getConnectionInfo(boolean brief) {
+        Map<String, Object> info = new LinkedHashMap<String, Object>();
+        info.put("remote_socket_address", getRemoteSocketAddress());
+        info.put("interest_ops", getInterestOps());
+        info.put("outstanding_requests", getOutstandingRequests());
+        info.put("packets_received", getPacketsReceived());
+        info.put("packets_sent", getPacketsSent());
+        if (!brief) {
+            info.put("session_id", getSessionId());
+            info.put("last_operation", getLastOperation());
+            info.put("established", getEstablished());
+            info.put("session_timeout", getSessionTimeout());
+            info.put("last_cxid", getLastCxid());
+            info.put("last_zxid", getLastZxid());
+            info.put("last_response_time", getLastResponseTime());
+            info.put("last_latency", getLastLatency());
+            info.put("min_latency", getMinLatency());
+            info.put("avg_latency", getAvgLatency());
+            info.put("max_latency", getMaxLatency());
+        }
+        return info;
+    }
+
+
+    public void cleanupWriterSocket(PrintWriter pwriter) {
+        try {
+            if (pwriter != null) {
+                pwriter.flush();
+                pwriter.close();
+            }
+        } catch (Exception e) {
+            LOG.info("Error closing PrintWriter ", e);
+        } finally {
+            try {
+                close();
+            } catch (Exception e) {
+                LOG.error("Error closing a command socket ", e);
+            }
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server;
+
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.SocketChannel;
+import java.security.cert.Certificate;
+import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.apache.jute.BinaryInputArchive;
+import org.apache.jute.BinaryOutputArchive;
+import org.apache.jute.Record;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.RequestHeader;
+import org.apache.zookeeper.proto.WatcherEvent;
+import org.apache.zookeeper.server.NIOServerCnxnFactory.SelectorThread;
+import org.apache.zookeeper.server.command.CommandExecutor;
+import org.apache.zookeeper.server.command.FourLetterCommands;
+import org.apache.zookeeper.server.command.SetTraceMaskCommand;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+public class NIOServerCnxn extends ServerCnxn {
+    private static final Logger LOG = LoggerFactory.getLogger(NIOServerCnxn.class);
+
+    private final NIOServerCnxnFactory factory;
+
+    private final SocketChannel sock;
+
+    private final SelectorThread selectorThread;
+
+    private final SelectionKey sk;
+
+    private boolean initialized;
+
+    private final ByteBuffer lenBuffer = ByteBuffer.allocate(4);
+
+    private ByteBuffer incomingBuffer = lenBuffer;
+
+    private final Queue<ByteBuffer> outgoingBuffers =
+        new LinkedBlockingQueue<ByteBuffer>();
+
+    private int sessionTimeout;
+
+    private final ZooKeeperServer zkServer;
+
+
+    private final AtomicInteger outstandingRequests = new AtomicInteger(0);
+
+
+    private long sessionId;
+
+    private final int outstandingLimit;
+
+    public NIOServerCnxn(ZooKeeperServer zk, SocketChannel sock,
+                         SelectionKey sk, NIOServerCnxnFactory factory,
+                         SelectorThread selectorThread) throws IOException {
+        this.zkServer = zk;
+        this.sock = sock;
+        this.sk = sk;
+        this.factory = factory;
+        this.selectorThread = selectorThread;
+        if (this.factory.login != null) {
+            this.zooKeeperSaslServer = new ZooKeeperSaslServer(factory.login);
+        }
+        if (zk != null) {
+            outstandingLimit = zk.getGlobalOutstandingLimit();
+        } else {
+            outstandingLimit = 1;
+        }
+        sock.socket().setTcpNoDelay(true);
+
+        sock.socket().setSoLinger(false, -1);
+        InetAddress addr = ((InetSocketAddress) sock.socket()
+                .getRemoteSocketAddress()).getAddress();
+        authInfo.add(new Id("ip", addr.getHostAddress()));
+        this.sessionTimeout = factory.sessionlessCnxnTimeout;
+    }
+
+
+    public void sendCloseSession() {
+        sendBuffer(ServerCnxnFactory.closeConn);
+    }
+
+
+    void sendBufferSync(ByteBuffer bb) {
+       try {
+
+           if (bb != ServerCnxnFactory.closeConn) {
+               if (sock.isOpen()) {
+                   sock.configureBlocking(true);
+                   sock.write(bb);
+               }
+               packetSent();
+           }
+       } catch (IOException ie) {
+           LOG.error("Error sending data synchronously ", ie);
+       }
+    }
+
+
+    public void sendBuffer(ByteBuffer bb) {
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("Add a buffer to outgoingBuffers, sk " + sk
+                      + " is valid: " + sk.isValid());
+        }
+        outgoingBuffers.add(bb);
+        requestInterestOpsUpdate();
+    }
+
+
+    private void readPayload() throws IOException, InterruptedException {
+        if (incomingBuffer.remaining() != 0) { 
+            int rc = sock.read(incomingBuffer); 
+            if (rc < 0) {
+                throw new EndOfStreamException(
+                        "Unable to read additional data from client sessionid 0x"
+                        + Long.toHexString(sessionId)
+                        + ", likely client has closed socket");
+            }
+        }
+
+        if (incomingBuffer.remaining() == 0) { 
+            packetReceived();
+            incomingBuffer.flip();
+            if (!initialized) {
+                readConnectRequest();
+            } else {
+                readRequest();
+            }
+            lenBuffer.clear();
+            incomingBuffer = lenBuffer;
+        }
+    }
+
+
+    private final AtomicBoolean selectable = new AtomicBoolean(true);
+
+    public boolean isSelectable() {
+        return sk.isValid() && selectable.get();
+    }
+
+    public void disableSelectable() {
+        selectable.set(false);
+    }
+
+    public void enableSelectable() {
+        selectable.set(true);
+    }
+
+    private void requestInterestOpsUpdate() {
+        if (isSelectable()) {
+            selectorThread.addInterestOpsUpdateRequest(sk);
+        }
+    }
+
+    void handleWrite(SelectionKey k) throws IOException, CloseRequestException {
+        if (outgoingBuffers.isEmpty()) {
+            return;
+        }
+
+
+        ByteBuffer directBuffer = NIOServerCnxnFactory.getDirectBuffer();
+        if (directBuffer == null) {
+            ByteBuffer[] bufferList = new ByteBuffer[outgoingBuffers.size()];
+
+
+            sock.write(outgoingBuffers.toArray(bufferList));
+
+
+            ByteBuffer bb;
+            while ((bb = outgoingBuffers.peek()) != null) {
+                if (bb == ServerCnxnFactory.closeConn) {
+                    throw new CloseRequestException("close requested");
+                }
+                if (bb.remaining() > 0) {
+                    break;
+                }
+                packetSent();
+                outgoingBuffers.remove();
+            }
+         } else {
+            directBuffer.clear();
+
+            for (ByteBuffer b : outgoingBuffers) {
+                if (directBuffer.remaining() < b.remaining()) {
+
+                    b = (ByteBuffer) b.slice().limit(
+                        directBuffer.remaining());
+                }
+
+                int p = b.position();
+                directBuffer.put(b);
+                b.position(p);
+                if (directBuffer.remaining() == 0) {
+                    break;
+                }
+            }
+
+            directBuffer.flip();
+
+            int sent = sock.write(directBuffer);
+
+            ByteBuffer bb;
+
+
+            while ((bb = outgoingBuffers.peek()) != null) {
+                if (bb == ServerCnxnFactory.closeConn) {
+                    throw new CloseRequestException("close requested");
+                }
+                if (sent < bb.remaining()) {
+
+                    bb.position(bb.position() + sent);
+                    break;
+                }
+                packetSent();
+
+                sent -= bb.remaining();
+                outgoingBuffers.remove();
+            }
+        }
+    }
+
+
+    protected boolean isSocketOpen() {
+        return sock.isOpen();
+    }
+
+
+    void doIO(SelectionKey k) throws InterruptedException {
+        try {
+            if (isSocketOpen() == false) {
+                LOG.warn("trying to do i/o on a null socket for session:0x"
+                         + Long.toHexString(sessionId));
+
+                return;
+            }
+            if (k.isReadable()) {
+                int rc = sock.read(incomingBuffer);
+                if (rc < 0) {
+                    throw new EndOfStreamException(
+                            "Unable to read additional data from client sessionid 0x"
+                            + Long.toHexString(sessionId)
+                            + ", likely client has closed socket");
+                }
+                if (incomingBuffer.remaining() == 0) {
+                    boolean isPayload;
+                    if (incomingBuffer == lenBuffer) { 
+                        incomingBuffer.flip();
+                        isPayload = readLength(k);
+                        incomingBuffer.clear();
+                    } else {
+
+                        isPayload = true;
+                    }
+                    if (isPayload) { 
+                        readPayload();
+                    }
+                    else {
+
+
+                        return;
+                    }
+                }
+            }
+            if (k.isWritable()) {
+                handleWrite(k);
+
+                if (!initialized && !getReadInterest() && !getWriteInterest()) {
+                    throw new CloseRequestException("responded to info probe");
+                }
+            }
+        } catch (CancelledKeyException e) {
+            LOG.warn("CancelledKeyException causing close of session 0x"
+                     + Long.toHexString(sessionId));
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("CancelledKeyException stack trace", e);
+            }
+            close();
+        } catch (CloseRequestException e) {
+
+            close();
+        } catch (EndOfStreamException e) {
+            LOG.warn(e.getMessage());
+
+            close();
+        } catch (IOException e) {
+            LOG.warn("Exception causing close of session 0x"
+                     + Long.toHexString(sessionId) + ": " + e.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("IOException stack trace", e);
+            }
+            close();
+        }
+    }
+
+    private void readRequest() throws IOException {
+        zkServer.processPacket(this, incomingBuffer);
+    }
+
+
+    protected void incrOutstandingRequests(RequestHeader h) {
+        if (h.getXid() >= 0) {
+            outstandingRequests.incrementAndGet();
+
+            int inProcess = zkServer.getInProcess();
+            if (inProcess > outstandingLimit) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Throttling recv " + inProcess);
+                }
+                disableRecv();
+            }
+        }
+    }
+
+
+
+    private boolean getWriteInterest() {
+        return !outgoingBuffers.isEmpty();
+    }
+
+
+
+    private boolean getReadInterest() {
+        return !throttled.get();
+    }
+
+    private final AtomicBoolean throttled = new AtomicBoolean(false);
+
+
+
+    public void disableRecv() {
+        if (throttled.compareAndSet(false, true)) {
+            requestInterestOpsUpdate();
+        }
+    }
+
+
+
+
+    public void enableRecv() {
+        if (throttled.compareAndSet(true, false)) {
+            requestInterestOpsUpdate();
+        }
+    }
+
+    private void readConnectRequest() throws IOException, InterruptedException {
+        if (zkServer == null) {
+            throw new IOException("ZooKeeperServer not running");
+        }
+        zkServer.processConnectRequest(this, incomingBuffer);
+        initialized = true;
+    }
+
+
+    private class SendBufferWriter extends Writer {
+        private StringBuffer sb = new StringBuffer();
+
+
+        private void checkFlush(boolean force) {
+            if ((force && sb.length() > 0) || sb.length() > 2048) {
+                sendBufferSync(ByteBuffer.wrap(sb.toString().getBytes()));
+
+                sb.setLength(0);
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (sb == null) return;
+            checkFlush(true);
+            sb = null; 
+        }
+
+        @Override
+        public void flush() throws IOException {
+            checkFlush(true);
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) throws IOException {
+            sb.append(cbuf, off, len);
+            checkFlush(false);
+        }
+    }
+
+    private boolean checkFourLetterWord(final SelectionKey k, final int len)
+    throws IOException
+    {
+
+
+        String cmd = FourLetterCommands.cmd2String.get(len);
+        if (cmd == null) {
+            return false;
+        }
+        LOG.info("Processing " + cmd + " command from "
+                + sock.socket().getRemoteSocketAddress());
+        packetReceived();
+
+
+        if (k != null) {
+            try {
+                k.cancel();
+            } catch(Exception e) {
+                LOG.error("Error cancelling command selection key ", e);
+            }
+        }
+
+        final PrintWriter pwriter = new PrintWriter(
+                new BufferedWriter(new SendBufferWriter()));
+        if (len == FourLetterCommands.setTraceMaskCmd) {
+            int rc = sock.read(incomingBuffer);
+            if (rc < 0) {
+                throw new IOException("Read error");
+            }
+            incomingBuffer.flip();
+            long traceMask = incomingBuffer.getLong();
+            ZooTrace.setTextTraceLevel(traceMask);
+            SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, this, traceMask);
+            setMask.start();
+            return true;
+        } else {
+            CommandExecutor commandExecutor = new CommandExecutor();
+            return commandExecutor.execute(this, pwriter, len, zkServer, factory);
+        }
+    }
+
+
+    private boolean readLength(SelectionKey k) throws IOException {
+
+        int len = lenBuffer.getInt();
+        if (!initialized && checkFourLetterWord(sk, len)) {
+            return false;
+        }
+        if (len < 0 || len > BinaryInputArchive.maxBuffer) {
+            throw new IOException("Len error " + len);
+        }
+        if (zkServer == null) {
+            throw new IOException("ZooKeeperServer not running");
+        }
+        incomingBuffer = ByteBuffer.allocate(len);
+        return true;
+    }
+
+    public long getOutstandingRequests() {
+        return outstandingRequests.get();
+    }
+
+
+    public int getSessionTimeout() {
+        return sessionTimeout;
+    }
+
+
+    @Override
+    public String toString() {
+        return "ip: " + sock.socket().getRemoteSocketAddress() +
+               " sessionId: 0x" + Long.toHexString(sessionId);
+    }
+
+
+    @Override
+    public void close() {
+        if (!factory.removeCnxn(this)) {
+            return;
+        }
+
+        if (zkServer != null) {
+            zkServer.removeCnxn(this);
+        }
+
+        if (sk != null) {
+            try {
+
+                sk.cancel();
+            } catch (Exception e) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("ignoring exception during selectionkey cancel", e);
+                }
+            }
+        }
+
+        closeSock();
+    }
+
+
+    private void closeSock() {
+        if (sock.isOpen() == false) {
+            return;
+        }
+
+        LOG.info("Closed socket connection for client "
+                + sock.socket().getRemoteSocketAddress()
+                + (sessionId != 0 ?
+                        " which had sessionid 0x" + Long.toHexString(sessionId) :
+                        " (no session established for client)"));
+        closeSock(sock);
+    }
+
+
+    public static void closeSock(SocketChannel sock) {
+        if (sock.isOpen() == false) {
+            return;
+        }
+
+        try {
+
+            sock.socket().shutdownOutput();
+        } catch (IOException e) {
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("ignoring exception during output shutdown", e);
+            }
+        }
+        try {
+            sock.socket().shutdownInput();
+        } catch (IOException e) {
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("ignoring exception during input shutdown", e);
+            }
+        }
+        try {
+            sock.socket().close();
+        } catch (IOException e) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("ignoring exception during socket close", e);
+            }
+        }
+        try {
+            sock.close();
+        } catch (IOException e) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("ignoring exception during socketchannel close", e);
+            }
+        }
+    }
+
+    private final static byte fourBytes[] = new byte[4];
+
+
+    @Override
+    public void sendResponse(ReplyHeader h, Record r, String tag) {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+            BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
+            try {
+                baos.write(fourBytes);
+                bos.writeRecord(h, "header");
+                if (r != null) {
+                    bos.writeRecord(r, tag);
+                }
+                baos.close();
+            } catch (IOException e) {
+                LOG.error("Error serializing response");
+            }
+            byte b[] = baos.toByteArray();
+            ByteBuffer bb = ByteBuffer.wrap(b);
+            bb.putInt(b.length - 4).rewind();
+            sendBuffer(bb);
+            if (h.getXid() > 0) {
+
+                if (outstandingRequests.decrementAndGet() < 1 ||
+                    zkServer.getInProcess() < outstandingLimit) {
+                    enableRecv();
+                }
+            }
+         } catch(Exception e) {
+            LOG.warn("Unexpected exception. Destruction averted.", e);
+         }
+    }
+
+
+    @Override
+    public void process(WatchedEvent event) {
+        ReplyHeader h = new ReplyHeader(-1, -1L, 0);
+        if (LOG.isTraceEnabled()) {
+            ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK,
+                                     "Deliver event " + event + " to 0x"
+                                     + Long.toHexString(this.sessionId)
+                                     + " through " + this);
+        }
+
+
+        WatcherEvent e = event.getWrapper();
+
+        sendResponse(h, e, "notification");
+    }
+
+
+    @Override
+    public long getSessionId() {
+        return sessionId;
+    }
+
+    @Override
+    public void setSessionId(long sessionId) {
+        this.sessionId = sessionId;
+        factory.addSession(sessionId, this);
+    }
+
+    @Override
+    public void setSessionTimeout(int sessionTimeout) {
+        this.sessionTimeout = sessionTimeout;
+        factory.touchCnxn(this);
+    }
+
+    @Override
+    public int getInterestOps() {
+        if (!isSelectable()) {
+            return 0;
+        }
+        int interestOps = 0;
+        if (getReadInterest()) {
+            interestOps |= SelectionKey.OP_READ;
+        }
+        if (getWriteInterest()) {
+            interestOps |= SelectionKey.OP_WRITE;
+        }
+        return interestOps;
+    }
+
+    @Override
+    public InetSocketAddress getRemoteSocketAddress() {
+        if (sock.isOpen() == false) {
+            return null;
+        }
+        return (InetSocketAddress) sock.socket().getRemoteSocketAddress();
+    }
+
+    public InetAddress getSocketAddress() {
+        if (sock.isOpen() == false) {
+            return null;
+        }
+        return sock.socket().getInetAddress();
+    }
+
+    @Override
+    protected ServerStats serverStats() {
+        if (zkServer == null) {
+            return null;
+        }
+        return zkServer.serverStats();
+    }
+
+    @Override
+    public boolean isSecure() {
+        return false;
+    }
+
+    @Override
+    public Certificate[] getClientCertificateChain() {
+        throw new UnsupportedOperationException(
+                "SSL is unsupported in NIOServerCnxn");
+    }
+
+    @Override
+    public void setClientCertificateChain(Certificate[] chain) {
+        throw new UnsupportedOperationException(
+                "SSL is unsupported in NIOServerCnxn");
+    }
+
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server;
+
+import static org.jboss.netty.buffer.ChannelBuffers.wrappedBuffer;
+
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.ByteBuffer;
+import java.security.cert.Certificate;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.jute.BinaryInputArchive;
+import org.apache.jute.BinaryOutputArchive;
+import org.apache.jute.Record;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.WatcherEvent;
+import org.apache.zookeeper.server.command.CommandExecutor;
+import org.apache.zookeeper.server.command.FourLetterCommands;
+import org.apache.zookeeper.server.command.SetTraceMaskCommand;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.MessageEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class NettyServerCnxn extends ServerCnxn {
+    private static final Logger LOG = LoggerFactory.getLogger(NettyServerCnxn.class);
+    Channel channel;
+    ChannelBuffer queuedBuffer;
+    volatile boolean throttled;
+    ByteBuffer bb;
+    ByteBuffer bbLen = ByteBuffer.allocate(4);
+    long sessionId;
+    int sessionTimeout;
+    AtomicLong outstandingCount = new AtomicLong();
+    Certificate[] clientChain;
+
+
+    private volatile ZooKeeperServer zkServer;
+
+    NettyServerCnxnFactory factory;
+    boolean initialized;
+    
+    NettyServerCnxn(Channel channel, ZooKeeperServer zks, NettyServerCnxnFactory factory) {
+        this.channel = channel;
+        this.zkServer = zks;
+        this.factory = factory;
+        if (this.factory.login != null) {
+            this.zooKeeperSaslServer = new ZooKeeperSaslServer(factory.login);
+        }
+    }
+    
+    @Override
+    public void close() {
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("close called for sessionid:0x"
+                    + Long.toHexString(sessionId));
+        }
+        synchronized(factory.cnxns){
+
+            if (!factory.cnxns.remove(this)) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("cnxns size:" + factory.cnxns.size());
+                }
+                return;
+            }
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("close in progress for sessionid:0x"
+                        + Long.toHexString(sessionId));
+            }
+
+            synchronized (factory.ipMap) {
+                Set<NettyServerCnxn> s =
+                    factory.ipMap.get(((InetSocketAddress)channel
+                            .getRemoteAddress()).getAddress());
+                s.remove(this);
+            }
+        }
+
+        if (channel.isOpen()) {
+            channel.close();
+        }
+        factory.unregisterConnection(this);
+    }
+
+    @Override
+    public long getSessionId() {
+        return sessionId;
+    }
+
+    @Override
+    public int getSessionTimeout() {
+        return sessionTimeout;
+    }
+
+    @Override
+    public void process(WatchedEvent event) {
+        ReplyHeader h = new ReplyHeader(-1, -1L, 0);
+        if (LOG.isTraceEnabled()) {
+            ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK,
+                                     "Deliver event " + event + " to 0x"
+                                     + Long.toHexString(this.sessionId)
+                                     + " through " + this);
+        }
+
+
+        WatcherEvent e = event.getWrapper();
+
+        try {
+            sendResponse(h, e, "notification");
+        } catch (IOException e1) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Problem sending to " + getRemoteSocketAddress(), e1);
+            }
+            close();
+        }
+    }
+
+    private static final byte[] fourBytes = new byte[4];
+    static class ResumeMessageEvent implements MessageEvent {
+        Channel channel;
+        ResumeMessageEvent(Channel channel) {
+            this.channel = channel;
+        }
+        @Override
+        public Object getMessage() {return null;}
+        @Override
+        public SocketAddress getRemoteAddress() {return null;}
+        @Override
+        public Channel getChannel() {return channel;}
+        @Override
+        public ChannelFuture getFuture() {return null;}
+    };
+    
+    @Override
+    public void sendResponse(ReplyHeader h, Record r, String tag)
+            throws IOException {
+        if (!channel.isOpen()) {
+            return;
+        }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+        BinaryOutputArchive bos = BinaryOutputArchive.getArchive(baos);
+        try {
+            baos.write(fourBytes);
+            bos.writeRecord(h, "header");
+            if (r != null) {
+                bos.writeRecord(r, tag);
+            }
+            baos.close();
+        } catch (IOException e) {
+            LOG.error("Error serializing response");
+        }
+        byte b[] = baos.toByteArray();
+        ByteBuffer bb = ByteBuffer.wrap(b);
+        bb.putInt(b.length - 4).rewind();
+        sendBuffer(bb);
+        if (h.getXid() > 0) {
+
+            if (!zkServer.shouldThrottle(outstandingCount.decrementAndGet())) {
+                enableRecv();
+            }
+        }
+    }
+
+    @Override
+    public void setSessionId(long sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    @Override
+    public void enableRecv() {
+        if (throttled) {
+            throttled = false;
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Sending unthrottle event " + this);
+            }
+            channel.getPipeline().sendUpstream(new ResumeMessageEvent(channel));
+        }
+    }
+
+    @Override
+    public void sendBuffer(ByteBuffer sendBuffer) {
+        if (sendBuffer == ServerCnxnFactory.closeConn) {
+            close();
+            return;
+        }
+        channel.write(wrappedBuffer(sendBuffer));
+        packetSent();
+    }
+
+
+
+
+    private class SendBufferWriter extends Writer {
+        private StringBuffer sb = new StringBuffer();
         
+
+        private void checkFlush(boolean force) {
+            if ((force && sb.length() > 0) || sb.length() > 2048) {
+                sendBuffer(ByteBuffer.wrap(sb.toString().getBytes()));
+
+                sb.setLength(0);
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (sb == null) return;
+            checkFlush(true);
+            sb = null; 
+        }
+
+        @Override
+        public void flush() throws IOException {
+            checkFlush(true);
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) throws IOException {
+            sb.append(cbuf, off, len);
+            checkFlush(false);
+        }
+    }
+
+
+    private boolean checkFourLetterWord(final Channel channel,
+            ChannelBuffer message, final int len) throws IOException
+    {
+
+
+        String cmd = FourLetterCommands.cmd2String.get(len);
+        if (cmd == null) {
+            return false;
+        }
+        channel.setInterestOps(0).awaitUninterruptibly();
+        LOG.info("Processing " + cmd + " command from "
+                + channel.getRemoteAddress());
+        packetReceived();
+
+        final PrintWriter pwriter = new PrintWriter(
+                new BufferedWriter(new SendBufferWriter()));
+       if (len == FourLetterCommands.setTraceMaskCmd) {
+            ByteBuffer mask = ByteBuffer.allocate(4);
+            message.readBytes(mask);
+
+            bb.flip();
+            long traceMask = mask.getLong();
+            ZooTrace.setTextTraceLevel(traceMask);
+            SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, this, traceMask);
+            setMask.start();
+            return true;
+        } else {
+            CommandExecutor commandExecutor = new CommandExecutor();
+            return commandExecutor.execute(this, pwriter, len, zkServer,factory);
+        }
+    }
+
+    public void receiveMessage(ChannelBuffer message) {
+        try {
+            while(message.readable() && !throttled) {
+                if (bb != null) {
+                    if (LOG.isTraceEnabled()) {
+                        LOG.trace("message readable " + message.readableBytes()
+                                + " bb len " + bb.remaining() + " " + bb);
+                        ByteBuffer dat = bb.duplicate();
+                        dat.flip();
+                        LOG.trace(Long.toHexString(sessionId)
+                                + " bb 0x"
+                                + ChannelBuffers.hexDump(
+                                        ChannelBuffers.copiedBuffer(dat)));
+                    }
+
+                    if (bb.remaining() > message.readableBytes()) {
+                        int newLimit = bb.position() + message.readableBytes();
+                        bb.limit(newLimit);
+                    }
+                    message.readBytes(bb);
+                    bb.limit(bb.capacity());
+
+                    if (LOG.isTraceEnabled()) {
+                        LOG.trace("after readBytes message readable "
+                                + message.readableBytes()
+                                + " bb len " + bb.remaining() + " " + bb);
+                        ByteBuffer dat = bb.duplicate();
+                        dat.flip();
+                        LOG.trace("after readbytes "
+                                + Long.toHexString(sessionId)
+                                + " bb 0x"
+                                + ChannelBuffers.hexDump(
+                                        ChannelBuffers.copiedBuffer(dat)));
+                    }
+                    if (bb.remaining() == 0) {
+                        packetReceived();
+                        bb.flip();
+
+                        ZooKeeperServer zks = this.zkServer;
+                        if (zks == null) {
+                            throw new IOException("ZK down");
+                        }
+                        if (initialized) {
+                            zks.processPacket(this, bb);
+
+                            if (zks.shouldThrottle(outstandingCount.incrementAndGet())) {
+                                disableRecvNoWait();
+                            }
+                        } else {
+                            LOG.debug("got conn req request from "
+                                    + getRemoteSocketAddress());
+                            zks.processConnectRequest(this, bb);
+                            initialized = true;
+                        }
+                        bb = null;
+                    }
+                } else {
+                    if (LOG.isTraceEnabled()) {
+                        LOG.trace("message readable "
+                                + message.readableBytes()
+                                + " bblenrem " + bbLen.remaining());
+                        ByteBuffer dat = bbLen.duplicate();
+                        dat.flip();
+                        LOG.trace(Long.toHexString(sessionId)
+                                + " bbLen 0x"
+                                + ChannelBuffers.hexDump(
+                                        ChannelBuffers.copiedBuffer(dat)));
+                    }
+
+                    if (message.readableBytes() < bbLen.remaining()) {
+                        bbLen.limit(bbLen.position() + message.readableBytes());
+                    }
+                    message.readBytes(bbLen);
+                    bbLen.limit(bbLen.capacity());
+                    if (bbLen.remaining() == 0) {
+                        bbLen.flip();
+
+                        if (LOG.isTraceEnabled()) {
+                            LOG.trace(Long.toHexString(sessionId)
+                                    + " bbLen 0x"
+                                    + ChannelBuffers.hexDump(
+                                            ChannelBuffers.copiedBuffer(bbLen)));
+                        }
+                        int len = bbLen.getInt();
+                        if (LOG.isTraceEnabled()) {
+                            LOG.trace(Long.toHexString(sessionId)
+                                    + " bbLen len is " + len);
+                        }
+
+                        bbLen.clear();
+                        if (!initialized) {
+                            if (checkFourLetterWord(channel, message, len)) {
+                                return;
+                            }
+                        }
+                        if (len < 0 || len > BinaryInputArchive.maxBuffer) {
+                            throw new IOException("Len error " + len);
+                        }
+                        bb = ByteBuffer.allocate(len);
+                    }
+                }
+            }
+        } catch(IOException e) {
+            LOG.warn("Closing connection to " + getRemoteSocketAddress(), e);
+            close();
+        }
+    }
+
+    @Override
+    public void disableRecv() {
+        disableRecvNoWait().awaitUninterruptibly();
+    }
+    
+    private ChannelFuture disableRecvNoWait() {
+        throttled = true;
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Throttling - disabling recv " + this);
+        }
+        return channel.setReadable(false);
+    }
+    
+    @Override
+    public long getOutstandingRequests() {
+        return outstandingCount.longValue();
+    }
+
+    @Override
+    public void setSessionTimeout(int sessionTimeout) {
+        this.sessionTimeout = sessionTimeout;
+    }
+
+    @Override
+    public int getInterestOps() {
+        return channel.getInterestOps();
+    }
+
+    @Override
+    public InetSocketAddress getRemoteSocketAddress() {
+        return (InetSocketAddress)channel.getRemoteAddress();
+    }
+
+
+    @Override
+    public void sendCloseSession() {
+        sendBuffer(ServerCnxnFactory.closeConn);
+    }
+
+    @Override
+    protected ServerStats serverStats() {
+        if (zkServer == null) {
+            return null;
+        }
+        return zkServer.serverStats();
+    }
+
+    @Override
+    public boolean isSecure() {
+        return factory.secure;
+    }
+
+    @Override
+    public Certificate[] getClientCertificateChain() {
+        if (clientChain == null)
+        {
+            return null;
+        }
+        return Arrays.copyOf(clientChain, clientChain.length);
+    }
+
+    @Override
+    public void setClientCertificateChain(Certificate[] chain) {
+        if (chain == null)
+        {
+            clientChain = null;
+        } else {
+            clientChain = Arrays.copyOf(chain, chain.length);
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class ConfCommand extends AbstractFourLetterCommand {
+    ConfCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw,serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            zkServer.dumpConf(pw);
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class ConsCommand extends AbstractFourLetterCommand {
+    public ConsCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            for (ServerCnxn c : factory.getConnections()) {
+                c.dumpConnectionInfo(pw, false);
+                pw.println();
+            }
+            pw.println();
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.ServerCnxnFactory;
+import org.apache.zookeeper.server.ZooKeeperServer;
+
+public class CommandExecutor {
+
+    public boolean execute(ServerCnxn serverCnxn, PrintWriter pwriter,
+            final int commandCode, ZooKeeperServer zkServer, ServerCnxnFactory factory) {
+        AbstractFourLetterCommand command = getCommand(serverCnxn,pwriter, commandCode);
+
+        if (command == null) {
+            return false;
+        }
+
+        command.setZkServer(zkServer);
+        command.setFactory(factory);
+        command.start();
+        return true;
+    }
+
+    private AbstractFourLetterCommand getCommand(ServerCnxn serverCnxn,
+            PrintWriter pwriter, final int commandCode) {
+        AbstractFourLetterCommand command = null;
+        if (commandCode == FourLetterCommands.ruokCmd) {
+            command = new RuokCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.getTraceMaskCmd) {
+            command = new TraceMaskCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.enviCmd) {
+            command = new EnvCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.confCmd) {
+            command = new ConfCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.srstCmd) {
+            command = new StatResetCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.crstCmd) {
+            command = new CnxnStatResetCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.dumpCmd) {
+            command = new DumpCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.statCmd
+                || commandCode == FourLetterCommands.srvrCmd) {
+            command = new StatCommand(pwriter, serverCnxn, commandCode);
+        } else if (commandCode == FourLetterCommands.consCmd) {
+            command = new ConsCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.wchpCmd
+                || commandCode == FourLetterCommands.wchcCmd
+                || commandCode == FourLetterCommands.wchsCmd) {
+            command = new WatchCommand(pwriter, serverCnxn, commandCode);
+        } else if (commandCode == FourLetterCommands.mntrCmd) {
+            command = new MonitorCommand(pwriter, serverCnxn);
+        } else if (commandCode == FourLetterCommands.isroCmd) {
+            command = new IsroCommand(pwriter, serverCnxn);
+        }
+        return command;
+    }
+
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.IOException;
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.ServerCnxnFactory;
+import org.apache.zookeeper.server.ZooKeeperServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+public abstract class AbstractFourLetterCommand {
+    private static final Logger LOG = LoggerFactory
+        .getLogger(AbstractFourLetterCommand.class);
+    protected static final String ZK_NOT_SERVING = "This ZooKeeper instance is not currently serving requests";
+    protected PrintWriter pw;
+    protected ServerCnxn serverCnxn;
+    protected ZooKeeperServer zkServer;
+    protected ServerCnxnFactory factory;
+
+    public AbstractFourLetterCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        this.pw = pw;
+        this.serverCnxn = serverCnxn;
+    }
+
+    public void start() {
+        run();
+    }
+
+    public void run() {
+        try {
+            commandRun();
+        } catch (IOException ie) {
+            LOG.error("Error in running command ", ie);
+        } finally {
+            serverCnxn.cleanupWriterSocket(pw);
+        }
+    }
+
+    public void setZkServer(ZooKeeperServer zkServer) {
+        this.zkServer = zkServer;
+    }
+
+    public void setFactory(ServerCnxnFactory factory) {
+        this.factory = factory;
+    }
+
+    public abstract void commandRun() throws IOException;
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class RuokCommand extends AbstractFourLetterCommand {
+    public RuokCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        pw.print("imok");
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.NIOServerCnxnFactory;
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class DumpCommand extends AbstractFourLetterCommand {
+    public DumpCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            pw.println("SessionTracker dump:");
+            zkServer.getSessionTracker().dumpSessions(pw);
+            pw.println("ephemeral nodes dump:");
+            zkServer.dumpEphemerals(pw);
+            pw.println("Connections dump:");
+
+            if (factory instanceof NIOServerCnxnFactory) {
+                ((NIOServerCnxnFactory)factory).dumpConnections(pw);
+            }
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class StatResetCommand extends AbstractFourLetterCommand {
+    public StatResetCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            zkServer.serverStats().reset();
+            pw.println("Server stats reset.");
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.DataTree;
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class WatchCommand extends AbstractFourLetterCommand {
+    int len = 0;
+    public WatchCommand(PrintWriter pw, ServerCnxn serverCnxn, int len) {
+        super(pw, serverCnxn);
+        this.len = len;
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            DataTree dt = zkServer.getZKDatabase().getDataTree();
+            if (len == FourLetterCommands.wchsCmd) {
+                dt.dumpWatchesSummary(pw);
+            } else if (len == FourLetterCommands.wchpCmd) {
+                dt.dumpWatches(pw, true);
+            } else {
+                dt.dumpWatches(pw, false);
+            }
+            pw.println();
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
+
+public class IsroCommand extends AbstractFourLetterCommand {
+
+    public IsroCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.print("null");
+        } else if (zkServer instanceof ReadOnlyZooKeeperServer) {
+            pw.print("ro");
+        } else {
+            pw.print("rw");
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.Version;
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.ServerStats;
+import org.apache.zookeeper.server.ZKDatabase;
+import org.apache.zookeeper.server.quorum.Leader;
+import org.apache.zookeeper.server.quorum.LeaderZooKeeperServer;
+import org.apache.zookeeper.server.util.OSMXBean;
+
+public class MonitorCommand extends AbstractFourLetterCommand {
+
+    MonitorCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+            return;
+        }
+        ZKDatabase zkdb = zkServer.getZKDatabase();
+        ServerStats stats = zkServer.serverStats();
+
+        print("version", Version.getFullVersion());
+
+        print("avg_latency", stats.getAvgLatency());
+        print("max_latency", stats.getMaxLatency());
+        print("min_latency", stats.getMinLatency());
+
+        print("packets_received", stats.getPacketsReceived());
+        print("packets_sent", stats.getPacketsSent());
+        print("num_alive_connections", stats.getNumAliveClientConnections());
+
+        print("outstanding_requests", stats.getOutstandingRequests());
+
+        print("server_state", stats.getServerState());
+        print("znode_count", zkdb.getNodeCount());
+
+        print("watch_count", zkdb.getDataTree().getWatchCount());
+        print("ephemerals_count", zkdb.getDataTree().getEphemeralsCount());
+        print("approximate_data_size", zkdb.getDataTree().approximateDataSize());
+
+        OSMXBean osMbean = new OSMXBean();
+        if (osMbean != null && osMbean.getUnix() == true) {
+            print("open_file_descriptor_count", osMbean.getOpenFileDescriptorCount());
+            print("max_file_descriptor_count", osMbean.getMaxFileDescriptorCount());
+        }
+
+        if (stats.getServerState().equals("leader")) {
+            Leader leader = ((LeaderZooKeeperServer)zkServer).getLeader();
+
+            print("followers", leader.getLearners().size());
+            print("synced_followers", leader.getForwardingFollowers().size());
+            print("pending_syncs", leader.getNumPendingSyncs());
+        }
+    }
+
+    private void print(String key, long number) {
+        print(key, "" + number);
+    }
+
+    private void print(String key, String value) {
+        pw.print("zk_");
+        pw.print(key);
+        pw.print("\t");
+        pw.println(value);
+    }
+
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+import java.util.List;
+
+import org.apache.zookeeper.Environment;
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class EnvCommand extends AbstractFourLetterCommand {
+    EnvCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        List<Environment.Entry> env = Environment.list();
+
+        pw.println("Environment:");
+        for (Environment.Entry e : env) {
+            pw.print(e.getKey());
+            pw.print("=");
+            pw.println(e.getValue());
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class SetTraceMaskCommand extends AbstractFourLetterCommand {
+    long trace = 0;
+    public SetTraceMaskCommand(PrintWriter pw, ServerCnxn serverCnxn, long trace) {
+        super(pw, serverCnxn);
+        this.trace = trace;
+    }
+
+    @Override
+    public void commandRun() {
+        pw.print(trace);
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+
+
+public class FourLetterCommands {
+
+    public final static int confCmd =
+        ByteBuffer.wrap("conf".getBytes()).getInt();
+
+
+    public final static int consCmd =
+        ByteBuffer.wrap("cons".getBytes()).getInt();
+
+
+    public final static int crstCmd =
+        ByteBuffer.wrap("crst".getBytes()).getInt();
+
+
+    public final static int dumpCmd =
+        ByteBuffer.wrap("dump".getBytes()).getInt();
+
+
+    public final static int enviCmd =
+        ByteBuffer.wrap("envi".getBytes()).getInt();
+
+
+    public final static int getTraceMaskCmd =
+        ByteBuffer.wrap("gtmk".getBytes()).getInt();
+
+
+    public final static int ruokCmd =
+        ByteBuffer.wrap("ruok".getBytes()).getInt();
+
+    public final static int setTraceMaskCmd =
+        ByteBuffer.wrap("stmk".getBytes()).getInt();
+
+
+    public final static int srvrCmd =
+        ByteBuffer.wrap("srvr".getBytes()).getInt();
+
+
+    public final static int srstCmd =
+        ByteBuffer.wrap("srst".getBytes()).getInt();
+
+
+    public final static int statCmd =
+        ByteBuffer.wrap("stat".getBytes()).getInt();
+
+
+    public final static int wchcCmd =
+        ByteBuffer.wrap("wchc".getBytes()).getInt();
+
+
+    public final static int wchpCmd =
+        ByteBuffer.wrap("wchp".getBytes()).getInt();
+
+
+    public final static int wchsCmd =
+        ByteBuffer.wrap("wchs".getBytes()).getInt();
+
+
+    public final static int mntrCmd = ByteBuffer.wrap("mntr".getBytes())
+            .getInt();
+
+
+    public final static int isroCmd = ByteBuffer.wrap("isro".getBytes())
+            .getInt();
+
+
+    public final static int telnetCloseCmd = 0xfff4fffd;
+
+    public final static HashMap<Integer, String> cmd2String =
+        new HashMap<Integer, String>();
+
+
+    static {
+        cmd2String.put(confCmd, "conf");
+        cmd2String.put(consCmd, "cons");
+        cmd2String.put(crstCmd, "crst");
+        cmd2String.put(dumpCmd, "dump");
+        cmd2String.put(enviCmd, "envi");
+        cmd2String.put(getTraceMaskCmd, "gtmk");
+        cmd2String.put(ruokCmd, "ruok");
+        cmd2String.put(setTraceMaskCmd, "stmk");
+        cmd2String.put(srstCmd, "srst");
+        cmd2String.put(srvrCmd, "srvr");
+        cmd2String.put(statCmd, "stat");
+        cmd2String.put(wchcCmd, "wchc");
+        cmd2String.put(wchpCmd, "wchp");
+        cmd2String.put(wchsCmd, "wchs");
+        cmd2String.put(mntrCmd, "mntr");
+        cmd2String.put(isroCmd, "isro");
+        cmd2String.put(telnetCloseCmd, "telnet close");
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.Version;
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class StatCommand extends AbstractFourLetterCommand {
+    private static final Logger LOG = LoggerFactory
+            .getLogger(AbstractFourLetterCommand.class);
+    private int len;
+    public StatCommand(PrintWriter pw, ServerCnxn serverCnxn, int len) {
+        super(pw, serverCnxn);
+        this.len = len;
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            pw.print("Zookeeper version: ");
+            pw.println(Version.getFullVersion());
+            if (zkServer instanceof ReadOnlyZooKeeperServer) {
+                pw.println("READ-ONLY mode; serving only read-only clients");
+            }
+            if (len == FourLetterCommands.statCmd) {
+                LOG.info("Stat command output");
+                pw.println("Clients:");
+                for(ServerCnxn c : factory.getConnections()){
+                    c.dumpConnectionInfo(pw, true);
+                    pw.println();
+                }
+                pw.println();
+            }
+            pw.print(zkServer.serverStats().toString());
+            pw.print("Node count: ");
+            pw.println(zkServer.getZKDatabase().getNodeCount());
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.ZooTrace;
+
+public class TraceMaskCommand extends AbstractFourLetterCommand {
+    TraceMaskCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        long traceMask = ZooTrace.getTextTraceLevel();
+        pw.print(traceMask);
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.server.command;
+
+import java.io.PrintWriter;
+
+import org.apache.zookeeper.server.ServerCnxn;
+
+public class CnxnStatResetCommand extends AbstractFourLetterCommand {
+    public CnxnStatResetCommand(PrintWriter pw, ServerCnxn serverCnxn) {
+        super(pw, serverCnxn);
+    }
+
+    @Override
+    public void commandRun() {
+        if (zkServer == null) {
+            pw.println(ZK_NOT_SERVING);
+        } else {
+            factory.resetAllConnectionStats();
+            pw.println("Connection stats reset.");
+        }
+    }
+}
+
+<code block>
+
+
+package org.apache.zookeeper.test;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.regex.Pattern;
+
+import org.apache.zookeeper.TestableZooKeeper;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.common.X509Exception.SSLContextException;
+
+import static org.apache.zookeeper.client.FourLetterWordMain.send4LetterWord;
+
+import org.junit.Assert;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class FourLetterWordsTest extends ClientBase {
+    protected static final Logger LOG =
+        LoggerFactory.getLogger(FourLetterWordsTest.class);
+
+
+    @Test
+    public void testFourLetterWords() throws Exception {
+        verify("ruok", "imok");
+        verify("envi", "java.version");
+        verify("conf", "clientPort");
+        verify("stat", "Outstanding");
+        verify("srvr", "Outstanding");
+        verify("cons", "queued");
+        verify("dump", "Session");
+        verify("wchs", "watches");
+        verify("wchp", "");
+        verify("wchc", "");
+
+        verify("srst", "reset");
+        verify("crst", "reset");
+
+        verify("stat", "Outstanding");
+        verify("srvr", "Outstanding");
+        verify("cons", "queued");
+        verify("gtmk", "306");
+        verify("isro", "rw");
+
+        TestableZooKeeper zk = createClient();
+        String sid = getHexSessionId(zk.getSessionId());
+
+        verify("stat", "queued");
+        verify("srvr", "Outstanding");
+        verify("cons", sid);
+        verify("dump", sid);
+
+        zk.getData("/", true, null);
+
+        verify("stat", "queued");
+        verify("srvr", "Outstanding");
+        verify("cons", sid);
+        verify("dump", sid);
+
+        verify("wchs", "watching 1");
+        verify("wchp", sid);
+        verify("wchc", sid);
+        zk.close();
+
+        verify("ruok", "imok");
+        verify("envi", "java.version");
+        verify("conf", "clientPort");
+        verify("stat", "Outstanding");
+        verify("srvr", "Outstanding");
+        verify("cons", "queued");
+        verify("dump", "Session");
+        verify("wchs", "watch");
+        verify("wchp", "");
+        verify("wchc", "");
+
+        verify("srst", "reset");
+        verify("crst", "reset");
+
+        verify("stat", "Outstanding");
+        verify("srvr", "Outstanding");
+        verify("cons", "queued");
+        verify("mntr", "zk_server_state\tstandalone");
+        verify("mntr", "num_alive_connections");
+        verify("stat", "Connections");
+        verify("srvr", "Connections");
+    }
+
+    private String sendRequest(String cmd) throws IOException, SSLContextException {
+      HostPort hpobj = ClientBase.parseHostPortList(hostPort).get(0);
+      return send4LetterWord(hpobj.host, hpobj.port, cmd);
+    }
+
+    private void verify(String cmd, String expected) throws IOException, SSLContextException {
+        String resp = sendRequest(cmd);
+        LOG.info("cmd " + cmd + " expected " + expected + " got " + resp);
+        Assert.assertTrue(resp.contains(expected));
+    }
+    
+    @Test
+    public void validateStatOutput() throws Exception {
+        ZooKeeper zk1 = createClient();
+        ZooKeeper zk2 = createClient();
+        
+        String resp = sendRequest("stat");
+        BufferedReader in = new BufferedReader(new StringReader(resp));
+
+        String line;
+
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^.*\\s\\d+\\.\\d+\\.\\d+-.*$", line));
+        Assert.assertTrue(Pattern.matches("^Clients:$", in.readLine()));
+
+        int count = 0;
+        while ((line = in.readLine()).length() > 0) {
+            count++;
+            Assert.assertTrue(Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+\\)$", line));
+        }
+
+        Assert.assertTrue(count >= 2);
+
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Latency min/avg/max: \\d+/\\d+/\\d+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Received: \\d+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Sent: \\d+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Connections: \\d+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Outstanding: \\d+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Zxid: 0x[\\da-fA-F]+$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Mode: .*$", line));
+        line = in.readLine();
+        Assert.assertTrue(Pattern.matches("^Node count: \\d+$", line));
+
+        zk1.close();
+        zk2.close();
+    }
+
+    @Test
+    public void validateConsOutput() throws Exception {
+        ZooKeeper zk1 = createClient();
+        ZooKeeper zk2 = createClient();
+        
+        String resp = sendRequest("cons");
+        BufferedReader in = new BufferedReader(new StringReader(resp));
+
+        String line;
+        int count = 0;
+        while ((line = in.readLine()) != null && line.length() > 0) {
+            count++;
+            Assert.assertTrue(line, Pattern.matches("^ /.*:\\d+\\[\\d+\\]\\(queued=\\d+,recved=\\d+,sent=\\d+.*\\)$", line));
+        }
+
         Assert.assertTrue(count >= 2);
 
         zk1.close();

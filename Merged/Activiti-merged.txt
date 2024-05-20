@@ -1,888 +1,9 @@
-package org.activiti.engine.test.api.identity;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-
-import org.activiti.engine.identity.Picture;
-import org.activiti.engine.impl.persistence.entity.UserEntity;
-import org.junit.Test;
-
-
-public class UserEntityTest {
-
-  @Test
-  public void testSetPicture_pictureShouldBeSavedWhenNotNull() {
-    TestableUserEntity userEntity = new TestableUserEntity();
-    Picture picture = new Picture(null, null);
-    
-    userEntity.setPicture(picture);
-    assertTrue(userEntity.getHasSavePictureBeenCalled());
-    assertFalse(userEntity.getHasDeletePictureBeenCalled());
-  }
-
-  @Test
-  public void testSetPicture_pictureShouldBeDeletedWhenNull() {
-    TestableUserEntity userEntity = new TestableUserEntity();
-    userEntity.setPicture(null);
-    assertTrue(userEntity.getHasDeletePictureBeenCalled());
-  }
-
-  @SuppressWarnings("serial")
-  class TestableUserEntity extends UserEntity {
-
-    private boolean hasSavePictureBeenCalled = false;
-    private boolean hasDeletePictureBeenCalled = false;
-
-    @Override
-    protected void savePicture(Picture picture) {
-      setHasSavePictureBeenCalled(true);
-    }
-
-    @Override
-    protected void deletePicture() {
-      setHasDeletePictureBeenCalled(true);
-    }
-
-    public boolean getHasSavePictureBeenCalled() {
-      return hasSavePictureBeenCalled;
-    }
-
-    public void setHasSavePictureBeenCalled(boolean hasSavePictureBeenCalled) {
-      this.hasSavePictureBeenCalled = hasSavePictureBeenCalled;
-    }
-
-    public boolean getHasDeletePictureBeenCalled() {
-      return hasDeletePictureBeenCalled;
-    }
-
-    public void setHasDeletePictureBeenCalled(boolean hasDeletePictureBeenCalled) {
-      this.hasDeletePictureBeenCalled = hasDeletePictureBeenCalled;
-    }
-
-  }
-
-}
-
-<code block>
-package org.activiti.engine.impl.persistence.entity;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-
-import org.activiti.engine.identity.Picture;
-import org.junit.Test;
-
-
-public class UserEntityTest {
-
-  @Test
-  public void testSetPicture_pictureShouldBeSavedWhenNotNull() {
-    TestableUserEntity userEntity = new TestableUserEntity();
-    Picture picture = new Picture(null, null);
-    
-    userEntity.setPicture(picture);
-    assertTrue(userEntity.getHasSavePictureBeenCalled());
-    assertFalse(userEntity.getHasDeletePictureBeenCalled());
-  }
-
-  @Test
-  public void testSetPicture_pictureShouldBeDeletedWhenNull() {
-    TestableUserEntity userEntity = new TestableUserEntity();
-    userEntity.setPicture(null);
-    assertTrue(userEntity.getHasDeletePictureBeenCalled());
-  }
-
-  @SuppressWarnings("serial")
-  class TestableUserEntity extends UserEntity {
-
-    private boolean hasSavePictureBeenCalled = false;
-    private boolean hasDeletePictureBeenCalled = false;
-
-    @Override
-    protected void savePicture(Picture picture) {
-      setHasSavePictureBeenCalled(true);
-    }
-
-    @Override
-    protected void deletePicture() {
-      setHasDeletePictureBeenCalled(true);
-    }
-
-    public boolean getHasSavePictureBeenCalled() {
-      return hasSavePictureBeenCalled;
-    }
-
-    public void setHasSavePictureBeenCalled(boolean hasSavePictureBeenCalled) {
-      this.hasSavePictureBeenCalled = hasSavePictureBeenCalled;
-    }
-
-    public boolean getHasDeletePictureBeenCalled() {
-      return hasDeletePictureBeenCalled;
-    }
-
-    public void setHasDeletePictureBeenCalled(boolean hasDeletePictureBeenCalled) {
-      this.hasDeletePictureBeenCalled = hasDeletePictureBeenCalled;
-    }
-
-  }
-
-}
-
-<code block>
-
-package org.activiti.bpmn.converter;
-
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import javax.xml.stream.XMLStreamReader;
-import javax.xml.stream.XMLStreamWriter;
-
-import org.activiti.bpmn.constants.BpmnXMLConstants;
-import org.activiti.bpmn.converter.child.BaseChildElementParser;
-import org.activiti.bpmn.converter.export.ActivitiListenerExport;
-import org.activiti.bpmn.converter.export.FailedJobRetryCountExport;
-import org.activiti.bpmn.converter.export.MultiInstanceExport;
-import org.activiti.bpmn.converter.util.BpmnXMLUtil;
-import org.activiti.bpmn.model.Activity;
-import org.activiti.bpmn.model.Artifact;
-import org.activiti.bpmn.model.BaseElement;
-import org.activiti.bpmn.model.BpmnModel;
-import org.activiti.bpmn.model.CompensateEventDefinition;
-import org.activiti.bpmn.model.DataObject;
-import org.activiti.bpmn.model.ErrorEventDefinition;
-import org.activiti.bpmn.model.Event;
-import org.activiti.bpmn.model.EventDefinition;
-import org.activiti.bpmn.model.ExtensionAttribute;
-import org.activiti.bpmn.model.ExtensionElement;
-import org.activiti.bpmn.model.FlowElement;
-import org.activiti.bpmn.model.FlowNode;
-import org.activiti.bpmn.model.FormProperty;
-import org.activiti.bpmn.model.FormValue;
-import org.activiti.bpmn.model.Gateway;
-import org.activiti.bpmn.model.MessageEventDefinition;
-import org.activiti.bpmn.model.Process;
-import org.activiti.bpmn.model.SequenceFlow;
-import org.activiti.bpmn.model.SignalEventDefinition;
-import org.activiti.bpmn.model.StartEvent;
-import org.activiti.bpmn.model.SubProcess;
-import org.activiti.bpmn.model.TerminateEventDefinition;
-import org.activiti.bpmn.model.ThrowEvent;
-import org.activiti.bpmn.model.TimerEventDefinition;
-import org.activiti.bpmn.model.UserTask;
-import org.activiti.bpmn.model.ValuedDataObject;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-public abstract class BaseBpmnXMLConverter implements BpmnXMLConstants {
-
-  protected static final Logger LOGGER = LoggerFactory.getLogger(BaseBpmnXMLConverter.class);
-  
-  protected static final List<ExtensionAttribute> defaultElementAttributes = Arrays.asList(
-      new ExtensionAttribute(ATTRIBUTE_ID),
-      new ExtensionAttribute(ATTRIBUTE_NAME)
-  );
-  
-  protected static final List<ExtensionAttribute> defaultActivityAttributes = Arrays.asList(
-      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ASYNCHRONOUS), 
-      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_EXCLUSIVE), 
-      new ExtensionAttribute(ATTRIBUTE_DEFAULT), 
-      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION)
-  );
-  
-  public void convertToBpmnModel(XMLStreamReader xtr, BpmnModel model, Process activeProcess, 
-      List<SubProcess> activeSubProcessList) throws Exception {
-    
-    String elementId = xtr.getAttributeValue(null, ATTRIBUTE_ID);
-    String elementName = xtr.getAttributeValue(null, ATTRIBUTE_NAME);
-    boolean async = parseAsync(xtr);
-    boolean notExclusive = parseNotExclusive(xtr);
-    String defaultFlow = xtr.getAttributeValue(null, ATTRIBUTE_DEFAULT);
-    boolean isForCompensation = parseForCompensation(xtr);
-    
-    BaseElement parsedElement = convertXMLToElement(xtr, model);
-    
-    if (parsedElement instanceof Artifact) {
-      Artifact currentArtifact = (Artifact) parsedElement;
-      currentArtifact.setId(elementId);
-
-      if (isInSubProcess(activeSubProcessList)) {
-        final SubProcess currentSubProcess = activeSubProcessList.get(activeSubProcessList.size() - 2);
-        currentSubProcess.addArtifact(currentArtifact);
-
-      } else {
-        activeProcess.addArtifact(currentArtifact);
-      }
-    }
-    
-    if (parsedElement instanceof FlowElement) {
-      
-      FlowElement currentFlowElement = (FlowElement) parsedElement;
-      currentFlowElement.setId(elementId);
-      currentFlowElement.setName(elementName);
-      
-      if (currentFlowElement instanceof FlowNode) {
-        FlowNode flowNode = (FlowNode) currentFlowElement;
-        flowNode.setAsynchronous(async);
-        flowNode.setNotExclusive(notExclusive);
-        
-        if (currentFlowElement instanceof Activity) {
-          
-          Activity activity = (Activity) currentFlowElement;
-          activity.setForCompensation(isForCompensation);
-          if (StringUtils.isNotEmpty(defaultFlow)) {
-            activity.setDefaultFlow(defaultFlow);
-          }
-        }
-        
-        if (currentFlowElement instanceof Gateway) {
-          Gateway gateway = (Gateway) currentFlowElement;
-          if (StringUtils.isNotEmpty(defaultFlow)) {
-            gateway.setDefaultFlow(defaultFlow);
-          }
-        }
-      }
-      
-      if (currentFlowElement instanceof DataObject) {
-        if (!activeSubProcessList.isEmpty()) {
-          activeSubProcessList.get(activeSubProcessList.size() - 1).getDataObjects().add((ValuedDataObject)parsedElement);
-        } else {
-          activeProcess.getDataObjects().add((ValuedDataObject)parsedElement);
-        }
-      }
-
-      if (!activeSubProcessList.isEmpty()) {
-        activeSubProcessList.get(activeSubProcessList.size() - 1).addFlowElement(currentFlowElement);
-      } else {
-        activeProcess.addFlowElement(currentFlowElement);
-      }
-    }
-  }
-  
-  public void convertToXML(XMLStreamWriter xtw, BaseElement baseElement, BpmnModel model) throws Exception {
-    xtw.writeStartElement(getXMLElementName());
-    boolean didWriteExtensionStartElement = false;
-    writeDefaultAttribute(ATTRIBUTE_ID, baseElement.getId(), xtw);
-    if (baseElement instanceof FlowElement) {
-      writeDefaultAttribute(ATTRIBUTE_NAME, ((FlowElement) baseElement).getName(), xtw);
-    }
-    
-    if (baseElement instanceof FlowNode) {
-      final FlowNode flowNode = (FlowNode) baseElement;
-      if (flowNode.isAsynchronous()) {
-        writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_ASYNCHRONOUS, ATTRIBUTE_VALUE_TRUE, xtw);
-        if (flowNode.isNotExclusive()) {
-          writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_EXCLUSIVE, ATTRIBUTE_VALUE_FALSE, xtw);
-        }
-      }
-      
-      if (baseElement instanceof Activity) {
-        final Activity activity = (Activity) baseElement;
-        if (activity.isForCompensation()) {
-          writeDefaultAttribute(ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION, ATTRIBUTE_VALUE_TRUE, xtw);
-        }
-        if (StringUtils.isNotEmpty(activity.getDefaultFlow())) {
-          FlowElement defaultFlowElement = model.getFlowElement(activity.getDefaultFlow());
-          if (defaultFlowElement instanceof SequenceFlow) {
-            writeDefaultAttribute(ATTRIBUTE_DEFAULT, activity.getDefaultFlow(), xtw);
-          }
-        }
-      }
-      
-      if (baseElement instanceof Gateway) {
-        final Gateway gateway = (Gateway) baseElement;
-        if (StringUtils.isNotEmpty(gateway.getDefaultFlow())) {
-          FlowElement defaultFlowElement = model.getFlowElement(gateway.getDefaultFlow());
-          if (defaultFlowElement instanceof SequenceFlow) {
-            writeDefaultAttribute(ATTRIBUTE_DEFAULT, gateway.getDefaultFlow(), xtw);
-          }
-        }
-      }
-    }
-    
-    writeAdditionalAttributes(baseElement, model, xtw);
-    
-    if (baseElement instanceof FlowElement) {
-      final FlowElement flowElement = (FlowElement) baseElement;
-      if (StringUtils.isNotEmpty(flowElement.getDocumentation())) {
-  
-        xtw.writeStartElement(ELEMENT_DOCUMENTATION);
-        xtw.writeCharacters(flowElement.getDocumentation());
-        xtw.writeEndElement();
-      }
-    }
-    
-    didWriteExtensionStartElement = writeExtensionChildElements(baseElement, didWriteExtensionStartElement, xtw);
-    didWriteExtensionStartElement = writeListeners(baseElement, didWriteExtensionStartElement, xtw);
-    didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(baseElement, didWriteExtensionStartElement, model.getNamespaces(), xtw);
-    if (baseElement instanceof Activity) {
-    	final Activity activity = (Activity) baseElement;
-        FailedJobRetryCountExport.writeFailedJobRetryCount(activity, xtw);
-        
-     }
-    
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    
-    if (baseElement instanceof Activity) {
-      final Activity activity = (Activity) baseElement;
-      MultiInstanceExport.writeMultiInstance(activity, xtw);
-      
-    }
-    
-    writeAdditionalChildElements(baseElement, model, xtw);
-    
-    xtw.writeEndElement();
-  }
-  
-  protected abstract Class<? extends BaseElement> getBpmnElementType();
-  
-  protected abstract BaseElement convertXMLToElement(XMLStreamReader xtr, BpmnModel model) throws Exception;
-  
-  protected abstract String getXMLElementName();
-  
-  protected abstract void writeAdditionalAttributes(BaseElement element, BpmnModel model, XMLStreamWriter xtw) throws Exception;
-  
-  protected boolean writeExtensionChildElements(BaseElement element, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
-    return didWriteExtensionStartElement;
-  }
-  
-  protected abstract void writeAdditionalChildElements(BaseElement element, BpmnModel model, XMLStreamWriter xtw) throws Exception;
-  
-  
-  
-  protected void parseChildElements(String elementName, BaseElement parentElement, BpmnModel model, XMLStreamReader xtr) throws Exception {
-    parseChildElements(elementName, parentElement, null, model, xtr);
-  }
-  
-  protected void parseChildElements(String elementName, BaseElement parentElement, Map<String, BaseChildElementParser> additionalParsers, 
-      BpmnModel model, XMLStreamReader xtr) throws Exception {
-    
-    Map<String, BaseChildElementParser> childParsers = new HashMap<String, BaseChildElementParser>();
-    if (additionalParsers != null) {
-      childParsers.putAll(additionalParsers);
-    }
-    BpmnXMLUtil.parseChildElements(elementName, parentElement, xtr, childParsers, model);
-  }
-  
-  @SuppressWarnings("unchecked")
-  protected ExtensionElement parseExtensionElement(XMLStreamReader xtr) throws Exception {
-    ExtensionElement extensionElement = new ExtensionElement();
-    extensionElement.setName(xtr.getLocalName());
-    if (StringUtils.isNotEmpty(xtr.getNamespaceURI())) {
-      extensionElement.setNamespace(xtr.getNamespaceURI());
-    }
-    if (StringUtils.isNotEmpty(xtr.getPrefix())) {
-      extensionElement.setNamespacePrefix(xtr.getPrefix());
-    }
-
-    BpmnXMLUtil.addCustomAttributes(xtr, extensionElement, defaultElementAttributes);
-
-    boolean readyWithExtensionElement = false;
-    while (readyWithExtensionElement == false && xtr.hasNext()) {
-      xtr.next();
-      if (xtr.isCharacters() || XMLStreamReader.CDATA == xtr.getEventType()) {
-        if (StringUtils.isNotEmpty(xtr.getText().trim())) {
-          extensionElement.setElementText(xtr.getText().trim());
-        }
-      } else if (xtr.isStartElement()) {
-        ExtensionElement childExtensionElement = parseExtensionElement(xtr);
-        extensionElement.addChildElement(childExtensionElement);
-      } else if (xtr.isEndElement() && extensionElement.getName().equalsIgnoreCase(xtr.getLocalName())) {
-        readyWithExtensionElement = true;
-      }
-    }
-    return extensionElement;
-  }
-
-  protected boolean parseAsync(XMLStreamReader xtr) {
-    boolean async = false;
-    String asyncString = xtr.getAttributeValue(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ASYNCHRONOUS);
-    if (ATTRIBUTE_VALUE_TRUE.equalsIgnoreCase(asyncString)) {
-      async = true;
-    }
-    return async;
-  }
-  
-  protected boolean parseNotExclusive(XMLStreamReader xtr) {
-    boolean notExclusive = false;
-    String exclusiveString = xtr.getAttributeValue(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_EXCLUSIVE);
-    if (ATTRIBUTE_VALUE_FALSE.equalsIgnoreCase(exclusiveString)) {
-      notExclusive = true;
-    }
-    return notExclusive;
-  }
-  
-  protected boolean parseForCompensation(XMLStreamReader xtr) {
-    boolean isForCompensation = false;
-    String compensationString = xtr.getAttributeValue(null, ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION);
-    if (ATTRIBUTE_VALUE_TRUE.equalsIgnoreCase(compensationString)) {
-      isForCompensation = true;
-    }
-    return isForCompensation;
-  }
-  
-  protected List<String> parseDelimitedList(String expression) {
-    return BpmnXMLUtil.parseDelimitedList(expression);
-  }
-  
-  private boolean isInSubProcess(List<SubProcess> subProcessList) {
-    if(subProcessList.size() > 1) {
-      return true;
-    } else {
-      return false;
-    }
-  }
-  
-  
-  
-  protected String convertToDelimitedString(List<String> stringList) {
-    return BpmnXMLUtil.convertToDelimitedString(stringList);
-  }
-  
-  protected boolean writeFormProperties(FlowElement flowElement, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
-    
-    List<FormProperty> propertyList = null;
-    if (flowElement instanceof UserTask) {
-      propertyList = ((UserTask) flowElement).getFormProperties();
-    } else if (flowElement instanceof StartEvent) {
-      propertyList = ((StartEvent) flowElement).getFormProperties();
-    }
-    
-    if (propertyList != null) {
-    
-      for (FormProperty property : propertyList) {
-        
-        if (StringUtils.isNotEmpty(property.getId())) {
-          
-          if (didWriteExtensionStartElement == false) { 
-            xtw.writeStartElement(ELEMENT_EXTENSIONS);
-            didWriteExtensionStartElement = true;
-          }
-          
-          xtw.writeStartElement(ACTIVITI_EXTENSIONS_PREFIX, ELEMENT_FORMPROPERTY, ACTIVITI_EXTENSIONS_NAMESPACE);
-          writeDefaultAttribute(ATTRIBUTE_FORM_ID, property.getId(), xtw);
-          
-          writeDefaultAttribute(ATTRIBUTE_FORM_NAME, property.getName(), xtw);
-          writeDefaultAttribute(ATTRIBUTE_FORM_TYPE, property.getType(), xtw);
-          writeDefaultAttribute(ATTRIBUTE_FORM_EXPRESSION, property.getExpression(), xtw);
-          writeDefaultAttribute(ATTRIBUTE_FORM_VARIABLE, property.getVariable(), xtw);
-          writeDefaultAttribute(ATTRIBUTE_FORM_DEFAULT, property.getDefaultExpression(), xtw);
-          writeDefaultAttribute(ATTRIBUTE_FORM_DATEPATTERN, property.getDatePattern(), xtw);
-          if (property.isReadable() == false) {
-            writeDefaultAttribute(ATTRIBUTE_FORM_READABLE, ATTRIBUTE_VALUE_FALSE, xtw);
-          }
-          if (property.isWriteable() == false) {
-            writeDefaultAttribute(ATTRIBUTE_FORM_WRITABLE, ATTRIBUTE_VALUE_FALSE, xtw);
-          }
-          if (property.isRequired()) {
-            writeDefaultAttribute(ATTRIBUTE_FORM_REQUIRED, ATTRIBUTE_VALUE_TRUE, xtw);
-          }
-          
-          for (FormValue formValue : property.getFormValues()) {
-            if (StringUtils.isNotEmpty(formValue.getId())) {
-              xtw.writeStartElement(ACTIVITI_EXTENSIONS_PREFIX, ELEMENT_VALUE, ACTIVITI_EXTENSIONS_NAMESPACE);
-              xtw.writeAttribute(ATTRIBUTE_ID, formValue.getId());
-              xtw.writeAttribute(ATTRIBUTE_NAME, formValue.getName());
-              xtw.writeEndElement();
-            }
-          }
-          
-          xtw.writeEndElement();
-        }
-      }
-    }
-    
-    return didWriteExtensionStartElement;
-  }
-  
-  protected boolean writeListeners(BaseElement element, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
-    return ActivitiListenerExport.writeListeners(element, didWriteExtensionStartElement, xtw);
-  }
-  
-  protected void writeEventDefinitions(Event parentEvent, List<EventDefinition> eventDefinitions, BpmnModel model, XMLStreamWriter xtw) throws Exception {
-    for (EventDefinition eventDefinition : eventDefinitions) {
-      if (eventDefinition instanceof TimerEventDefinition) {
-        writeTimerDefinition(parentEvent, (TimerEventDefinition) eventDefinition, xtw);
-      } else if (eventDefinition instanceof SignalEventDefinition) {
-        writeSignalDefinition(parentEvent, (SignalEventDefinition) eventDefinition, xtw);
-      } else if (eventDefinition instanceof MessageEventDefinition) {
-        writeMessageDefinition(parentEvent, (MessageEventDefinition) eventDefinition, model, xtw);
-      } else if (eventDefinition instanceof ErrorEventDefinition) {
-        writeErrorDefinition(parentEvent, (ErrorEventDefinition) eventDefinition, xtw);
-      } else if (eventDefinition instanceof TerminateEventDefinition) {
-        writeTerminateDefinition(parentEvent, (TerminateEventDefinition) eventDefinition, xtw);
-      } else if (eventDefinition instanceof CompensateEventDefinition) {
-        writeCompensateDefinition(parentEvent, (CompensateEventDefinition) eventDefinition, xtw);
-      }
-    }
-  }
-  
-  protected void writeTimerDefinition(Event parentEvent, TimerEventDefinition timerDefinition, XMLStreamWriter xtw) throws Exception {
-    xtw.writeStartElement(ELEMENT_EVENT_TIMERDEFINITION);
-    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(timerDefinition, false, xtw);
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    if (StringUtils.isNotEmpty(timerDefinition.getTimeDate())) {
-      xtw.writeStartElement(ATTRIBUTE_TIMER_DATE);
-      xtw.writeCharacters(timerDefinition.getTimeDate());
-      xtw.writeEndElement();
-      
-    } else if (StringUtils.isNotEmpty(timerDefinition.getTimeCycle())) {
-      xtw.writeStartElement(ATTRIBUTE_TIMER_CYCLE);
-
-      if (StringUtils.isNotEmpty(timerDefinition.getEndDate())) {
-        xtw.writeAttribute(ACTIVITI_EXTENSIONS_PREFIX, ACTIVITI_EXTENSIONS_NAMESPACE,ATTRIBUTE_END_DATE,timerDefinition.getEndDate());
-      }
-
-      xtw.writeCharacters(timerDefinition.getTimeCycle());
-      xtw.writeEndElement();
-      
-    } else if (StringUtils.isNotEmpty(timerDefinition.getTimeDuration())) {
-      xtw.writeStartElement(ATTRIBUTE_TIMER_DURATION);
-      xtw.writeCharacters(timerDefinition.getTimeDuration());
-      xtw.writeEndElement();
-    }
-    
-    xtw.writeEndElement();
-  }
-  
-  protected void writeSignalDefinition(Event parentEvent, SignalEventDefinition signalDefinition, XMLStreamWriter xtw) throws Exception {
-    xtw.writeStartElement(ELEMENT_EVENT_SIGNALDEFINITION);
-    writeDefaultAttribute(ATTRIBUTE_SIGNAL_REF, signalDefinition.getSignalRef(), xtw);
-    if (parentEvent instanceof ThrowEvent && signalDefinition.isAsync()) {
-      BpmnXMLUtil.writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_ASYNCHRONOUS, "true", xtw);
-    }
-    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(signalDefinition, false, xtw);
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    xtw.writeEndElement();
-  }
-  
-  protected void writeCompensateDefinition(Event parentEvent, CompensateEventDefinition compensateEventDefinition, XMLStreamWriter xtw) throws Exception {
-	    xtw.writeStartElement(ELEMENT_EVENT_COMPENSATEDEFINITION);
-	    writeDefaultAttribute(ATTRIBUTE_COMPENSATE_ACTIVITYREF, compensateEventDefinition.getActivityRef(), xtw);
-	    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(compensateEventDefinition, false, xtw);
-	    if (didWriteExtensionStartElement) {
-	      xtw.writeEndElement();
-	    }
-	    xtw.writeEndElement();
-	  }
-  
-  protected void writeMessageDefinition(Event parentEvent, MessageEventDefinition messageDefinition, BpmnModel model, XMLStreamWriter xtw) throws Exception {
-    xtw.writeStartElement(ELEMENT_EVENT_MESSAGEDEFINITION);
-    
-    String messageRef = messageDefinition.getMessageRef();
-    if (StringUtils.isNotEmpty(messageRef)) {
-      
-      if (messageRef.startsWith(model.getTargetNamespace())) {
-        messageRef = messageRef.replace(model.getTargetNamespace(), "");
-        messageRef = messageRef.replaceFirst(":", "");
-      } else {
-        for (String prefix : model.getNamespaces().keySet()) {
-          String namespace = model.getNamespace(prefix);
-          if (messageRef.startsWith(namespace)) {
-            messageRef = messageRef.replace(model.getTargetNamespace(), "");
-            messageRef = prefix + messageRef;
-          }
-        }
-      }
-    }
-    writeDefaultAttribute(ATTRIBUTE_MESSAGE_REF, messageRef, xtw);
-    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(messageDefinition, false, xtw);
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    xtw.writeEndElement();
-  }
-  
-  protected void writeErrorDefinition(Event parentEvent, ErrorEventDefinition errorDefinition, XMLStreamWriter xtw) throws Exception {
-    xtw.writeStartElement(ELEMENT_EVENT_ERRORDEFINITION);
-    writeDefaultAttribute(ATTRIBUTE_ERROR_REF, errorDefinition.getErrorCode(), xtw);
-    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(errorDefinition, false, xtw);
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    xtw.writeEndElement();
-  }
-  
-  protected void writeTerminateDefinition(Event parentEvent, TerminateEventDefinition terminateDefinition, XMLStreamWriter xtw) throws Exception {
-    xtw.writeStartElement(ELEMENT_EVENT_TERMINATEDEFINITION);
-    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(terminateDefinition, false, xtw);
-    if (didWriteExtensionStartElement) {
-      xtw.writeEndElement();
-    }
-    xtw.writeEndElement();
-  }
-  
-  protected void writeDefaultAttribute(String attributeName, String value, XMLStreamWriter xtw) throws Exception {
-    BpmnXMLUtil.writeDefaultAttribute(attributeName, value, xtw);
-  }
-  
-  protected void writeQualifiedAttribute(String attributeName, String value, XMLStreamWriter xtw) throws Exception {
-    BpmnXMLUtil.writeQualifiedAttribute(attributeName, value, xtw);
-  }
-}
-
-<code block>
-package org.activiti.editor.language.xml;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
-import java.util.List;
-
-import org.activiti.bpmn.model.ActivitiListener;
-import org.activiti.bpmn.model.BpmnModel;
-import org.activiti.bpmn.model.EndEvent;
-import org.activiti.bpmn.model.FlowElement;
-import org.activiti.bpmn.model.ImplementationType;
-import org.junit.Test;
-
-public class AsyncEndEventConverterTest extends AbstractConverterTest {
-
-  @Test
-  public void connvertXMLToModel() throws Exception {
-    BpmnModel bpmnModel = readXMLFile();
-    validateModel(bpmnModel);
-  }
-  
-  @Test
-  public void convertModelToXML() throws Exception {
-    BpmnModel bpmnModel = readXMLFile();
-    BpmnModel parsedModel = exportAndReadXMLFile(bpmnModel);
-    validateModel(parsedModel);
-    deployProcess(parsedModel);
-  }
-  
-  protected String getResource() {
-    return "asyncendeventmodel.bpmn";
-  }
-  
-  private void validateModel(BpmnModel model) {
-    FlowElement flowElement = model.getMainProcess().getFlowElement("endEvent");
-    assertNotNull(flowElement);
-    assertTrue(flowElement instanceof EndEvent);
-    assertEquals("endEvent", flowElement.getId());
-    EndEvent endEvent = (EndEvent) flowElement;
-    assertEquals("endEvent", endEvent.getId());
-    assertTrue(endEvent.isAsynchronous());
-    
-    List<ActivitiListener> listeners = endEvent.getExecutionListeners();
-    assertEquals(1, listeners.size());
-    ActivitiListener listener = listeners.get(0);
-    assertTrue(ImplementationType.IMPLEMENTATION_TYPE_CLASS.equals(listener.getImplementationType()));
-    assertEquals("org.test.TestClass", listener.getImplementation());
-    assertEquals("start", listener.getEvent());
-  }
-}
-
-<code block>
-
-package org.activiti.bpmn.model;
-
-
-
-public abstract class Gateway extends FlowNode {
-
-  protected String defaultFlow;
-  
-  public String getDefaultFlow() {
-    return defaultFlow;
-  }
-
-  public void setDefaultFlow(String defaultFlow) {
-    this.defaultFlow = defaultFlow;
-  }
-  
-  public abstract Gateway clone();
-  
-  public void setValues(Gateway otherElement) {
-    super.setValues(otherElement);
-    setDefaultFlow(otherElement.getDefaultFlow());
-  }
-}
-
-<code block>
-
-package org.activiti.bpmn.model;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-public abstract class FlowNode extends FlowElement {
-
-  protected boolean asynchronous;
-  protected boolean notExclusive;
-  protected List<SequenceFlow> incomingFlows = new ArrayList<SequenceFlow>();
-  protected List<SequenceFlow> outgoingFlows = new ArrayList<SequenceFlow>();
-
-  public boolean isAsynchronous() {
-    return asynchronous;
-  }
-
-  public void setAsynchronous(boolean asynchronous) {
-    this.asynchronous = asynchronous;
-  }
-  
-  public boolean isNotExclusive() {
-    return notExclusive;
-  }
-  public void setNotExclusive(boolean notExclusive) {
-    this.notExclusive = notExclusive;
-  }
-
-  public List<SequenceFlow> getIncomingFlows() {
-    return incomingFlows;
-  }
-
-  public void setIncomingFlows(List<SequenceFlow> incomingFlows) {
-    this.incomingFlows = incomingFlows;
-  }
-
-  public List<SequenceFlow> getOutgoingFlows() {
-    return outgoingFlows;
-  }
-
-  public void setOutgoingFlows(List<SequenceFlow> outgoingFlows) {
-    this.outgoingFlows = outgoingFlows;
-  }
-  
-  public void setValues(FlowNode otherNode) {
-    super.setValues(otherNode);
-    setAsynchronous(otherNode.isAsynchronous());
-    setNotExclusive(otherNode.isNotExclusive());
-  }
-}
-
-<code block>
-
-package org.activiti.bpmn.model;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-public abstract class Activity extends FlowNode {
- 
-  protected String defaultFlow;
-  protected boolean forCompensation;
-  protected MultiInstanceLoopCharacteristics loopCharacteristics;
-  protected IOSpecification ioSpecification;
-  protected List<DataAssociation> dataInputAssociations = new ArrayList<DataAssociation>();
-  protected List<DataAssociation> dataOutputAssociations = new ArrayList<DataAssociation>();
-  protected List<BoundaryEvent> boundaryEvents = new ArrayList<BoundaryEvent>();
-  protected String failedJobRetryTimeCycleValue;
-  protected List<MapExceptionEntry> mapExceptions = new ArrayList<MapExceptionEntry>(); 
-
-  public String getFailedJobRetryTimeCycleValue() {
-    return failedJobRetryTimeCycleValue;
-  }
-  public void setFailedJobRetryTimeCycleValue(String failedJobRetryTimeCycleValue) {
-    this.failedJobRetryTimeCycleValue = failedJobRetryTimeCycleValue;
-  }
-  public boolean isForCompensation() {
-    return forCompensation;
-  }
-  public void setForCompensation(boolean forCompensation) {
-    this.forCompensation = forCompensation;
-  }
-  public List<BoundaryEvent> getBoundaryEvents() {
-    return boundaryEvents;
-  }
-  public void setBoundaryEvents(List<BoundaryEvent> boundaryEvents) {
-    this.boundaryEvents = boundaryEvents;
-  }
-  public String getDefaultFlow() {
-    return defaultFlow;
-  }
-  public void setDefaultFlow(String defaultFlow) {
-    this.defaultFlow = defaultFlow;
-  }
-  public MultiInstanceLoopCharacteristics getLoopCharacteristics() {
-    return loopCharacteristics;
-  }
-  public void setLoopCharacteristics(MultiInstanceLoopCharacteristics loopCharacteristics) {
-    this.loopCharacteristics = loopCharacteristics;
-  }
-  public IOSpecification getIoSpecification() {
-    return ioSpecification;
-  }
-  public void setIoSpecification(IOSpecification ioSpecification) {
-    this.ioSpecification = ioSpecification;
-  }
-  public List<DataAssociation> getDataInputAssociations() {
-    return dataInputAssociations;
-  }
-  public void setDataInputAssociations(List<DataAssociation> dataInputAssociations) {
-    this.dataInputAssociations = dataInputAssociations;
-  }
-  public List<DataAssociation> getDataOutputAssociations() {
-    return dataOutputAssociations;
-  }
-  public void setDataOutputAssociations(List<DataAssociation> dataOutputAssociations) {
-    this.dataOutputAssociations = dataOutputAssociations;
-  }
-  
-  public void setValues(Activity otherActivity) {
-    super.setValues(otherActivity);
-    setFailedJobRetryTimeCycleValue(otherActivity.getFailedJobRetryTimeCycleValue());
-    setDefaultFlow(otherActivity.getDefaultFlow());
-    setForCompensation(otherActivity.isForCompensation());
-    if (otherActivity.getLoopCharacteristics() != null) {
-      setLoopCharacteristics(otherActivity.getLoopCharacteristics().clone());
-    }
-    if (otherActivity.getIoSpecification() != null) {
-      setIoSpecification(otherActivity.getIoSpecification().clone());
-    }
-    
-    dataInputAssociations = new ArrayList<DataAssociation>();
-    if (otherActivity.getDataInputAssociations() != null && !otherActivity.getDataInputAssociations().isEmpty()) {
-      for (DataAssociation association : otherActivity.getDataInputAssociations()) {
-        dataInputAssociations.add(association.clone());
-      }
-    }
-    
-    dataOutputAssociations = new ArrayList<DataAssociation>();
-    if (otherActivity.getDataOutputAssociations() != null && !otherActivity.getDataOutputAssociations().isEmpty()) {
-      for (DataAssociation association : otherActivity.getDataOutputAssociations()) {
-        dataOutputAssociations.add(association.clone());
-      }
-    }
-    
-    boundaryEvents = new ArrayList<BoundaryEvent>();
-    if (otherActivity.getBoundaryEvents() != null && !otherActivity.getBoundaryEvents().isEmpty()) {
-      for (BoundaryEvent event : otherActivity.getBoundaryEvents()) {
-        boundaryEvents.add(event.clone());
-      }
-    }
-  }
-  
-  public List<MapExceptionEntry> getMapExceptions() {
-    return mapExceptions;
-  }
-  
-  public void setMapExceptions(List<MapExceptionEntry> mapExceptions) {
-    this.mapExceptions = mapExceptions;
-  }
-  
-}
-
-<code block>
 
 package org.activiti.engine.impl.bpmn.parser.handler;
 
 import org.activiti.bpmn.constants.BpmnXMLConstants;
 import org.activiti.bpmn.model.BaseElement;
+import org.activiti.bpmn.model.BpmnModel;
 import org.activiti.bpmn.model.EventDefinition;
 import org.activiti.bpmn.model.IntermediateCatchEvent;
 import org.activiti.bpmn.model.MessageEventDefinition;
@@ -906,6 +27,7 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
   
   protected void executeParse(BpmnParse bpmnParse, IntermediateCatchEvent event) {
     
+    BpmnModel bpmnModel = bpmnParse.getBpmnModel();
     ActivityImpl nestedActivity = null;
     EventDefinition eventDefinition = null;
     if (!event.getEventDefinitions().isEmpty()) {
@@ -915,8 +37,6 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
     if (eventDefinition == null) {
       
       nestedActivity = createActivityOnCurrentScope(bpmnParse, event, BpmnXMLConstants.ELEMENT_EVENT_CATCH);
-      nestedActivity.setAsync(event.isAsynchronous());
-      nestedActivity.setExclusive(!event.isNotExclusive());
       
     } else {
       
@@ -929,7 +49,7 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
         nestedActivity = createActivityOnScope(bpmnParse, event, BpmnXMLConstants.ELEMENT_EVENT_CATCH, scope);
       }
       
-      
+
       nestedActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createIntermediateCatchEventActivityBehavior(event));
       
       if (eventDefinition instanceof TimerEventDefinition
@@ -981,7 +101,7 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
       eventDefinition = endEvent.getEventDefinitions().get(0);
     }
     
-    
+
     if (eventDefinition instanceof org.activiti.bpmn.model.ErrorEventDefinition) {
       org.activiti.bpmn.model.ErrorEventDefinition errorDefinition = (org.activiti.bpmn.model.ErrorEventDefinition) eventDefinition;
       if (bpmnParse.getBpmnModel().containsErrorRef(errorDefinition.getErrorCode())) {
@@ -994,7 +114,7 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
       }
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createErrorEndEventActivityBehavior(endEvent, errorDefinition));
       
-    
+
     } else if (eventDefinition instanceof CancelEventDefinition) {
       ScopeImpl scope = bpmnParse.getCurrentScope();
       if (scope.getProperty("type")==null || !scope.getProperty("type").equals("transaction")) {
@@ -1004,330 +124,14 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
         endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createCancelEndEventActivityBehavior(endEvent));
       }
     
-    
+
     } else if (eventDefinition instanceof TerminateEventDefinition) {
-      endEventActivity.setAsync(endEvent.isAsynchronous());
-      endEventActivity.setExclusive(!endEvent.isNotExclusive());
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createTerminateEndEventActivityBehavior(endEvent));
       
-    
+
     } else if (eventDefinition == null) {
-      endEventActivity.setAsync(endEvent.isAsynchronous());
-      endEventActivity.setExclusive(!endEvent.isNotExclusive());
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createNoneEndEventActivityBehavior(endEvent));
     }
-  }
-
-}
-
-<code block>
-
-package org.activiti.engine.test.bpmn.async;
-
-import java.util.Date;
-import java.util.List;
-
-import org.activiti.engine.history.HistoricVariableInstance;
-import org.activiti.engine.impl.context.Context;
-import org.activiti.engine.impl.persistence.entity.MessageEntity;
-import org.activiti.engine.impl.test.PluggableActivitiTestCase;
-import org.activiti.engine.runtime.Execution;
-import org.activiti.engine.runtime.Job;
-import org.activiti.engine.runtime.ProcessInstance;
-import org.activiti.engine.test.Deployment;
-import org.junit.Assert;
-
-
-public class AsyncTaskTest extends PluggableActivitiTestCase {
-  
-  public static boolean INVOCATION;
-  
-  @Deployment
-  public void testAsyncServiceNoListeners() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());       
-  }
-  
-  @Deployment
-  public void testAsyncServiceListeners() {  
-    String pid = runtimeService.startProcessInstanceByKey("asyncService").getProcessInstanceId();
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertNull(runtimeService.getVariable(pid, "listener"));
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    assertEquals(0, managementService.createJobQuery().count());
-  }
-  
-  @Deployment
-  public void testAsyncServiceConcurrent() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-  }
-  
-  @Deployment
-  public void testAsyncServiceMultiInstance() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-  }
-  
-
-  @Deployment
-  public void testFailingAsyncServiceTimer() { 
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    Job job = managementService.createJobQuery().singleResult();
-    if (!(job instanceof MessageEntity)) {
-      fail("the job must be a message");
-    }      
-    
-    try {
-      managementService.executeJob(job.getId());
-      fail();
-    } catch (Exception e) {
-      
-    }
-    
-    
-    Execution execution = runtimeService.createExecutionQuery().singleResult();
-    assertNotNull(execution);
-    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
-    
-    
-    
-    assertEquals(1, managementService.createJobQuery().count());    
-    
-    runtimeService.deleteProcessInstance(execution.getId(), "dead");        
-  }
-  
-  
-  @Deployment
-  public void FAILING_testFailingAsycServiceTimer() { 
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(2, managementService.createJobQuery().count());          
-    
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    Execution execution = runtimeService.createExecutionQuery().singleResult();
-    assertNotNull(execution);
-    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
-    
-    
-    assertEquals(2, managementService.createJobQuery().count());    
-      
-    
-    Context.getProcessEngineConfiguration().getClock().setCurrentTime(new Date(System.currentTimeMillis() + 10000));
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertNull(runtimeService.createExecutionQuery().singleResult());    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-  
-  @Deployment
-  public void testAsyncServiceSubProcessTimer() { 
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(2, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-  
-  @Deployment
-  public void testAsyncServiceSubProcess() {    
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-
-  @Deployment
-  public void testAsyncTask() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncTask");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-       
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count()); 
-  }
-  
-  @Deployment
-  public void testAsyncEndEvent() {  
-    
-    ProcessInstance processInstance = runtimeService.startProcessInstanceByKey("asyncEndEvent");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    Object value = runtimeService.getVariable(processInstance.getId(), "variableSetInExecutionListener");
-    assertNull(value);
-    
-    waitForJobExecutorToProcessAllJobs(2000L, 200L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count());
-    
-    assertProcessEnded(processInstance.getId());
-    
-    List<HistoricVariableInstance> variables = historyService.createHistoricVariableInstanceQuery().processInstanceId(processInstance.getId()).list();
-    assertEquals(3, variables.size());
-    
-    Object historyValue = null;
-    for (HistoricVariableInstance variable : variables) {
-      if ("variableSetInExecutionListener".equals(variable.getVariableName())) {
-        historyValue = variable.getValue();
-      }
-    }
-    assertEquals("firstValue", historyValue);
-  }
-
-  @Deployment
-  public void testAsyncScript() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncScript").getProcessInstanceId();
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    String eid = runtimeService.createExecutionQuery().singleResult().getId();
-    assertNull(runtimeService.getVariable(eid, "invoked"));  
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count());
-  
-    
-    assertEquals("true", runtimeService.getVariable(eid, "invoked"));  
-    
-    runtimeService.signal(eid);        
-  }
-  
-  @Deployment(resources={"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncCallActivity.bpmn20.xml", 
-          "org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncServiceNoListeners.bpmn20.xml"})
-  public void testAsyncCallActivity() throws Exception {  
-    
-    runtimeService.startProcessInstanceByKey("asyncCallactivity");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 250L);
-    
-    assertEquals(0, managementService.createJobQuery().count());
-    assertEquals(0, runtimeService.createProcessInstanceQuery().count());
-  }
-
-  @Deployment(resources = {"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testBasicAsyncCallActivity.bpmn20.xml",
-            "org/activiti/engine/test/bpmn/StartToEndTest.testStartToEnd.bpmn20.xml"})
-  public void testBasicAsyncCallActivity() {
-    runtimeService.startProcessInstanceByKey("myProcess");
-    Assert.assertEquals("There should be one job available.", 1, managementService.createJobQuery().count());
-    waitForJobExecutorToProcessAllJobs(10000L, 500L);
-    assertEquals(0, managementService.createJobQuery().count());
-  }
-  
-  @Deployment
-  public void testAsyncUserTask() {  
-    
-    String pid = runtimeService.startProcessInstanceByKey("asyncUserTask").getProcessInstanceId();
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertNull(runtimeService.getVariable(pid, "listener"));
-    
-    assertNull(runtimeService.getVariable(pid, "taskListener"));
-    
-    assertNull(taskService.createTaskQuery().singleResult());
-        
-    waitForJobExecutorToProcessAllJobs(10000L, 500L);
-    
-    assertNotNull(runtimeService.getVariable(pid, "listener"));
-    
-    assertNotNull(runtimeService.getVariable(pid, "taskListener"));
-    
-    
-    assertNotNull(taskService.createTaskQuery().singleResult());
-    
-    assertEquals(0, managementService.createJobQuery().count());
-    
-    String taskId = taskService.createTaskQuery().singleResult().getId();
-    taskService.complete(taskId);
-    
-  }
-  
-  @Deployment
-  public void testMultiInstanceAsyncTask() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncTask");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-       
-    waitForJobExecutorToProcessAllJobs(5000L, 500L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count()); 
   }
 
 }
@@ -1414,11 +218,11 @@ public class EmailServiceTaskTest extends EmailTestCase {
   public void testSimpleTextMailMultipleRecipients() {
     runtimeService.startProcessInstanceByKey("simpleTextOnlyMultipleRecipients");
 
-    
+
     List<WiserMessage> messages = wiser.getMessages();
     assertEquals(3, messages.size());
 
-    
+
     List<String> recipients = new ArrayList<String>();
     for (WiserMessage message : messages) {
       recipients.add(message.getEnvelopeReceiver());
@@ -1462,8 +266,8 @@ public class EmailServiceTaskTest extends EmailTestCase {
     assertEmailSend(messages.get(0), false, "Hello world", "This is the content", "activiti@localhost",
         Arrays.asList("kermit@activiti.org"), Arrays.asList("fozzie@activiti.org"));
 
-    
-    
+
+
     assertEquals(3, messages.size());
   }
 
@@ -1481,6 +285,7 @@ public class EmailServiceTaskTest extends EmailTestCase {
     Map<String, Object> vars = new HashMap<String, Object>();
     vars.put("gender", "male");
     vars.put("html", "<![CDATA[<html><body>Hello ${gender == 'male' ? 'Mr' : 'Ms' }. <b>Kermit</b><body></html>]]");
+    vars.put("text", "Hello ${gender == 'male' ? 'Mr' : 'Ms' }. Kermit");
     runtimeService.startProcessInstanceByKey("variableTemplatedMail", vars);
 
     List<WiserMessage> messages = wiser.getMessages();
@@ -1592,7 +397,7 @@ public class EmailServiceTaskTest extends EmailTestCase {
       runtimeService.startProcessInstanceByKey("invalidAddress").getId();
       fail("An Invalid email address should not execute");
     } catch (ActivitiException e) {
-      
+
     } catch (Exception e) {
       fail("Only an ActivitiException is expected here but not: " + e);
     }
@@ -1614,13 +419,13 @@ public class EmailServiceTaskTest extends EmailTestCase {
     }
   }
 
-  
+
 
   public static void assertEmailSend(WiserMessage emailMessage, boolean htmlMail, String subject, String message,
                                      String from, List<String> to, List<String> cc) throws IOException {
     try {
       MimeMessage mimeMessage = emailMessage.getMimeMessage();
-      System.out.println(mimeMessage.getContentType());
+
       if (htmlMail) {
         assertTrue(mimeMessage.getContentType().contains("multipart/mixed"));
       } else {
@@ -1653,6 +458,286 @@ public class EmailServiceTaskTest extends EmailTestCase {
     dataHandler.writeTo(baos);
     baos.flush();
     return baos.toString();
+  }
+
+}
+
+<code block>
+
+package org.activiti.engine.test.bpmn.async;
+
+import java.util.Date;
+
+import org.activiti.engine.impl.context.Context;
+import org.activiti.engine.impl.persistence.entity.MessageEntity;
+import org.activiti.engine.impl.test.PluggableActivitiTestCase;
+import org.activiti.engine.runtime.Execution;
+import org.activiti.engine.runtime.Job;
+import org.activiti.engine.test.Deployment;
+import org.junit.Assert;
+
+
+public class AsyncTaskTest extends PluggableActivitiTestCase {
+  
+  public static boolean INVOCATION;
+  
+  @Deployment
+  public void testAsyncServiceNoListeners() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());       
+  }
+  
+  @Deployment
+  public void testAsyncServiceListeners() {  
+    String pid = runtimeService.startProcessInstanceByKey("asyncService").getProcessInstanceId();
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertNull(runtimeService.getVariable(pid, "listener"));
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+    assertEquals(0, managementService.createJobQuery().count());
+  }
+  
+  @Deployment
+  public void testAsyncServiceConcurrent() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+  }
+  
+  @Deployment
+  public void testAsyncServiceMultiInstance() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+  }
+  
+
+  @Deployment
+  public void testFailingAsyncServiceTimer() { 
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    Job job = managementService.createJobQuery().singleResult();
+    if (!(job instanceof MessageEntity)) {
+      fail("the job must be a message");
+    }      
+    
+    try {
+      managementService.executeJob(job.getId());
+      fail();
+    } catch (Exception e) {
+
+    }
+    
+
+    Execution execution = runtimeService.createExecutionQuery().singleResult();
+    assertNotNull(execution);
+    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
+    
+
+
+    assertEquals(1, managementService.createJobQuery().count());    
+    
+    runtimeService.deleteProcessInstance(execution.getId(), "dead");        
+  }
+  
+
+  @Deployment
+  public void FAILING_testFailingAsycServiceTimer() { 
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(2, managementService.createJobQuery().count());          
+    
+
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    Execution execution = runtimeService.createExecutionQuery().singleResult();
+    assertNotNull(execution);
+    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
+    
+
+    assertEquals(2, managementService.createJobQuery().count());    
+      
+
+    Context.getProcessEngineConfiguration().getClock().setCurrentTime(new Date(System.currentTimeMillis() + 10000));
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertNull(runtimeService.createExecutionQuery().singleResult());    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+  
+  @Deployment
+  public void testAsyncServiceSubProcessTimer() { 
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(2, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+  
+  @Deployment
+  public void testAsyncServiceSubProcess() {    
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+
+  @Deployment
+  public void testAsyncTask() {  
+
+    runtimeService.startProcessInstanceByKey("asyncTask");
+
+    assertEquals(1, managementService.createJobQuery().count());
+       
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count()); 
+  }
+
+  @Deployment
+  public void testAsyncScript() {  
+
+    runtimeService.startProcessInstanceByKey("asyncScript").getProcessInstanceId();
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    String eid = runtimeService.createExecutionQuery().singleResult().getId();
+    assertNull(runtimeService.getVariable(eid, "invoked"));  
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count());
+  
+
+    assertEquals("true", runtimeService.getVariable(eid, "invoked"));  
+    
+    runtimeService.signal(eid);        
+  }
+  
+  @Deployment(resources={"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncCallActivity.bpmn20.xml", 
+          "org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncServiceNoListeners.bpmn20.xml"})
+  public void testAsyncCallActivity() throws Exception {  
+
+    runtimeService.startProcessInstanceByKey("asyncCallactivity");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 250L);
+    
+    assertEquals(0, managementService.createJobQuery().count());
+    assertEquals(0, runtimeService.createProcessInstanceQuery().count());
+  }
+
+  @Deployment(resources = {"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testBasicAsyncCallActivity.bpmn20.xml",
+            "org/activiti/engine/test/bpmn/StartToEndTest.testStartToEnd.bpmn20.xml"})
+  public void testBasicAsyncCallActivity() {
+    runtimeService.startProcessInstanceByKey("myProcess");
+    Assert.assertEquals("There should be one job available.", 1, managementService.createJobQuery().count());
+    waitForJobExecutorToProcessAllJobs(10000L, 500L);
+    assertEquals(0, managementService.createJobQuery().count());
+  }
+  
+  @Deployment
+  public void testAsyncUserTask() {  
+
+    String pid = runtimeService.startProcessInstanceByKey("asyncUserTask").getProcessInstanceId();
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertNull(runtimeService.getVariable(pid, "listener"));
+
+    assertNull(runtimeService.getVariable(pid, "taskListener"));
+
+    assertNull(taskService.createTaskQuery().singleResult());
+        
+    waitForJobExecutorToProcessAllJobs(10000L, 500L);
+
+    assertNotNull(runtimeService.getVariable(pid, "listener"));
+
+    assertNotNull(runtimeService.getVariable(pid, "taskListener"));
+    
+
+    assertNotNull(taskService.createTaskQuery().singleResult());
+
+    assertEquals(0, managementService.createJobQuery().count());
+    
+    String taskId = taskService.createTaskQuery().singleResult().getId();
+    taskService.complete(taskId);
+    
+  }
+  
+  @Deployment
+  public void testMultiInstanceAsyncTask() {  
+
+    runtimeService.startProcessInstanceByKey("asyncTask");
+
+    assertEquals(1, managementService.createJobQuery().count());
+       
+    waitForJobExecutorToProcessAllJobs(5000L, 500L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count()); 
   }
 
 }
@@ -1883,7 +968,7 @@ public abstract class BaseBpmnXMLConverter implements BpmnXMLConstants {
   
   protected abstract void writeAdditionalChildElements(BaseElement element, BpmnModel model, XMLStreamWriter xtw) throws Exception;
   
-  
+
   
   protected void parseChildElements(String elementName, BaseElement parentElement, BpmnModel model, XMLStreamReader xtr) throws Exception {
     parseChildElements(elementName, parentElement, null, model, xtr);
@@ -1968,7 +1053,7 @@ public abstract class BaseBpmnXMLConverter implements BpmnXMLConstants {
     }
   }
   
-  
+
   
   protected String convertToDelimitedString(List<String> stringList) {
     return BpmnXMLUtil.convertToDelimitedString(stringList);
@@ -2110,7 +1195,7 @@ public abstract class BaseBpmnXMLConverter implements BpmnXMLConstants {
     
     String messageRef = messageDefinition.getMessageRef();
     if (StringUtils.isNotEmpty(messageRef)) {
-      
+
       if (messageRef.startsWith(model.getTargetNamespace())) {
         messageRef = messageRef.replace(model.getTargetNamespace(), "");
         messageRef = messageRef.replaceFirst(":", "");
@@ -2203,40 +1288,6 @@ public abstract class Gateway extends FlowNode {
     setAsynchronous(otherElement.isAsynchronous());
     setNotExclusive(otherElement.isNotExclusive());
     setDefaultFlow(otherElement.getDefaultFlow());
-  }
-}
-
-<code block>
-
-package org.activiti.bpmn.model;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-public abstract class FlowNode extends FlowElement {
-
-  protected List<SequenceFlow> incomingFlows = new ArrayList<SequenceFlow>();
-  protected List<SequenceFlow> outgoingFlows = new ArrayList<SequenceFlow>();
-
-  public List<SequenceFlow> getIncomingFlows() {
-    return incomingFlows;
-  }
-
-  public void setIncomingFlows(List<SequenceFlow> incomingFlows) {
-    this.incomingFlows = incomingFlows;
-  }
-
-  public List<SequenceFlow> getOutgoingFlows() {
-    return outgoingFlows;
-  }
-
-  public void setOutgoingFlows(List<SequenceFlow> outgoingFlows) {
-    this.outgoingFlows = outgoingFlows;
-  }
-  
-  public void setValues(FlowNode otherNode) {
-    super.setValues(otherNode);
   }
 }
 
@@ -2371,11 +1422,44 @@ public abstract class Activity extends FlowNode {
 
 <code block>
 
+package org.activiti.bpmn.model;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+public abstract class FlowNode extends FlowElement {
+
+  protected List<SequenceFlow> incomingFlows = new ArrayList<SequenceFlow>();
+  protected List<SequenceFlow> outgoingFlows = new ArrayList<SequenceFlow>();
+
+  public List<SequenceFlow> getIncomingFlows() {
+    return incomingFlows;
+  }
+
+  public void setIncomingFlows(List<SequenceFlow> incomingFlows) {
+    this.incomingFlows = incomingFlows;
+  }
+
+  public List<SequenceFlow> getOutgoingFlows() {
+    return outgoingFlows;
+  }
+
+  public void setOutgoingFlows(List<SequenceFlow> outgoingFlows) {
+    this.outgoingFlows = outgoingFlows;
+  }
+  
+  public void setValues(FlowNode otherNode) {
+    super.setValues(otherNode);
+  }
+}
+
+<code block>
+
 package org.activiti.engine.impl.bpmn.parser.handler;
 
 import org.activiti.bpmn.constants.BpmnXMLConstants;
 import org.activiti.bpmn.model.BaseElement;
-import org.activiti.bpmn.model.BpmnModel;
 import org.activiti.bpmn.model.EventDefinition;
 import org.activiti.bpmn.model.IntermediateCatchEvent;
 import org.activiti.bpmn.model.MessageEventDefinition;
@@ -2399,7 +1483,6 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
   
   protected void executeParse(BpmnParse bpmnParse, IntermediateCatchEvent event) {
     
-    BpmnModel bpmnModel = bpmnParse.getBpmnModel();
     ActivityImpl nestedActivity = null;
     EventDefinition eventDefinition = null;
     if (!event.getEventDefinitions().isEmpty()) {
@@ -2409,6 +1492,8 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
     if (eventDefinition == null) {
       
       nestedActivity = createActivityOnCurrentScope(bpmnParse, event, BpmnXMLConstants.ELEMENT_EVENT_CATCH);
+      nestedActivity.setAsync(event.isAsynchronous());
+      nestedActivity.setExclusive(!event.isNotExclusive());
       
     } else {
       
@@ -2421,7 +1506,7 @@ public class IntermediateCatchEventParseHandler extends AbstractFlowNodeBpmnPars
         nestedActivity = createActivityOnScope(bpmnParse, event, BpmnXMLConstants.ELEMENT_EVENT_CATCH, scope);
       }
       
-      
+
       nestedActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createIntermediateCatchEventActivityBehavior(event));
       
       if (eventDefinition instanceof TimerEventDefinition
@@ -2473,7 +1558,7 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
       eventDefinition = endEvent.getEventDefinitions().get(0);
     }
     
-    
+
     if (eventDefinition instanceof org.activiti.bpmn.model.ErrorEventDefinition) {
       org.activiti.bpmn.model.ErrorEventDefinition errorDefinition = (org.activiti.bpmn.model.ErrorEventDefinition) eventDefinition;
       if (bpmnParse.getBpmnModel().containsErrorRef(errorDefinition.getErrorCode())) {
@@ -2486,7 +1571,7 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
       }
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createErrorEndEventActivityBehavior(endEvent, errorDefinition));
       
-    
+
     } else if (eventDefinition instanceof CancelEventDefinition) {
       ScopeImpl scope = bpmnParse.getCurrentScope();
       if (scope.getProperty("type")==null || !scope.getProperty("type").equals("transaction")) {
@@ -2496,294 +1581,18 @@ public class EndEventParseHandler extends AbstractActivityBpmnParseHandler<EndEv
         endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createCancelEndEventActivityBehavior(endEvent));
       }
     
-    
+
     } else if (eventDefinition instanceof TerminateEventDefinition) {
+      endEventActivity.setAsync(endEvent.isAsynchronous());
+      endEventActivity.setExclusive(!endEvent.isNotExclusive());
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createTerminateEndEventActivityBehavior(endEvent));
       
-    
+
     } else if (eventDefinition == null) {
+      endEventActivity.setAsync(endEvent.isAsynchronous());
+      endEventActivity.setExclusive(!endEvent.isNotExclusive());
       endEventActivity.setActivityBehavior(bpmnParse.getActivityBehaviorFactory().createNoneEndEventActivityBehavior(endEvent));
     }
-  }
-
-}
-
-<code block>
-
-package org.activiti.engine.test.bpmn.async;
-
-import java.util.Date;
-
-import org.activiti.engine.impl.context.Context;
-import org.activiti.engine.impl.persistence.entity.MessageEntity;
-import org.activiti.engine.impl.test.PluggableActivitiTestCase;
-import org.activiti.engine.runtime.Execution;
-import org.activiti.engine.runtime.Job;
-import org.activiti.engine.test.Deployment;
-import org.junit.Assert;
-
-
-public class AsyncTaskTest extends PluggableActivitiTestCase {
-  
-  public static boolean INVOCATION;
-  
-  @Deployment
-  public void testAsyncServiceNoListeners() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());       
-  }
-  
-  @Deployment
-  public void testAsyncServiceListeners() {  
-    String pid = runtimeService.startProcessInstanceByKey("asyncService").getProcessInstanceId();
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertNull(runtimeService.getVariable(pid, "listener"));
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    assertEquals(0, managementService.createJobQuery().count());
-  }
-  
-  @Deployment
-  public void testAsyncServiceConcurrent() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-  }
-  
-  @Deployment
-  public void testAsyncServiceMultiInstance() {  
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-  }
-  
-
-  @Deployment
-  public void testFailingAsyncServiceTimer() { 
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    Job job = managementService.createJobQuery().singleResult();
-    if (!(job instanceof MessageEntity)) {
-      fail("the job must be a message");
-    }      
-    
-    try {
-      managementService.executeJob(job.getId());
-      fail();
-    } catch (Exception e) {
-      
-    }
-    
-    
-    Execution execution = runtimeService.createExecutionQuery().singleResult();
-    assertNotNull(execution);
-    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
-    
-    
-    
-    assertEquals(1, managementService.createJobQuery().count());    
-    
-    runtimeService.deleteProcessInstance(execution.getId(), "dead");        
-  }
-  
-  
-  @Deployment
-  public void FAILING_testFailingAsycServiceTimer() { 
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(2, managementService.createJobQuery().count());          
-    
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    Execution execution = runtimeService.createExecutionQuery().singleResult();
-    assertNotNull(execution);
-    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
-    
-    
-    assertEquals(2, managementService.createJobQuery().count());    
-      
-    
-    Context.getProcessEngineConfiguration().getClock().setCurrentTime(new Date(System.currentTimeMillis() + 10000));
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertNull(runtimeService.createExecutionQuery().singleResult());    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-  
-  @Deployment
-  public void testAsyncServiceSubProcessTimer() { 
-    INVOCATION = false;
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-    
-    assertEquals(2, managementService.createJobQuery().count());
-    
-    assertFalse(INVOCATION);
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertTrue(INVOCATION);    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-  
-  @Deployment
-  public void testAsyncServiceSubProcess() {    
-    
-    runtimeService.startProcessInstanceByKey("asyncService");
-
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count());   
-        
-  }
-
-  @Deployment
-  public void testAsyncTask() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncTask");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-       
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count()); 
-  }
-
-  @Deployment
-  public void testAsyncScript() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncScript").getProcessInstanceId();
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    String eid = runtimeService.createExecutionQuery().singleResult().getId();
-    assertNull(runtimeService.getVariable(eid, "invoked"));  
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 100L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count());
-  
-    
-    assertEquals("true", runtimeService.getVariable(eid, "invoked"));  
-    
-    runtimeService.signal(eid);        
-  }
-  
-  @Deployment(resources={"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncCallActivity.bpmn20.xml", 
-          "org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncServiceNoListeners.bpmn20.xml"})
-  public void testAsyncCallActivity() throws Exception {  
-    
-    runtimeService.startProcessInstanceByKey("asyncCallactivity");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    waitForJobExecutorToProcessAllJobs(10000L, 250L);
-    
-    assertEquals(0, managementService.createJobQuery().count());
-    assertEquals(0, runtimeService.createProcessInstanceQuery().count());
-  }
-
-  @Deployment(resources = {"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testBasicAsyncCallActivity.bpmn20.xml",
-            "org/activiti/engine/test/bpmn/StartToEndTest.testStartToEnd.bpmn20.xml"})
-  public void testBasicAsyncCallActivity() {
-    runtimeService.startProcessInstanceByKey("myProcess");
-    Assert.assertEquals("There should be one job available.", 1, managementService.createJobQuery().count());
-    waitForJobExecutorToProcessAllJobs(10000L, 500L);
-    assertEquals(0, managementService.createJobQuery().count());
-  }
-  
-  @Deployment
-  public void testAsyncUserTask() {  
-    
-    String pid = runtimeService.startProcessInstanceByKey("asyncUserTask").getProcessInstanceId();
-    
-    assertEquals(1, managementService.createJobQuery().count());
-    
-    assertNull(runtimeService.getVariable(pid, "listener"));
-    
-    assertNull(runtimeService.getVariable(pid, "taskListener"));
-    
-    assertNull(taskService.createTaskQuery().singleResult());
-        
-    waitForJobExecutorToProcessAllJobs(10000L, 500L);
-    
-    assertNotNull(runtimeService.getVariable(pid, "listener"));
-    
-    assertNotNull(runtimeService.getVariable(pid, "taskListener"));
-    
-    
-    assertNotNull(taskService.createTaskQuery().singleResult());
-    
-    assertEquals(0, managementService.createJobQuery().count());
-    
-    String taskId = taskService.createTaskQuery().singleResult().getId();
-    taskService.complete(taskId);
-    
-  }
-  
-  @Deployment
-  public void testMultiInstanceAsyncTask() {  
-    
-    runtimeService.startProcessInstanceByKey("asyncTask");
-    
-    assertEquals(1, managementService.createJobQuery().count());
-       
-    waitForJobExecutorToProcessAllJobs(5000L, 500L);
-    
-    
-    assertEquals(0, managementService.createJobQuery().count()); 
   }
 
 }
@@ -2870,11 +1679,11 @@ public class EmailServiceTaskTest extends EmailTestCase {
   public void testSimpleTextMailMultipleRecipients() {
     runtimeService.startProcessInstanceByKey("simpleTextOnlyMultipleRecipients");
 
-    
+
     List<WiserMessage> messages = wiser.getMessages();
     assertEquals(3, messages.size());
 
-    
+
     List<String> recipients = new ArrayList<String>();
     for (WiserMessage message : messages) {
       recipients.add(message.getEnvelopeReceiver());
@@ -2918,8 +1727,8 @@ public class EmailServiceTaskTest extends EmailTestCase {
     assertEmailSend(messages.get(0), false, "Hello world", "This is the content", "activiti@localhost",
         Arrays.asList("kermit@activiti.org"), Arrays.asList("fozzie@activiti.org"));
 
-    
-    
+
+
     assertEquals(3, messages.size());
   }
 
@@ -2937,7 +1746,6 @@ public class EmailServiceTaskTest extends EmailTestCase {
     Map<String, Object> vars = new HashMap<String, Object>();
     vars.put("gender", "male");
     vars.put("html", "<![CDATA[<html><body>Hello ${gender == 'male' ? 'Mr' : 'Ms' }. <b>Kermit</b><body></html>]]");
-    vars.put("text", "Hello ${gender == 'male' ? 'Mr' : 'Ms' }. Kermit");
     runtimeService.startProcessInstanceByKey("variableTemplatedMail", vars);
 
     List<WiserMessage> messages = wiser.getMessages();
@@ -3049,7 +1857,7 @@ public class EmailServiceTaskTest extends EmailTestCase {
       runtimeService.startProcessInstanceByKey("invalidAddress").getId();
       fail("An Invalid email address should not execute");
     } catch (ActivitiException e) {
-      
+
     } catch (Exception e) {
       fail("Only an ActivitiException is expected here but not: " + e);
     }
@@ -3071,13 +1879,13 @@ public class EmailServiceTaskTest extends EmailTestCase {
     }
   }
 
-  
+
 
   public static void assertEmailSend(WiserMessage emailMessage, boolean htmlMail, String subject, String message,
                                      String from, List<String> to, List<String> cc) throws IOException {
     try {
       MimeMessage mimeMessage = emailMessage.getMimeMessage();
-
+      System.out.println(mimeMessage.getContentType());
       if (htmlMail) {
         assertTrue(mimeMessage.getContentType().contains("multipart/mixed"));
       } else {
@@ -3110,6 +1918,1198 @@ public class EmailServiceTaskTest extends EmailTestCase {
     dataHandler.writeTo(baos);
     baos.flush();
     return baos.toString();
+  }
+
+}
+
+<code block>
+
+package org.activiti.engine.test.bpmn.async;
+
+import java.util.Date;
+import java.util.List;
+
+import org.activiti.engine.history.HistoricVariableInstance;
+import org.activiti.engine.impl.context.Context;
+import org.activiti.engine.impl.persistence.entity.MessageEntity;
+import org.activiti.engine.impl.test.PluggableActivitiTestCase;
+import org.activiti.engine.runtime.Execution;
+import org.activiti.engine.runtime.Job;
+import org.activiti.engine.runtime.ProcessInstance;
+import org.activiti.engine.test.Deployment;
+import org.junit.Assert;
+
+
+public class AsyncTaskTest extends PluggableActivitiTestCase {
+  
+  public static boolean INVOCATION;
+  
+  @Deployment
+  public void testAsyncServiceNoListeners() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());       
+  }
+  
+  @Deployment
+  public void testAsyncServiceListeners() {  
+    String pid = runtimeService.startProcessInstanceByKey("asyncService").getProcessInstanceId();
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertNull(runtimeService.getVariable(pid, "listener"));
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+    assertEquals(0, managementService.createJobQuery().count());
+  }
+  
+  @Deployment
+  public void testAsyncServiceConcurrent() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+  }
+  
+  @Deployment
+  public void testAsyncServiceMultiInstance() {  
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+  }
+  
+
+  @Deployment
+  public void testFailingAsyncServiceTimer() { 
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    Job job = managementService.createJobQuery().singleResult();
+    if (!(job instanceof MessageEntity)) {
+      fail("the job must be a message");
+    }      
+    
+    try {
+      managementService.executeJob(job.getId());
+      fail();
+    } catch (Exception e) {
+
+    }
+    
+
+    Execution execution = runtimeService.createExecutionQuery().singleResult();
+    assertNotNull(execution);
+    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
+    
+
+
+    assertEquals(1, managementService.createJobQuery().count());    
+    
+    runtimeService.deleteProcessInstance(execution.getId(), "dead");        
+  }
+  
+
+  @Deployment
+  public void FAILING_testFailingAsycServiceTimer() { 
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(2, managementService.createJobQuery().count());          
+    
+
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    Execution execution = runtimeService.createExecutionQuery().singleResult();
+    assertNotNull(execution);
+    assertEquals("service", runtimeService.getActiveActivityIds(execution.getId()).get(0));
+    
+
+    assertEquals(2, managementService.createJobQuery().count());    
+      
+
+    Context.getProcessEngineConfiguration().getClock().setCurrentTime(new Date(System.currentTimeMillis() + 10000));
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertNull(runtimeService.createExecutionQuery().singleResult());    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+  
+  @Deployment
+  public void testAsyncServiceSubProcessTimer() { 
+    INVOCATION = false;
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(2, managementService.createJobQuery().count());
+
+    assertFalse(INVOCATION);
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertTrue(INVOCATION);    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+  
+  @Deployment
+  public void testAsyncServiceSubProcess() {    
+
+    runtimeService.startProcessInstanceByKey("asyncService");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count());   
+        
+  }
+
+  @Deployment
+  public void testAsyncTask() {  
+
+    runtimeService.startProcessInstanceByKey("asyncTask");
+
+    assertEquals(1, managementService.createJobQuery().count());
+       
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count()); 
+  }
+  
+  @Deployment
+  public void testAsyncEndEvent() {  
+
+    ProcessInstance processInstance = runtimeService.startProcessInstanceByKey("asyncEndEvent");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    
+    Object value = runtimeService.getVariable(processInstance.getId(), "variableSetInExecutionListener");
+    assertNull(value);
+    
+    waitForJobExecutorToProcessAllJobs(2000L, 200L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count());
+    
+    assertProcessEnded(processInstance.getId());
+    
+    List<HistoricVariableInstance> variables = historyService.createHistoricVariableInstanceQuery().processInstanceId(processInstance.getId()).list();
+    assertEquals(3, variables.size());
+    
+    Object historyValue = null;
+    for (HistoricVariableInstance variable : variables) {
+      if ("variableSetInExecutionListener".equals(variable.getVariableName())) {
+        historyValue = variable.getValue();
+      }
+    }
+    assertEquals("firstValue", historyValue);
+  }
+
+  @Deployment
+  public void testAsyncScript() {  
+
+    runtimeService.startProcessInstanceByKey("asyncScript").getProcessInstanceId();
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    String eid = runtimeService.createExecutionQuery().singleResult().getId();
+    assertNull(runtimeService.getVariable(eid, "invoked"));  
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 100L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count());
+  
+
+    assertEquals("true", runtimeService.getVariable(eid, "invoked"));  
+    
+    runtimeService.signal(eid);        
+  }
+  
+  @Deployment(resources={"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncCallActivity.bpmn20.xml", 
+          "org/activiti/engine/test/bpmn/async/AsyncTaskTest.testAsyncServiceNoListeners.bpmn20.xml"})
+  public void testAsyncCallActivity() throws Exception {  
+
+    runtimeService.startProcessInstanceByKey("asyncCallactivity");
+
+    assertEquals(1, managementService.createJobQuery().count());
+    
+    waitForJobExecutorToProcessAllJobs(10000L, 250L);
+    
+    assertEquals(0, managementService.createJobQuery().count());
+    assertEquals(0, runtimeService.createProcessInstanceQuery().count());
+  }
+
+  @Deployment(resources = {"org/activiti/engine/test/bpmn/async/AsyncTaskTest.testBasicAsyncCallActivity.bpmn20.xml",
+            "org/activiti/engine/test/bpmn/StartToEndTest.testStartToEnd.bpmn20.xml"})
+  public void testBasicAsyncCallActivity() {
+    runtimeService.startProcessInstanceByKey("myProcess");
+    Assert.assertEquals("There should be one job available.", 1, managementService.createJobQuery().count());
+    waitForJobExecutorToProcessAllJobs(10000L, 500L);
+    assertEquals(0, managementService.createJobQuery().count());
+  }
+  
+  @Deployment
+  public void testAsyncUserTask() {  
+
+    String pid = runtimeService.startProcessInstanceByKey("asyncUserTask").getProcessInstanceId();
+
+    assertEquals(1, managementService.createJobQuery().count());
+
+    assertNull(runtimeService.getVariable(pid, "listener"));
+
+    assertNull(runtimeService.getVariable(pid, "taskListener"));
+
+    assertNull(taskService.createTaskQuery().singleResult());
+        
+    waitForJobExecutorToProcessAllJobs(10000L, 500L);
+
+    assertNotNull(runtimeService.getVariable(pid, "listener"));
+
+    assertNotNull(runtimeService.getVariable(pid, "taskListener"));
+    
+
+    assertNotNull(taskService.createTaskQuery().singleResult());
+
+    assertEquals(0, managementService.createJobQuery().count());
+    
+    String taskId = taskService.createTaskQuery().singleResult().getId();
+    taskService.complete(taskId);
+    
+  }
+  
+  @Deployment
+  public void testMultiInstanceAsyncTask() {  
+
+    runtimeService.startProcessInstanceByKey("asyncTask");
+
+    assertEquals(1, managementService.createJobQuery().count());
+       
+    waitForJobExecutorToProcessAllJobs(5000L, 500L);
+    
+
+    assertEquals(0, managementService.createJobQuery().count()); 
+  }
+
+}
+
+<code block>
+
+package org.activiti.bpmn.converter;
+
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.xml.stream.XMLStreamReader;
+import javax.xml.stream.XMLStreamWriter;
+
+import org.activiti.bpmn.constants.BpmnXMLConstants;
+import org.activiti.bpmn.converter.child.BaseChildElementParser;
+import org.activiti.bpmn.converter.export.ActivitiListenerExport;
+import org.activiti.bpmn.converter.export.FailedJobRetryCountExport;
+import org.activiti.bpmn.converter.export.MultiInstanceExport;
+import org.activiti.bpmn.converter.util.BpmnXMLUtil;
+import org.activiti.bpmn.model.Activity;
+import org.activiti.bpmn.model.Artifact;
+import org.activiti.bpmn.model.BaseElement;
+import org.activiti.bpmn.model.BpmnModel;
+import org.activiti.bpmn.model.CompensateEventDefinition;
+import org.activiti.bpmn.model.DataObject;
+import org.activiti.bpmn.model.ErrorEventDefinition;
+import org.activiti.bpmn.model.Event;
+import org.activiti.bpmn.model.EventDefinition;
+import org.activiti.bpmn.model.ExtensionAttribute;
+import org.activiti.bpmn.model.ExtensionElement;
+import org.activiti.bpmn.model.FlowElement;
+import org.activiti.bpmn.model.FlowNode;
+import org.activiti.bpmn.model.FormProperty;
+import org.activiti.bpmn.model.FormValue;
+import org.activiti.bpmn.model.Gateway;
+import org.activiti.bpmn.model.MessageEventDefinition;
+import org.activiti.bpmn.model.Process;
+import org.activiti.bpmn.model.SequenceFlow;
+import org.activiti.bpmn.model.SignalEventDefinition;
+import org.activiti.bpmn.model.StartEvent;
+import org.activiti.bpmn.model.SubProcess;
+import org.activiti.bpmn.model.TerminateEventDefinition;
+import org.activiti.bpmn.model.ThrowEvent;
+import org.activiti.bpmn.model.TimerEventDefinition;
+import org.activiti.bpmn.model.UserTask;
+import org.activiti.bpmn.model.ValuedDataObject;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+public abstract class BaseBpmnXMLConverter implements BpmnXMLConstants {
+
+  protected static final Logger LOGGER = LoggerFactory.getLogger(BaseBpmnXMLConverter.class);
+  
+  protected static final List<ExtensionAttribute> defaultElementAttributes = Arrays.asList(
+      new ExtensionAttribute(ATTRIBUTE_ID),
+      new ExtensionAttribute(ATTRIBUTE_NAME)
+  );
+  
+  protected static final List<ExtensionAttribute> defaultActivityAttributes = Arrays.asList(
+      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ASYNCHRONOUS), 
+      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_EXCLUSIVE), 
+      new ExtensionAttribute(ATTRIBUTE_DEFAULT), 
+      new ExtensionAttribute(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION)
+  );
+  
+  public void convertToBpmnModel(XMLStreamReader xtr, BpmnModel model, Process activeProcess, 
+      List<SubProcess> activeSubProcessList) throws Exception {
+    
+    String elementId = xtr.getAttributeValue(null, ATTRIBUTE_ID);
+    String elementName = xtr.getAttributeValue(null, ATTRIBUTE_NAME);
+    boolean async = parseAsync(xtr);
+    boolean notExclusive = parseNotExclusive(xtr);
+    String defaultFlow = xtr.getAttributeValue(null, ATTRIBUTE_DEFAULT);
+    boolean isForCompensation = parseForCompensation(xtr);
+    
+    BaseElement parsedElement = convertXMLToElement(xtr, model);
+    
+    if (parsedElement instanceof Artifact) {
+      Artifact currentArtifact = (Artifact) parsedElement;
+      currentArtifact.setId(elementId);
+
+      if (isInSubProcess(activeSubProcessList)) {
+        final SubProcess currentSubProcess = activeSubProcessList.get(activeSubProcessList.size() - 2);
+        currentSubProcess.addArtifact(currentArtifact);
+
+      } else {
+        activeProcess.addArtifact(currentArtifact);
+      }
+    }
+    
+    if (parsedElement instanceof FlowElement) {
+      
+      FlowElement currentFlowElement = (FlowElement) parsedElement;
+      currentFlowElement.setId(elementId);
+      currentFlowElement.setName(elementName);
+      
+      if (currentFlowElement instanceof FlowNode) {
+        FlowNode flowNode = (FlowNode) currentFlowElement;
+        flowNode.setAsynchronous(async);
+        flowNode.setNotExclusive(notExclusive);
+        
+        if (currentFlowElement instanceof Activity) {
+          
+          Activity activity = (Activity) currentFlowElement;
+          activity.setForCompensation(isForCompensation);
+          if (StringUtils.isNotEmpty(defaultFlow)) {
+            activity.setDefaultFlow(defaultFlow);
+          }
+        }
+        
+        if (currentFlowElement instanceof Gateway) {
+          Gateway gateway = (Gateway) currentFlowElement;
+          if (StringUtils.isNotEmpty(defaultFlow)) {
+            gateway.setDefaultFlow(defaultFlow);
+          }
+        }
+      }
+      
+      if (currentFlowElement instanceof DataObject) {
+        if (!activeSubProcessList.isEmpty()) {
+          activeSubProcessList.get(activeSubProcessList.size() - 1).getDataObjects().add((ValuedDataObject)parsedElement);
+        } else {
+          activeProcess.getDataObjects().add((ValuedDataObject)parsedElement);
+        }
+      }
+
+      if (!activeSubProcessList.isEmpty()) {
+        activeSubProcessList.get(activeSubProcessList.size() - 1).addFlowElement(currentFlowElement);
+      } else {
+        activeProcess.addFlowElement(currentFlowElement);
+      }
+    }
+  }
+  
+  public void convertToXML(XMLStreamWriter xtw, BaseElement baseElement, BpmnModel model) throws Exception {
+    xtw.writeStartElement(getXMLElementName());
+    boolean didWriteExtensionStartElement = false;
+    writeDefaultAttribute(ATTRIBUTE_ID, baseElement.getId(), xtw);
+    if (baseElement instanceof FlowElement) {
+      writeDefaultAttribute(ATTRIBUTE_NAME, ((FlowElement) baseElement).getName(), xtw);
+    }
+    
+    if (baseElement instanceof FlowNode) {
+      final FlowNode flowNode = (FlowNode) baseElement;
+      if (flowNode.isAsynchronous()) {
+        writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_ASYNCHRONOUS, ATTRIBUTE_VALUE_TRUE, xtw);
+        if (flowNode.isNotExclusive()) {
+          writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_EXCLUSIVE, ATTRIBUTE_VALUE_FALSE, xtw);
+        }
+      }
+      
+      if (baseElement instanceof Activity) {
+        final Activity activity = (Activity) baseElement;
+        if (activity.isForCompensation()) {
+          writeDefaultAttribute(ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION, ATTRIBUTE_VALUE_TRUE, xtw);
+        }
+        if (StringUtils.isNotEmpty(activity.getDefaultFlow())) {
+          FlowElement defaultFlowElement = model.getFlowElement(activity.getDefaultFlow());
+          if (defaultFlowElement instanceof SequenceFlow) {
+            writeDefaultAttribute(ATTRIBUTE_DEFAULT, activity.getDefaultFlow(), xtw);
+          }
+        }
+      }
+      
+      if (baseElement instanceof Gateway) {
+        final Gateway gateway = (Gateway) baseElement;
+        if (StringUtils.isNotEmpty(gateway.getDefaultFlow())) {
+          FlowElement defaultFlowElement = model.getFlowElement(gateway.getDefaultFlow());
+          if (defaultFlowElement instanceof SequenceFlow) {
+            writeDefaultAttribute(ATTRIBUTE_DEFAULT, gateway.getDefaultFlow(), xtw);
+          }
+        }
+      }
+    }
+    
+    writeAdditionalAttributes(baseElement, model, xtw);
+    
+    if (baseElement instanceof FlowElement) {
+      final FlowElement flowElement = (FlowElement) baseElement;
+      if (StringUtils.isNotEmpty(flowElement.getDocumentation())) {
+  
+        xtw.writeStartElement(ELEMENT_DOCUMENTATION);
+        xtw.writeCharacters(flowElement.getDocumentation());
+        xtw.writeEndElement();
+      }
+    }
+    
+    didWriteExtensionStartElement = writeExtensionChildElements(baseElement, didWriteExtensionStartElement, xtw);
+    didWriteExtensionStartElement = writeListeners(baseElement, didWriteExtensionStartElement, xtw);
+    didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(baseElement, didWriteExtensionStartElement, model.getNamespaces(), xtw);
+    if (baseElement instanceof Activity) {
+    	final Activity activity = (Activity) baseElement;
+        FailedJobRetryCountExport.writeFailedJobRetryCount(activity, xtw);
+        
+     }
+    
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    
+    if (baseElement instanceof Activity) {
+      final Activity activity = (Activity) baseElement;
+      MultiInstanceExport.writeMultiInstance(activity, xtw);
+      
+    }
+    
+    writeAdditionalChildElements(baseElement, model, xtw);
+    
+    xtw.writeEndElement();
+  }
+  
+  protected abstract Class<? extends BaseElement> getBpmnElementType();
+  
+  protected abstract BaseElement convertXMLToElement(XMLStreamReader xtr, BpmnModel model) throws Exception;
+  
+  protected abstract String getXMLElementName();
+  
+  protected abstract void writeAdditionalAttributes(BaseElement element, BpmnModel model, XMLStreamWriter xtw) throws Exception;
+  
+  protected boolean writeExtensionChildElements(BaseElement element, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
+    return didWriteExtensionStartElement;
+  }
+  
+  protected abstract void writeAdditionalChildElements(BaseElement element, BpmnModel model, XMLStreamWriter xtw) throws Exception;
+  
+
+  
+  protected void parseChildElements(String elementName, BaseElement parentElement, BpmnModel model, XMLStreamReader xtr) throws Exception {
+    parseChildElements(elementName, parentElement, null, model, xtr);
+  }
+  
+  protected void parseChildElements(String elementName, BaseElement parentElement, Map<String, BaseChildElementParser> additionalParsers, 
+      BpmnModel model, XMLStreamReader xtr) throws Exception {
+    
+    Map<String, BaseChildElementParser> childParsers = new HashMap<String, BaseChildElementParser>();
+    if (additionalParsers != null) {
+      childParsers.putAll(additionalParsers);
+    }
+    BpmnXMLUtil.parseChildElements(elementName, parentElement, xtr, childParsers, model);
+  }
+  
+  @SuppressWarnings("unchecked")
+  protected ExtensionElement parseExtensionElement(XMLStreamReader xtr) throws Exception {
+    ExtensionElement extensionElement = new ExtensionElement();
+    extensionElement.setName(xtr.getLocalName());
+    if (StringUtils.isNotEmpty(xtr.getNamespaceURI())) {
+      extensionElement.setNamespace(xtr.getNamespaceURI());
+    }
+    if (StringUtils.isNotEmpty(xtr.getPrefix())) {
+      extensionElement.setNamespacePrefix(xtr.getPrefix());
+    }
+
+    BpmnXMLUtil.addCustomAttributes(xtr, extensionElement, defaultElementAttributes);
+
+    boolean readyWithExtensionElement = false;
+    while (readyWithExtensionElement == false && xtr.hasNext()) {
+      xtr.next();
+      if (xtr.isCharacters() || XMLStreamReader.CDATA == xtr.getEventType()) {
+        if (StringUtils.isNotEmpty(xtr.getText().trim())) {
+          extensionElement.setElementText(xtr.getText().trim());
+        }
+      } else if (xtr.isStartElement()) {
+        ExtensionElement childExtensionElement = parseExtensionElement(xtr);
+        extensionElement.addChildElement(childExtensionElement);
+      } else if (xtr.isEndElement() && extensionElement.getName().equalsIgnoreCase(xtr.getLocalName())) {
+        readyWithExtensionElement = true;
+      }
+    }
+    return extensionElement;
+  }
+
+  protected boolean parseAsync(XMLStreamReader xtr) {
+    boolean async = false;
+    String asyncString = xtr.getAttributeValue(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_ASYNCHRONOUS);
+    if (ATTRIBUTE_VALUE_TRUE.equalsIgnoreCase(asyncString)) {
+      async = true;
+    }
+    return async;
+  }
+  
+  protected boolean parseNotExclusive(XMLStreamReader xtr) {
+    boolean notExclusive = false;
+    String exclusiveString = xtr.getAttributeValue(ACTIVITI_EXTENSIONS_NAMESPACE, ATTRIBUTE_ACTIVITY_EXCLUSIVE);
+    if (ATTRIBUTE_VALUE_FALSE.equalsIgnoreCase(exclusiveString)) {
+      notExclusive = true;
+    }
+    return notExclusive;
+  }
+  
+  protected boolean parseForCompensation(XMLStreamReader xtr) {
+    boolean isForCompensation = false;
+    String compensationString = xtr.getAttributeValue(null, ATTRIBUTE_ACTIVITY_ISFORCOMPENSATION);
+    if (ATTRIBUTE_VALUE_TRUE.equalsIgnoreCase(compensationString)) {
+      isForCompensation = true;
+    }
+    return isForCompensation;
+  }
+  
+  protected List<String> parseDelimitedList(String expression) {
+    return BpmnXMLUtil.parseDelimitedList(expression);
+  }
+  
+  private boolean isInSubProcess(List<SubProcess> subProcessList) {
+    if(subProcessList.size() > 1) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  
+
+  
+  protected String convertToDelimitedString(List<String> stringList) {
+    return BpmnXMLUtil.convertToDelimitedString(stringList);
+  }
+  
+  protected boolean writeFormProperties(FlowElement flowElement, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
+    
+    List<FormProperty> propertyList = null;
+    if (flowElement instanceof UserTask) {
+      propertyList = ((UserTask) flowElement).getFormProperties();
+    } else if (flowElement instanceof StartEvent) {
+      propertyList = ((StartEvent) flowElement).getFormProperties();
+    }
+    
+    if (propertyList != null) {
+    
+      for (FormProperty property : propertyList) {
+        
+        if (StringUtils.isNotEmpty(property.getId())) {
+          
+          if (didWriteExtensionStartElement == false) { 
+            xtw.writeStartElement(ELEMENT_EXTENSIONS);
+            didWriteExtensionStartElement = true;
+          }
+          
+          xtw.writeStartElement(ACTIVITI_EXTENSIONS_PREFIX, ELEMENT_FORMPROPERTY, ACTIVITI_EXTENSIONS_NAMESPACE);
+          writeDefaultAttribute(ATTRIBUTE_FORM_ID, property.getId(), xtw);
+          
+          writeDefaultAttribute(ATTRIBUTE_FORM_NAME, property.getName(), xtw);
+          writeDefaultAttribute(ATTRIBUTE_FORM_TYPE, property.getType(), xtw);
+          writeDefaultAttribute(ATTRIBUTE_FORM_EXPRESSION, property.getExpression(), xtw);
+          writeDefaultAttribute(ATTRIBUTE_FORM_VARIABLE, property.getVariable(), xtw);
+          writeDefaultAttribute(ATTRIBUTE_FORM_DEFAULT, property.getDefaultExpression(), xtw);
+          writeDefaultAttribute(ATTRIBUTE_FORM_DATEPATTERN, property.getDatePattern(), xtw);
+          if (property.isReadable() == false) {
+            writeDefaultAttribute(ATTRIBUTE_FORM_READABLE, ATTRIBUTE_VALUE_FALSE, xtw);
+          }
+          if (property.isWriteable() == false) {
+            writeDefaultAttribute(ATTRIBUTE_FORM_WRITABLE, ATTRIBUTE_VALUE_FALSE, xtw);
+          }
+          if (property.isRequired()) {
+            writeDefaultAttribute(ATTRIBUTE_FORM_REQUIRED, ATTRIBUTE_VALUE_TRUE, xtw);
+          }
+          
+          for (FormValue formValue : property.getFormValues()) {
+            if (StringUtils.isNotEmpty(formValue.getId())) {
+              xtw.writeStartElement(ACTIVITI_EXTENSIONS_PREFIX, ELEMENT_VALUE, ACTIVITI_EXTENSIONS_NAMESPACE);
+              xtw.writeAttribute(ATTRIBUTE_ID, formValue.getId());
+              xtw.writeAttribute(ATTRIBUTE_NAME, formValue.getName());
+              xtw.writeEndElement();
+            }
+          }
+          
+          xtw.writeEndElement();
+        }
+      }
+    }
+    
+    return didWriteExtensionStartElement;
+  }
+  
+  protected boolean writeListeners(BaseElement element, boolean didWriteExtensionStartElement, XMLStreamWriter xtw) throws Exception {
+    return ActivitiListenerExport.writeListeners(element, didWriteExtensionStartElement, xtw);
+  }
+  
+  protected void writeEventDefinitions(Event parentEvent, List<EventDefinition> eventDefinitions, BpmnModel model, XMLStreamWriter xtw) throws Exception {
+    for (EventDefinition eventDefinition : eventDefinitions) {
+      if (eventDefinition instanceof TimerEventDefinition) {
+        writeTimerDefinition(parentEvent, (TimerEventDefinition) eventDefinition, xtw);
+      } else if (eventDefinition instanceof SignalEventDefinition) {
+        writeSignalDefinition(parentEvent, (SignalEventDefinition) eventDefinition, xtw);
+      } else if (eventDefinition instanceof MessageEventDefinition) {
+        writeMessageDefinition(parentEvent, (MessageEventDefinition) eventDefinition, model, xtw);
+      } else if (eventDefinition instanceof ErrorEventDefinition) {
+        writeErrorDefinition(parentEvent, (ErrorEventDefinition) eventDefinition, xtw);
+      } else if (eventDefinition instanceof TerminateEventDefinition) {
+        writeTerminateDefinition(parentEvent, (TerminateEventDefinition) eventDefinition, xtw);
+      } else if (eventDefinition instanceof CompensateEventDefinition) {
+        writeCompensateDefinition(parentEvent, (CompensateEventDefinition) eventDefinition, xtw);
+      }
+    }
+  }
+  
+  protected void writeTimerDefinition(Event parentEvent, TimerEventDefinition timerDefinition, XMLStreamWriter xtw) throws Exception {
+    xtw.writeStartElement(ELEMENT_EVENT_TIMERDEFINITION);
+    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(timerDefinition, false, xtw);
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    if (StringUtils.isNotEmpty(timerDefinition.getTimeDate())) {
+      xtw.writeStartElement(ATTRIBUTE_TIMER_DATE);
+      xtw.writeCharacters(timerDefinition.getTimeDate());
+      xtw.writeEndElement();
+      
+    } else if (StringUtils.isNotEmpty(timerDefinition.getTimeCycle())) {
+      xtw.writeStartElement(ATTRIBUTE_TIMER_CYCLE);
+
+      if (StringUtils.isNotEmpty(timerDefinition.getEndDate())) {
+        xtw.writeAttribute(ACTIVITI_EXTENSIONS_PREFIX, ACTIVITI_EXTENSIONS_NAMESPACE,ATTRIBUTE_END_DATE,timerDefinition.getEndDate());
+      }
+
+      xtw.writeCharacters(timerDefinition.getTimeCycle());
+      xtw.writeEndElement();
+      
+    } else if (StringUtils.isNotEmpty(timerDefinition.getTimeDuration())) {
+      xtw.writeStartElement(ATTRIBUTE_TIMER_DURATION);
+      xtw.writeCharacters(timerDefinition.getTimeDuration());
+      xtw.writeEndElement();
+    }
+    
+    xtw.writeEndElement();
+  }
+  
+  protected void writeSignalDefinition(Event parentEvent, SignalEventDefinition signalDefinition, XMLStreamWriter xtw) throws Exception {
+    xtw.writeStartElement(ELEMENT_EVENT_SIGNALDEFINITION);
+    writeDefaultAttribute(ATTRIBUTE_SIGNAL_REF, signalDefinition.getSignalRef(), xtw);
+    if (parentEvent instanceof ThrowEvent && signalDefinition.isAsync()) {
+      BpmnXMLUtil.writeQualifiedAttribute(ATTRIBUTE_ACTIVITY_ASYNCHRONOUS, "true", xtw);
+    }
+    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(signalDefinition, false, xtw);
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    xtw.writeEndElement();
+  }
+  
+  protected void writeCompensateDefinition(Event parentEvent, CompensateEventDefinition compensateEventDefinition, XMLStreamWriter xtw) throws Exception {
+	    xtw.writeStartElement(ELEMENT_EVENT_COMPENSATEDEFINITION);
+	    writeDefaultAttribute(ATTRIBUTE_COMPENSATE_ACTIVITYREF, compensateEventDefinition.getActivityRef(), xtw);
+	    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(compensateEventDefinition, false, xtw);
+	    if (didWriteExtensionStartElement) {
+	      xtw.writeEndElement();
+	    }
+	    xtw.writeEndElement();
+	  }
+  
+  protected void writeMessageDefinition(Event parentEvent, MessageEventDefinition messageDefinition, BpmnModel model, XMLStreamWriter xtw) throws Exception {
+    xtw.writeStartElement(ELEMENT_EVENT_MESSAGEDEFINITION);
+    
+    String messageRef = messageDefinition.getMessageRef();
+    if (StringUtils.isNotEmpty(messageRef)) {
+
+      if (messageRef.startsWith(model.getTargetNamespace())) {
+        messageRef = messageRef.replace(model.getTargetNamespace(), "");
+        messageRef = messageRef.replaceFirst(":", "");
+      } else {
+        for (String prefix : model.getNamespaces().keySet()) {
+          String namespace = model.getNamespace(prefix);
+          if (messageRef.startsWith(namespace)) {
+            messageRef = messageRef.replace(model.getTargetNamespace(), "");
+            messageRef = prefix + messageRef;
+          }
+        }
+      }
+    }
+    writeDefaultAttribute(ATTRIBUTE_MESSAGE_REF, messageRef, xtw);
+    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(messageDefinition, false, xtw);
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    xtw.writeEndElement();
+  }
+  
+  protected void writeErrorDefinition(Event parentEvent, ErrorEventDefinition errorDefinition, XMLStreamWriter xtw) throws Exception {
+    xtw.writeStartElement(ELEMENT_EVENT_ERRORDEFINITION);
+    writeDefaultAttribute(ATTRIBUTE_ERROR_REF, errorDefinition.getErrorCode(), xtw);
+    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(errorDefinition, false, xtw);
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    xtw.writeEndElement();
+  }
+  
+  protected void writeTerminateDefinition(Event parentEvent, TerminateEventDefinition terminateDefinition, XMLStreamWriter xtw) throws Exception {
+    xtw.writeStartElement(ELEMENT_EVENT_TERMINATEDEFINITION);
+    boolean didWriteExtensionStartElement = BpmnXMLUtil.writeExtensionElements(terminateDefinition, false, xtw);
+    if (didWriteExtensionStartElement) {
+      xtw.writeEndElement();
+    }
+    xtw.writeEndElement();
+  }
+  
+  protected void writeDefaultAttribute(String attributeName, String value, XMLStreamWriter xtw) throws Exception {
+    BpmnXMLUtil.writeDefaultAttribute(attributeName, value, xtw);
+  }
+  
+  protected void writeQualifiedAttribute(String attributeName, String value, XMLStreamWriter xtw) throws Exception {
+    BpmnXMLUtil.writeQualifiedAttribute(attributeName, value, xtw);
+  }
+}
+
+<code block>
+package org.activiti.editor.language.xml;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.util.List;
+
+import org.activiti.bpmn.model.ActivitiListener;
+import org.activiti.bpmn.model.BpmnModel;
+import org.activiti.bpmn.model.EndEvent;
+import org.activiti.bpmn.model.FlowElement;
+import org.activiti.bpmn.model.ImplementationType;
+import org.junit.Test;
+
+public class AsyncEndEventConverterTest extends AbstractConverterTest {
+
+  @Test
+  public void connvertXMLToModel() throws Exception {
+    BpmnModel bpmnModel = readXMLFile();
+    validateModel(bpmnModel);
+  }
+  
+  @Test
+  public void convertModelToXML() throws Exception {
+    BpmnModel bpmnModel = readXMLFile();
+    BpmnModel parsedModel = exportAndReadXMLFile(bpmnModel);
+    validateModel(parsedModel);
+    deployProcess(parsedModel);
+  }
+  
+  protected String getResource() {
+    return "asyncendeventmodel.bpmn";
+  }
+  
+  private void validateModel(BpmnModel model) {
+    FlowElement flowElement = model.getMainProcess().getFlowElement("endEvent");
+    assertNotNull(flowElement);
+    assertTrue(flowElement instanceof EndEvent);
+    assertEquals("endEvent", flowElement.getId());
+    EndEvent endEvent = (EndEvent) flowElement;
+    assertEquals("endEvent", endEvent.getId());
+    assertTrue(endEvent.isAsynchronous());
+    
+    List<ActivitiListener> listeners = endEvent.getExecutionListeners();
+    assertEquals(1, listeners.size());
+    ActivitiListener listener = listeners.get(0);
+    assertTrue(ImplementationType.IMPLEMENTATION_TYPE_CLASS.equals(listener.getImplementationType()));
+    assertEquals("org.test.TestClass", listener.getImplementation());
+    assertEquals("start", listener.getEvent());
+  }
+}
+
+<code block>
+
+package org.activiti.bpmn.model;
+
+
+
+public abstract class Gateway extends FlowNode {
+
+  protected String defaultFlow;
+  
+  public String getDefaultFlow() {
+    return defaultFlow;
+  }
+
+  public void setDefaultFlow(String defaultFlow) {
+    this.defaultFlow = defaultFlow;
+  }
+  
+  public abstract Gateway clone();
+  
+  public void setValues(Gateway otherElement) {
+    super.setValues(otherElement);
+    setDefaultFlow(otherElement.getDefaultFlow());
+  }
+}
+
+<code block>
+
+package org.activiti.bpmn.model;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+public abstract class Activity extends FlowNode {
+ 
+  protected String defaultFlow;
+  protected boolean forCompensation;
+  protected MultiInstanceLoopCharacteristics loopCharacteristics;
+  protected IOSpecification ioSpecification;
+  protected List<DataAssociation> dataInputAssociations = new ArrayList<DataAssociation>();
+  protected List<DataAssociation> dataOutputAssociations = new ArrayList<DataAssociation>();
+  protected List<BoundaryEvent> boundaryEvents = new ArrayList<BoundaryEvent>();
+  protected String failedJobRetryTimeCycleValue;
+  protected List<MapExceptionEntry> mapExceptions = new ArrayList<MapExceptionEntry>(); 
+
+  public String getFailedJobRetryTimeCycleValue() {
+    return failedJobRetryTimeCycleValue;
+  }
+  public void setFailedJobRetryTimeCycleValue(String failedJobRetryTimeCycleValue) {
+    this.failedJobRetryTimeCycleValue = failedJobRetryTimeCycleValue;
+  }
+  public boolean isForCompensation() {
+    return forCompensation;
+  }
+  public void setForCompensation(boolean forCompensation) {
+    this.forCompensation = forCompensation;
+  }
+  public List<BoundaryEvent> getBoundaryEvents() {
+    return boundaryEvents;
+  }
+  public void setBoundaryEvents(List<BoundaryEvent> boundaryEvents) {
+    this.boundaryEvents = boundaryEvents;
+  }
+  public String getDefaultFlow() {
+    return defaultFlow;
+  }
+  public void setDefaultFlow(String defaultFlow) {
+    this.defaultFlow = defaultFlow;
+  }
+  public MultiInstanceLoopCharacteristics getLoopCharacteristics() {
+    return loopCharacteristics;
+  }
+  public void setLoopCharacteristics(MultiInstanceLoopCharacteristics loopCharacteristics) {
+    this.loopCharacteristics = loopCharacteristics;
+  }
+  public IOSpecification getIoSpecification() {
+    return ioSpecification;
+  }
+  public void setIoSpecification(IOSpecification ioSpecification) {
+    this.ioSpecification = ioSpecification;
+  }
+  public List<DataAssociation> getDataInputAssociations() {
+    return dataInputAssociations;
+  }
+  public void setDataInputAssociations(List<DataAssociation> dataInputAssociations) {
+    this.dataInputAssociations = dataInputAssociations;
+  }
+  public List<DataAssociation> getDataOutputAssociations() {
+    return dataOutputAssociations;
+  }
+  public void setDataOutputAssociations(List<DataAssociation> dataOutputAssociations) {
+    this.dataOutputAssociations = dataOutputAssociations;
+  }
+  
+  public void setValues(Activity otherActivity) {
+    super.setValues(otherActivity);
+    setFailedJobRetryTimeCycleValue(otherActivity.getFailedJobRetryTimeCycleValue());
+    setDefaultFlow(otherActivity.getDefaultFlow());
+    setForCompensation(otherActivity.isForCompensation());
+    if (otherActivity.getLoopCharacteristics() != null) {
+      setLoopCharacteristics(otherActivity.getLoopCharacteristics().clone());
+    }
+    if (otherActivity.getIoSpecification() != null) {
+      setIoSpecification(otherActivity.getIoSpecification().clone());
+    }
+    
+    dataInputAssociations = new ArrayList<DataAssociation>();
+    if (otherActivity.getDataInputAssociations() != null && !otherActivity.getDataInputAssociations().isEmpty()) {
+      for (DataAssociation association : otherActivity.getDataInputAssociations()) {
+        dataInputAssociations.add(association.clone());
+      }
+    }
+    
+    dataOutputAssociations = new ArrayList<DataAssociation>();
+    if (otherActivity.getDataOutputAssociations() != null && !otherActivity.getDataOutputAssociations().isEmpty()) {
+      for (DataAssociation association : otherActivity.getDataOutputAssociations()) {
+        dataOutputAssociations.add(association.clone());
+      }
+    }
+    
+    boundaryEvents = new ArrayList<BoundaryEvent>();
+    if (otherActivity.getBoundaryEvents() != null && !otherActivity.getBoundaryEvents().isEmpty()) {
+      for (BoundaryEvent event : otherActivity.getBoundaryEvents()) {
+        boundaryEvents.add(event.clone());
+      }
+    }
+  }
+  
+  public List<MapExceptionEntry> getMapExceptions() {
+    return mapExceptions;
+  }
+  
+  public void setMapExceptions(List<MapExceptionEntry> mapExceptions) {
+    this.mapExceptions = mapExceptions;
+  }
+  
+}
+
+<code block>
+
+package org.activiti.bpmn.model;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+public abstract class FlowNode extends FlowElement {
+
+  protected boolean asynchronous;
+  protected boolean notExclusive;
+  protected List<SequenceFlow> incomingFlows = new ArrayList<SequenceFlow>();
+  protected List<SequenceFlow> outgoingFlows = new ArrayList<SequenceFlow>();
+
+  public boolean isAsynchronous() {
+    return asynchronous;
+  }
+
+  public void setAsynchronous(boolean asynchronous) {
+    this.asynchronous = asynchronous;
+  }
+  
+  public boolean isNotExclusive() {
+    return notExclusive;
+  }
+  public void setNotExclusive(boolean notExclusive) {
+    this.notExclusive = notExclusive;
+  }
+
+  public List<SequenceFlow> getIncomingFlows() {
+    return incomingFlows;
+  }
+
+  public void setIncomingFlows(List<SequenceFlow> incomingFlows) {
+    this.incomingFlows = incomingFlows;
+  }
+
+  public List<SequenceFlow> getOutgoingFlows() {
+    return outgoingFlows;
+  }
+
+  public void setOutgoingFlows(List<SequenceFlow> outgoingFlows) {
+    this.outgoingFlows = outgoingFlows;
+  }
+  
+  public void setValues(FlowNode otherNode) {
+    super.setValues(otherNode);
+    setAsynchronous(otherNode.isAsynchronous());
+    setNotExclusive(otherNode.isNotExclusive());
+  }
+}
+
+<code block>
+package org.activiti.engine.impl.persistence.entity;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.activiti.engine.identity.Picture;
+import org.junit.Test;
+
+
+public class UserEntityTest {
+
+  @Test
+  public void testSetPicture_pictureShouldBeSavedWhenNotNull() {
+    TestableUserEntity userEntity = new TestableUserEntity();
+    Picture picture = new Picture(null, null);
+
+    userEntity.setPicture(picture);
+    assertTrue(userEntity.getHasSavePictureBeenCalled());
+    assertFalse(userEntity.getHasDeletePictureBeenCalled());
+  }
+
+  @Test
+  public void testSetPicture_pictureShouldBeDeletedWhenNull() {
+    TestableUserEntity userEntity = new TestableUserEntity();
+    userEntity.setPicture(null);
+    assertTrue(userEntity.getHasDeletePictureBeenCalled());
+  }
+
+  @SuppressWarnings("serial")
+  class TestableUserEntity extends UserEntity {
+
+    private boolean hasSavePictureBeenCalled = false;
+    private boolean hasDeletePictureBeenCalled = false;
+
+    @Override
+    protected void savePicture(Picture picture) {
+      setHasSavePictureBeenCalled(true);
+    }
+
+    @Override
+    protected void deletePicture() {
+      setHasDeletePictureBeenCalled(true);
+    }
+
+    public boolean getHasSavePictureBeenCalled() {
+      return hasSavePictureBeenCalled;
+    }
+
+    public void setHasSavePictureBeenCalled(boolean hasSavePictureBeenCalled) {
+      this.hasSavePictureBeenCalled = hasSavePictureBeenCalled;
+    }
+
+    public boolean getHasDeletePictureBeenCalled() {
+      return hasDeletePictureBeenCalled;
+    }
+
+    public void setHasDeletePictureBeenCalled(boolean hasDeletePictureBeenCalled) {
+      this.hasDeletePictureBeenCalled = hasDeletePictureBeenCalled;
+    }
+
+  }
+
+}
+
+<code block>
+package org.activiti.engine.test.api.identity;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.activiti.engine.identity.Picture;
+import org.activiti.engine.impl.persistence.entity.UserEntity;
+import org.junit.Test;
+
+
+public class UserEntityTest {
+
+  @Test
+  public void testSetPicture_pictureShouldBeSavedWhenNotNull() {
+    TestableUserEntity userEntity = new TestableUserEntity();
+    Picture picture = new Picture(null, null);
+
+    userEntity.setPicture(picture);
+    assertTrue(userEntity.getHasSavePictureBeenCalled());
+    assertFalse(userEntity.getHasDeletePictureBeenCalled());
+  }
+
+  @Test
+  public void testSetPicture_pictureShouldBeDeletedWhenNull() {
+    TestableUserEntity userEntity = new TestableUserEntity();
+    userEntity.setPicture(null);
+    assertTrue(userEntity.getHasDeletePictureBeenCalled());
+  }
+
+  @SuppressWarnings("serial")
+  class TestableUserEntity extends UserEntity {
+
+    private boolean hasSavePictureBeenCalled = false;
+    private boolean hasDeletePictureBeenCalled = false;
+
+    @Override
+    protected void savePicture(Picture picture) {
+      setHasSavePictureBeenCalled(true);
+    }
+
+    @Override
+    protected void deletePicture() {
+      setHasDeletePictureBeenCalled(true);
+    }
+
+    public boolean getHasSavePictureBeenCalled() {
+      return hasSavePictureBeenCalled;
+    }
+
+    public void setHasSavePictureBeenCalled(boolean hasSavePictureBeenCalled) {
+      this.hasSavePictureBeenCalled = hasSavePictureBeenCalled;
+    }
+
+    public boolean getHasDeletePictureBeenCalled() {
+      return hasDeletePictureBeenCalled;
+    }
+
+    public void setHasDeletePictureBeenCalled(boolean hasDeletePictureBeenCalled) {
+      this.hasDeletePictureBeenCalled = hasDeletePictureBeenCalled;
+    }
+
   }
 
 }
@@ -3185,7 +3185,7 @@ public class DbSqlSession implements Session {
   protected static final List<ActivitiVersion> ACTIVITI_VERSIONS = new ArrayList<ActivitiVersion>();
   static {
 	  
-	  
+
 	  
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.7"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.8"));
@@ -3193,8 +3193,8 @@ public class DbSqlSession implements Session {
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.10"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.11"));
 	  
-	  
-	  
+
+
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.12", Arrays.asList("5.12.1", "5.12T")));
 	  
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.13"));
@@ -3212,7 +3212,7 @@ public class DbSqlSession implements Session {
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.17.0.1"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.17.0.2"));
 	  
-	  
+
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion(ProcessEngine.VERSION));
   }
 
@@ -3244,7 +3244,7 @@ public class DbSqlSession implements Session {
     this.connectionMetadataDefaultSchema = schema;
   }
   
-  
+
   
   
   public void insert(PersistentObject persistentObject) {
@@ -3262,7 +3262,7 @@ public class DbSqlSession implements Session {
     cachePut(persistentObject, false);
   }
   
-  
+
   
   public void update(PersistentObject persistentObject) {
     cachePut(persistentObject, false);
@@ -3273,7 +3273,7 @@ public class DbSqlSession implements Session {
      return getSqlSession().update(updateStatement, parameters);
   }
   
-  
+
 
   public void delete(String statement, Object parameter) {
     deleteOperations.add(new BulkDeleteOperation(statement, parameter));
@@ -3292,7 +3292,7 @@ public class DbSqlSession implements Session {
 
   public interface DeleteOperation {
   	
-  	
+
   	Class<? extends PersistentObject> getPersistentObjectClass();
     
     boolean sameIdentity(PersistentObject other);
@@ -3303,7 +3303,7 @@ public class DbSqlSession implements Session {
     
   }
 
-  
+
   public class BulkDeleteOperation implements DeleteOperation {
     private String statement;
     private Object parameter;
@@ -3320,13 +3320,13 @@ public class DbSqlSession implements Session {
     
     @Override
     public boolean sameIdentity(PersistentObject other) {
-      
+
       return false;
     }
 
     @Override
     public void clearCache() {
-      
+
     }
     
     @Override
@@ -3340,7 +3340,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
   public class CheckedDeleteOperation implements DeleteOperation {
     protected final PersistentObject persistentObject;
     
@@ -3372,7 +3372,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiException("no delete statement for " + persistentObject.getClass() + " in the ibatis mapping files");
       }
       
-      
+
       if (persistentObject instanceof HasRevision) {
         int nrOfRowsDeleted = sqlSession.delete(deleteStatement, persistentObject);
         if (nrOfRowsDeleted == 0) {
@@ -3394,7 +3394,7 @@ public class DbSqlSession implements Session {
   }
   
   
-  
+
   public class BulkCheckedDeleteOperation implements DeleteOperation {
   	
   	protected Class<? extends PersistentObject> persistentObjectClass;
@@ -3438,7 +3438,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiException("no bulk delete statement for " + persistentObjectClass + " in the mapping files");
       }
       
-      
+
       if (persistentObjects.get(0) instanceof HasRevision) {
         int nrOfRowsDeleted = sqlSession.delete(bulkDeleteStatement, persistentObjects);
         if (nrOfRowsDeleted < persistentObjects.size()) {
@@ -3473,7 +3473,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
 
   @SuppressWarnings({ "rawtypes" })
   public List selectList(String statement) {
@@ -3554,7 +3554,7 @@ public class DbSqlSession implements Session {
     return persistentObject;
   }
 
-  
+
   
   @SuppressWarnings("rawtypes")
   protected List filterLoadedObjects(List<Object> loadedObjects) {
@@ -3584,7 +3584,7 @@ public class DbSqlSession implements Session {
     return cachedObject;
   }
   
-  
+
   protected PersistentObject cacheFilter(PersistentObject persistentObject) {
     PersistentObject cachedPersistentObject = cacheGet(persistentObject.getClass(), persistentObject.getId());
     if (cachedPersistentObject!=null) {
@@ -3652,13 +3652,13 @@ public class DbSqlSession implements Session {
     }
   }
 
-  
+
   
   public void addDeserializedObject(DeserializedObject deserializedObject) {
   	deserializedObjects.add(deserializedObject);
   }
 
-  
+
 
   @Override
   public void flush() {
@@ -3693,7 +3693,7 @@ public class DbSqlSession implements Session {
     flushDeletes(removedOperations);
   }
 
-  
+
   protected List<DeleteOperation> removeUnnecessaryOperations() {
     List<DeleteOperation> removedDeleteOperations = new ArrayList<DeleteOperation>();
 
@@ -3708,12 +3708,12 @@ public class DbSqlSession implements Session {
 	      for (Iterator<PersistentObject> insertIterator = insertedObjectsOfSameClass.iterator(); insertIterator.hasNext();) {
 	        PersistentObject insertedObject = insertIterator.next();
 	        
-	        
+
 	        if (deleteOperation.sameIdentity(insertedObject)) {
-	          
+
 	          insertIterator.remove();
 	          deleteIterator.remove();
-	          
+
 	          removedDeleteOperations.add( deleteOperation);
 	        }
 	      }
@@ -3724,7 +3724,7 @@ public class DbSqlSession implements Session {
 	      
       }
       
-      
+
       deleteOperation.clearCache();
     }
     
@@ -3737,10 +3737,10 @@ public class DbSqlSession implements Session {
     return removedDeleteOperations;
   }
   
-  
+
   protected List<DeleteOperation> optimizeDeleteOperations(List<DeleteOperation> deleteOperations) {
   	
-  	
+
   	if (!isOptimizeDeleteOperationsEnabled || deleteOperations.size() <= 1) {
   		return deleteOperations;
   	}
@@ -3764,7 +3764,7 @@ public class DbSqlSession implements Session {
 				if (bulkDeleteStatement != null) {
 					BulkCheckedDeleteOperation bulkCheckedDeleteOperation = null;
 					
-					
+
 					for (int j=0; j<deleteOperations.size(); j++) {
 						DeleteOperation otherDeleteOperation = deleteOperations.get(j);
 						if (j != i && checkedIndices[j] == false && otherDeleteOperation instanceof CheckedDeleteOperation) {
@@ -3779,8 +3779,8 @@ public class DbSqlSession implements Session {
 	  							bulkCheckedDeleteOperation.addPersistentObject(otherPersistentObject);
 	  							checkedIndices[j] = true;
 							} else {
-							    
-							    
+
+
 							    break;
 							}
 						}
@@ -3854,34 +3854,32 @@ public class DbSqlSession implements Session {
 
   protected void flushInserts() {
   	
-  	
     for (Class<? extends PersistentObject> persistentObjectClass : EntityDependencyOrder.INSERT_ORDER) {
       if (insertedObjects.containsKey(persistentObjectClass)) {
-      	flushPersistentObjects(persistentObjectClass, insertedObjects.get(persistentObjectClass));
+      	List<PersistentObject> persistentObjectsToInsert = insertedObjects.get(persistentObjectClass);
+      	if (persistentObjectsToInsert.size() == 1 || Boolean.FALSE.equals(dbSqlSessionFactory.isBulkInsertable(persistentObjectClass))) {
+      		flushRegularInsert(persistentObjectsToInsert.get(0), persistentObjectClass);
+      	} else {
+      		flushBulkInsert(insertedObjects.get(persistentObjectClass), persistentObjectClass);
+      	}
+      	
+      	insertedObjects.remove(persistentObjectClass);
       }
     }
     
-    
+
     if (insertedObjects.size() > 0) {
-	    for (Class<? extends PersistentObject> persistentObjectClass : insertedObjects.keySet()) {
-      	flushPersistentObjects(persistentObjectClass, insertedObjects.get(persistentObjectClass));
+	    for (Class<? extends PersistentObject> clazz : insertedObjects.keySet()) {
+	    	List<PersistentObject> persistentObjectsToInsert = insertedObjects.get(clazz);
+      	if (persistentObjectsToInsert.size() == 1) {
+      		flushRegularInsert(persistentObjectsToInsert.get(0), clazz);
+      	} else {
+      		flushBulkInsert(insertedObjects.get(clazz), clazz);
+      	}
 	    }
     }
     
     insertedObjects.clear();
-  }
-
-	protected void flushPersistentObjects(Class<? extends PersistentObject> persistentObjectClass, List<PersistentObject> persistentObjectsToInsert) {
-	  if (persistentObjectsToInsert.size() == 1) {
-	  	flushRegularInsert(persistentObjectsToInsert.get(0), persistentObjectClass);
-	  } else if (Boolean.FALSE.equals(dbSqlSessionFactory.isBulkInsertable(persistentObjectClass))) {
-	  	for (PersistentObject persistentObject : persistentObjectsToInsert) {
-	  		flushRegularInsert(persistentObject, persistentObjectClass);
-	  	}
-	  }	else {
-	  	flushBulkInsert(insertedObjects.get(persistentObjectClass), persistentObjectClass);
-	  }
-	  insertedObjects.remove(persistentObjectClass);
   }
   
   protected void flushRegularInsert(PersistentObject persistentObject, Class<? extends PersistentObject> clazz) {
@@ -3895,7 +3893,7 @@ public class DbSqlSession implements Session {
      log.debug("inserting: {}", persistentObject);
      sqlSession.insert(insertStatement, persistentObject);
      
-     
+
      if (persistentObject instanceof HasRevision) {
        ((HasRevision) persistentObject).setRevision(((HasRevision) persistentObject).getRevisionNext());
      }
@@ -3933,7 +3931,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiOptimisticLockingException(updatedObject + " was updated by another transaction concurrently");
       } 
       
-      
+
       if (updatedObject instanceof HasRevision) {
         ((HasRevision) updatedObject).setRevision(((HasRevision) updatedObject).getRevisionNext());
       }
@@ -3956,7 +3954,7 @@ public class DbSqlSession implements Session {
 
   protected void dispatchEventsForRemovedOperations(List<DeleteOperation> removedOperations) {
     for (DeleteOperation delete : removedOperations) {
-      
+
       if (delete instanceof CheckedDeleteOperation) {
         CheckedDeleteOperation checkedDeleteOperation = (CheckedDeleteOperation) delete;
         PersistentObject persistentObject = checkedDeleteOperation.getPersistentObject();
@@ -3983,9 +3981,9 @@ public class DbSqlSession implements Session {
 
       delete.execute();
 
-      
+
       if (dispatchEvent) {
-        
+
         if (delete instanceof CheckedDeleteOperation) {
           CheckedDeleteOperation checkedDeleteOperation = (CheckedDeleteOperation) delete;
           PersistentObject persistentObject = checkedDeleteOperation.getPersistentObject();
@@ -4023,7 +4021,7 @@ public class DbSqlSession implements Session {
     sqlSession.rollback();
   }
   
-  
+
   
   public void dbSchemaCheckVersion() {
     try {
@@ -4143,7 +4141,7 @@ public class DbSqlSession implements Session {
 			PropertyEntity dbVersionProperty = selectById(PropertyEntity.class,"schema.version");
 			String dbVersion = dbVersionProperty.getValue();
 
-			
+
 			int index = 0;
 			while (matchingVersionIndex < 0 && index < ACTIVITI_VERSIONS.size()) {
 				if (ACTIVITI_VERSIONS.get(index).matches(dbVersion)) {
@@ -4153,7 +4151,7 @@ public class DbSqlSession implements Session {
 				}
 			}
 
-			
+
 			if (matchingVersionIndex < 0) {
 				throw new ActivitiException(
 				    "Could not update Activiti database schema: unknown version from database: '"
@@ -4173,11 +4171,11 @@ public class DbSqlSession implements Session {
 					dbHistoryProperty = selectById(PropertyEntity.class, "schema.history");
 				}
 
-				
+
 				String dbHistoryValue = dbHistoryProperty.getValue() + " upgrade(" + dbVersion + "->" + ProcessEngine.VERSION + ")";
 				dbHistoryProperty.setValue(dbHistoryValue);
 
-				
+
 				dbSchemaUpgrade("engine", matchingVersionIndex);
 				feedback = "upgraded Activiti from " + dbVersion + " to "+ ProcessEngine.VERSION;
 			}
@@ -4215,8 +4213,8 @@ public class DbSqlSession implements Session {
   }
 
   public boolean isTablePresent(String tableName) {
-  	
-  	
+
+
   	if (!dbSqlSessionFactory.isTablePrefixIsSchema()) {
   		tableName = prependDatabaseTablePrefix(tableName);
   	}
@@ -4278,7 +4276,7 @@ public class DbSqlSession implements Session {
             || ( (dbMajorVersion <= engineMajorVersion) && (dbMinorVersion > engineMinorVersion) )) {
       throw new ActivitiException("Version of activiti database (" + versionInDatabase + ") is more recent than the engine (" + ProcessEngine.VERSION +")");
     } else if(cleanDbVersion.compareTo(cleanEngineVersion) == 0) {
-      
+
       log.warn("Engine-version is the same, but not an exact match: {} vs. {}. Not performing database-upgrade.", versionInDatabase, ProcessEngine.VERSION);
       return false;
     }
@@ -4309,11 +4307,11 @@ public class DbSqlSession implements Session {
   	String dbVersion = activitiVersion.getMainVersion();
     log.info("upgrading activiti {} schema from {} to {}", component, dbVersion, ProcessEngine.VERSION);
     
-    
+
     for (int i=currentDatabaseVersionsIndex + 1; i<ACTIVITI_VERSIONS.size(); i++) {
     	String nextVersion = ACTIVITI_VERSIONS.get(i).getMainVersion();
     	
-    	
+
       if (nextVersion.endsWith("-SNAPSHOT")) {
       	nextVersion = nextVersion.substring(0, nextVersion.length()-"-SNAPSHOT".length());
       }
@@ -4361,7 +4359,7 @@ public class DbSqlSession implements Session {
       String ddlStatements = new String(bytes);
       String databaseType = dbSqlSessionFactory.getDatabaseType();
       
-      
+
       try {
 	    	if ("mysql".equals(databaseType)) {
 	    	  DatabaseMetaData databaseMetaData = connection.getMetaData();
@@ -4369,7 +4367,7 @@ public class DbSqlSession implements Session {
 	    	  int minorVersion = databaseMetaData.getDatabaseMinorVersion();
 	    	  log.info("Found MySQL: majorVersion=" + majorVersion + " minorVersion=" + minorVersion);
 		      
-	    	  
+
 	    	  if (majorVersion <= 5 && minorVersion < 6) {
 	    	    ddlStatements = updateDdlForMySqlVersionLowerThan56(ddlStatements);
 	    	  }
@@ -4420,7 +4418,7 @@ public class DbSqlSession implements Session {
             
             Statement jdbcStatement = connection.createStatement();
             try {
-              
+
               log.debug("SQL: {}", sqlStatement);
               jdbcStatement.execute(sqlStatement);
               jdbcStatement.close();
@@ -4452,7 +4450,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
   protected String updateDdlForMySqlVersionLowerThan56(String ddlStatements) {
 	  return ddlStatements.replace("timestamp(3)", "timestamp")
 			  			  .replace("datetime(3)", "datetime")
@@ -4478,17 +4476,17 @@ public class DbSqlSession implements Session {
   protected boolean isMissingTablesException(Exception e) {
     String exceptionMessage = e.getMessage();
     if(e.getMessage() != null) {      
-      
+
       if ((exceptionMessage.indexOf("Table") != -1) && (exceptionMessage.indexOf("not found") != -1)) {
         return true;
       }
       
-      
+
       if (((exceptionMessage.indexOf("Table") != -1 || exceptionMessage.indexOf("table") != -1)) && (exceptionMessage.indexOf("doesn't exist") != -1)) {
         return true;
       }
       
-      
+
       if (((exceptionMessage.indexOf("relation") != -1 || exceptionMessage.indexOf("table") != -1)) && (exceptionMessage.indexOf("does not exist") != -1)) {
         return true;
       }
@@ -4502,7 +4500,7 @@ public class DbSqlSession implements Session {
       try {
         dbSchemaDrop();
       } catch (RuntimeException e) {
-        
+
       }
     }
     if ( org.activiti.engine.ProcessEngineConfiguration.DB_SCHEMA_UPDATE_CREATE_DROP.equals(databaseSchemaUpdate) 
@@ -4530,7 +4528,7 @@ public class DbSqlSession implements Session {
 	  return sqlSession.getMapper(type);
   }
 
-  
+
 
   public DeploymentQueryImpl createDeploymentQuery() {
     return new DeploymentQueryImpl();
@@ -4575,7 +4573,7 @@ public class DbSqlSession implements Session {
     return new GroupQueryImpl();
   }
 
-  
+
   
   public SqlSession getSqlSession() {
     return sqlSession;
@@ -4665,7 +4663,7 @@ public class DbSqlSession implements Session {
   protected static final List<ActivitiVersion> ACTIVITI_VERSIONS = new ArrayList<ActivitiVersion>();
   static {
 	  
-	  
+
 	  
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.7"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.8"));
@@ -4673,8 +4671,8 @@ public class DbSqlSession implements Session {
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.10"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.11"));
 	  
-	  
-	  
+
+
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.12", Arrays.asList("5.12.1", "5.12T")));
 	  
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.13"));
@@ -4692,7 +4690,7 @@ public class DbSqlSession implements Session {
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.17.0.1"));
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion("5.17.0.2"));
 	  
-	  
+
 	  ACTIVITI_VERSIONS.add(new ActivitiVersion(ProcessEngine.VERSION));
   }
 
@@ -4724,7 +4722,7 @@ public class DbSqlSession implements Session {
     this.connectionMetadataDefaultSchema = schema;
   }
   
-  
+
   
   
   public void insert(PersistentObject persistentObject) {
@@ -4742,7 +4740,7 @@ public class DbSqlSession implements Session {
     cachePut(persistentObject, false);
   }
   
-  
+
   
   public void update(PersistentObject persistentObject) {
     cachePut(persistentObject, false);
@@ -4753,7 +4751,7 @@ public class DbSqlSession implements Session {
      return getSqlSession().update(updateStatement, parameters);
   }
   
-  
+
 
   public void delete(String statement, Object parameter) {
     deleteOperations.add(new BulkDeleteOperation(statement, parameter));
@@ -4772,7 +4770,7 @@ public class DbSqlSession implements Session {
 
   public interface DeleteOperation {
   	
-  	
+
   	Class<? extends PersistentObject> getPersistentObjectClass();
     
     boolean sameIdentity(PersistentObject other);
@@ -4783,7 +4781,7 @@ public class DbSqlSession implements Session {
     
   }
 
-  
+
   public class BulkDeleteOperation implements DeleteOperation {
     private String statement;
     private Object parameter;
@@ -4800,13 +4798,13 @@ public class DbSqlSession implements Session {
     
     @Override
     public boolean sameIdentity(PersistentObject other) {
-      
+
       return false;
     }
 
     @Override
     public void clearCache() {
-      
+
     }
     
     @Override
@@ -4820,7 +4818,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
   public class CheckedDeleteOperation implements DeleteOperation {
     protected final PersistentObject persistentObject;
     
@@ -4852,7 +4850,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiException("no delete statement for " + persistentObject.getClass() + " in the ibatis mapping files");
       }
       
-      
+
       if (persistentObject instanceof HasRevision) {
         int nrOfRowsDeleted = sqlSession.delete(deleteStatement, persistentObject);
         if (nrOfRowsDeleted == 0) {
@@ -4874,7 +4872,7 @@ public class DbSqlSession implements Session {
   }
   
   
-  
+
   public class BulkCheckedDeleteOperation implements DeleteOperation {
   	
   	protected Class<? extends PersistentObject> persistentObjectClass;
@@ -4918,7 +4916,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiException("no bulk delete statement for " + persistentObjectClass + " in the mapping files");
       }
       
-      
+
       if (persistentObjects.get(0) instanceof HasRevision) {
         int nrOfRowsDeleted = sqlSession.delete(bulkDeleteStatement, persistentObjects);
         if (nrOfRowsDeleted < persistentObjects.size()) {
@@ -4953,7 +4951,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
 
   @SuppressWarnings({ "rawtypes" })
   public List selectList(String statement) {
@@ -5034,7 +5032,7 @@ public class DbSqlSession implements Session {
     return persistentObject;
   }
 
-  
+
   
   @SuppressWarnings("rawtypes")
   protected List filterLoadedObjects(List<Object> loadedObjects) {
@@ -5064,7 +5062,7 @@ public class DbSqlSession implements Session {
     return cachedObject;
   }
   
-  
+
   protected PersistentObject cacheFilter(PersistentObject persistentObject) {
     PersistentObject cachedPersistentObject = cacheGet(persistentObject.getClass(), persistentObject.getId());
     if (cachedPersistentObject!=null) {
@@ -5132,13 +5130,13 @@ public class DbSqlSession implements Session {
     }
   }
 
-  
+
   
   public void addDeserializedObject(DeserializedObject deserializedObject) {
   	deserializedObjects.add(deserializedObject);
   }
 
-  
+
 
   @Override
   public void flush() {
@@ -5173,7 +5171,7 @@ public class DbSqlSession implements Session {
     flushDeletes(removedOperations);
   }
 
-  
+
   protected List<DeleteOperation> removeUnnecessaryOperations() {
     List<DeleteOperation> removedDeleteOperations = new ArrayList<DeleteOperation>();
 
@@ -5188,12 +5186,12 @@ public class DbSqlSession implements Session {
 	      for (Iterator<PersistentObject> insertIterator = insertedObjectsOfSameClass.iterator(); insertIterator.hasNext();) {
 	        PersistentObject insertedObject = insertIterator.next();
 	        
-	        
+
 	        if (deleteOperation.sameIdentity(insertedObject)) {
-	          
+
 	          insertIterator.remove();
 	          deleteIterator.remove();
-	          
+
 	          removedDeleteOperations.add( deleteOperation);
 	        }
 	      }
@@ -5204,7 +5202,7 @@ public class DbSqlSession implements Session {
 	      
       }
       
-      
+
       deleteOperation.clearCache();
     }
     
@@ -5217,10 +5215,10 @@ public class DbSqlSession implements Session {
     return removedDeleteOperations;
   }
   
-  
+
   protected List<DeleteOperation> optimizeDeleteOperations(List<DeleteOperation> deleteOperations) {
   	
-  	
+
   	if (!isOptimizeDeleteOperationsEnabled || deleteOperations.size() <= 1) {
   		return deleteOperations;
   	}
@@ -5244,7 +5242,7 @@ public class DbSqlSession implements Session {
 				if (bulkDeleteStatement != null) {
 					BulkCheckedDeleteOperation bulkCheckedDeleteOperation = null;
 					
-					
+
 					for (int j=0; j<deleteOperations.size(); j++) {
 						DeleteOperation otherDeleteOperation = deleteOperations.get(j);
 						if (j != i && checkedIndices[j] == false && otherDeleteOperation instanceof CheckedDeleteOperation) {
@@ -5259,8 +5257,8 @@ public class DbSqlSession implements Session {
 	  							bulkCheckedDeleteOperation.addPersistentObject(otherPersistentObject);
 	  							checkedIndices[j] = true;
 							} else {
-							    
-							    
+
+
 							    break;
 							}
 						}
@@ -5334,32 +5332,34 @@ public class DbSqlSession implements Session {
 
   protected void flushInserts() {
   	
+
     for (Class<? extends PersistentObject> persistentObjectClass : EntityDependencyOrder.INSERT_ORDER) {
       if (insertedObjects.containsKey(persistentObjectClass)) {
-      	List<PersistentObject> persistentObjectsToInsert = insertedObjects.get(persistentObjectClass);
-      	if (persistentObjectsToInsert.size() == 1 || Boolean.FALSE.equals(dbSqlSessionFactory.isBulkInsertable(persistentObjectClass))) {
-      		flushRegularInsert(persistentObjectsToInsert.get(0), persistentObjectClass);
-      	} else {
-      		flushBulkInsert(insertedObjects.get(persistentObjectClass), persistentObjectClass);
-      	}
-      	
-      	insertedObjects.remove(persistentObjectClass);
+      	flushPersistentObjects(persistentObjectClass, insertedObjects.get(persistentObjectClass));
       }
     }
     
-    
+
     if (insertedObjects.size() > 0) {
-	    for (Class<? extends PersistentObject> clazz : insertedObjects.keySet()) {
-	    	List<PersistentObject> persistentObjectsToInsert = insertedObjects.get(clazz);
-      	if (persistentObjectsToInsert.size() == 1) {
-      		flushRegularInsert(persistentObjectsToInsert.get(0), clazz);
-      	} else {
-      		flushBulkInsert(insertedObjects.get(clazz), clazz);
-      	}
+	    for (Class<? extends PersistentObject> persistentObjectClass : insertedObjects.keySet()) {
+      	flushPersistentObjects(persistentObjectClass, insertedObjects.get(persistentObjectClass));
 	    }
     }
     
     insertedObjects.clear();
+  }
+
+	protected void flushPersistentObjects(Class<? extends PersistentObject> persistentObjectClass, List<PersistentObject> persistentObjectsToInsert) {
+	  if (persistentObjectsToInsert.size() == 1) {
+	  	flushRegularInsert(persistentObjectsToInsert.get(0), persistentObjectClass);
+	  } else if (Boolean.FALSE.equals(dbSqlSessionFactory.isBulkInsertable(persistentObjectClass))) {
+	  	for (PersistentObject persistentObject : persistentObjectsToInsert) {
+	  		flushRegularInsert(persistentObject, persistentObjectClass);
+	  	}
+	  }	else {
+	  	flushBulkInsert(insertedObjects.get(persistentObjectClass), persistentObjectClass);
+	  }
+	  insertedObjects.remove(persistentObjectClass);
   }
   
   protected void flushRegularInsert(PersistentObject persistentObject, Class<? extends PersistentObject> clazz) {
@@ -5373,7 +5373,7 @@ public class DbSqlSession implements Session {
      log.debug("inserting: {}", persistentObject);
      sqlSession.insert(insertStatement, persistentObject);
      
-     
+
      if (persistentObject instanceof HasRevision) {
        ((HasRevision) persistentObject).setRevision(((HasRevision) persistentObject).getRevisionNext());
      }
@@ -5411,7 +5411,7 @@ public class DbSqlSession implements Session {
         throw new ActivitiOptimisticLockingException(updatedObject + " was updated by another transaction concurrently");
       } 
       
-      
+
       if (updatedObject instanceof HasRevision) {
         ((HasRevision) updatedObject).setRevision(((HasRevision) updatedObject).getRevisionNext());
       }
@@ -5434,7 +5434,7 @@ public class DbSqlSession implements Session {
 
   protected void dispatchEventsForRemovedOperations(List<DeleteOperation> removedOperations) {
     for (DeleteOperation delete : removedOperations) {
-      
+
       if (delete instanceof CheckedDeleteOperation) {
         CheckedDeleteOperation checkedDeleteOperation = (CheckedDeleteOperation) delete;
         PersistentObject persistentObject = checkedDeleteOperation.getPersistentObject();
@@ -5461,9 +5461,9 @@ public class DbSqlSession implements Session {
 
       delete.execute();
 
-      
+
       if (dispatchEvent) {
-        
+
         if (delete instanceof CheckedDeleteOperation) {
           CheckedDeleteOperation checkedDeleteOperation = (CheckedDeleteOperation) delete;
           PersistentObject persistentObject = checkedDeleteOperation.getPersistentObject();
@@ -5501,7 +5501,7 @@ public class DbSqlSession implements Session {
     sqlSession.rollback();
   }
   
-  
+
   
   public void dbSchemaCheckVersion() {
     try {
@@ -5621,7 +5621,7 @@ public class DbSqlSession implements Session {
 			PropertyEntity dbVersionProperty = selectById(PropertyEntity.class,"schema.version");
 			String dbVersion = dbVersionProperty.getValue();
 
-			
+
 			int index = 0;
 			while (matchingVersionIndex < 0 && index < ACTIVITI_VERSIONS.size()) {
 				if (ACTIVITI_VERSIONS.get(index).matches(dbVersion)) {
@@ -5631,7 +5631,7 @@ public class DbSqlSession implements Session {
 				}
 			}
 
-			
+
 			if (matchingVersionIndex < 0) {
 				throw new ActivitiException(
 				    "Could not update Activiti database schema: unknown version from database: '"
@@ -5651,11 +5651,11 @@ public class DbSqlSession implements Session {
 					dbHistoryProperty = selectById(PropertyEntity.class, "schema.history");
 				}
 
-				
+
 				String dbHistoryValue = dbHistoryProperty.getValue() + " upgrade(" + dbVersion + "->" + ProcessEngine.VERSION + ")";
 				dbHistoryProperty.setValue(dbHistoryValue);
 
-				
+
 				dbSchemaUpgrade("engine", matchingVersionIndex);
 				feedback = "upgraded Activiti from " + dbVersion + " to "+ ProcessEngine.VERSION;
 			}
@@ -5693,8 +5693,8 @@ public class DbSqlSession implements Session {
   }
 
   public boolean isTablePresent(String tableName) {
-  	
-  	
+
+
   	if (!dbSqlSessionFactory.isTablePrefixIsSchema()) {
   		tableName = prependDatabaseTablePrefix(tableName);
   	}
@@ -5756,7 +5756,7 @@ public class DbSqlSession implements Session {
             || ( (dbMajorVersion <= engineMajorVersion) && (dbMinorVersion > engineMinorVersion) )) {
       throw new ActivitiException("Version of activiti database (" + versionInDatabase + ") is more recent than the engine (" + ProcessEngine.VERSION +")");
     } else if(cleanDbVersion.compareTo(cleanEngineVersion) == 0) {
-      
+
       log.warn("Engine-version is the same, but not an exact match: {} vs. {}. Not performing database-upgrade.", versionInDatabase, ProcessEngine.VERSION);
       return false;
     }
@@ -5787,11 +5787,11 @@ public class DbSqlSession implements Session {
   	String dbVersion = activitiVersion.getMainVersion();
     log.info("upgrading activiti {} schema from {} to {}", component, dbVersion, ProcessEngine.VERSION);
     
-    
+
     for (int i=currentDatabaseVersionsIndex + 1; i<ACTIVITI_VERSIONS.size(); i++) {
     	String nextVersion = ACTIVITI_VERSIONS.get(i).getMainVersion();
     	
-    	
+
       if (nextVersion.endsWith("-SNAPSHOT")) {
       	nextVersion = nextVersion.substring(0, nextVersion.length()-"-SNAPSHOT".length());
       }
@@ -5839,7 +5839,7 @@ public class DbSqlSession implements Session {
       String ddlStatements = new String(bytes);
       String databaseType = dbSqlSessionFactory.getDatabaseType();
       
-      
+
       try {
 	    	if ("mysql".equals(databaseType)) {
 	    	  DatabaseMetaData databaseMetaData = connection.getMetaData();
@@ -5847,7 +5847,7 @@ public class DbSqlSession implements Session {
 	    	  int minorVersion = databaseMetaData.getDatabaseMinorVersion();
 	    	  log.info("Found MySQL: majorVersion=" + majorVersion + " minorVersion=" + minorVersion);
 		      
-	    	  
+
 	    	  if (majorVersion <= 5 && minorVersion < 6) {
 	    	    ddlStatements = updateDdlForMySqlVersionLowerThan56(ddlStatements);
 	    	  }
@@ -5898,7 +5898,7 @@ public class DbSqlSession implements Session {
             
             Statement jdbcStatement = connection.createStatement();
             try {
-              
+
               log.debug("SQL: {}", sqlStatement);
               jdbcStatement.execute(sqlStatement);
               jdbcStatement.close();
@@ -5930,7 +5930,7 @@ public class DbSqlSession implements Session {
     }
   }
   
-  
+
   protected String updateDdlForMySqlVersionLowerThan56(String ddlStatements) {
 	  return ddlStatements.replace("timestamp(3)", "timestamp")
 			  			  .replace("datetime(3)", "datetime")
@@ -5956,17 +5956,17 @@ public class DbSqlSession implements Session {
   protected boolean isMissingTablesException(Exception e) {
     String exceptionMessage = e.getMessage();
     if(e.getMessage() != null) {      
-      
+
       if ((exceptionMessage.indexOf("Table") != -1) && (exceptionMessage.indexOf("not found") != -1)) {
         return true;
       }
       
-      
+
       if (((exceptionMessage.indexOf("Table") != -1 || exceptionMessage.indexOf("table") != -1)) && (exceptionMessage.indexOf("doesn't exist") != -1)) {
         return true;
       }
       
-      
+
       if (((exceptionMessage.indexOf("relation") != -1 || exceptionMessage.indexOf("table") != -1)) && (exceptionMessage.indexOf("does not exist") != -1)) {
         return true;
       }
@@ -5980,7 +5980,7 @@ public class DbSqlSession implements Session {
       try {
         dbSchemaDrop();
       } catch (RuntimeException e) {
-        
+
       }
     }
     if ( org.activiti.engine.ProcessEngineConfiguration.DB_SCHEMA_UPDATE_CREATE_DROP.equals(databaseSchemaUpdate) 
@@ -6008,7 +6008,7 @@ public class DbSqlSession implements Session {
 	  return sqlSession.getMapper(type);
   }
 
-  
+
 
   public DeploymentQueryImpl createDeploymentQuery() {
     return new DeploymentQueryImpl();
@@ -6053,7 +6053,7 @@ public class DbSqlSession implements Session {
     return new GroupQueryImpl();
   }
 
-  
+
   
   public SqlSession getSqlSession() {
     return sqlSession;

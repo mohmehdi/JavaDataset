@@ -1,81 +1,601 @@
 
 
-package reactor.io.buffer;
+package reactor.bus;
 
-import reactor.alloc.Allocator;
-import reactor.alloc.Reference;
-import reactor.alloc.ReferenceCountingAllocator;
-import reactor.fn.Supplier;
+import reactor.core.alloc.Recyclable;
+import reactor.core.support.Assert;
+import reactor.core.support.UUIDUtils;
+import reactor.fn.Consumer;
+import reactor.fn.tuple.Tuple;
+import reactor.fn.tuple.Tuple2;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+import java.io.Serializable;
+import java.util.*;
 
 
-public class BufferAllocator implements Allocator<Buffer> {
+public class Event<T> implements Serializable, Recyclable {
 
-	private final Allocator<Buffer> delegate;
+  private static final long serialVersionUID = -2476263092040373361L;
+  private final transient Consumer<Throwable> errorConsumer;
+  private volatile        UUID                id;
+  private volatile        Headers             headers;
+  private volatile        Object              replyTo;
+  private volatile        Object              key;
+  private volatile        T                   data;
 
-	
-	public BufferAllocator() {
-		this(256, false, Buffer.SMALL_BUFFER_SIZE);
-	}
 
-	
-	public BufferAllocator(int poolSize, final boolean direct, final int bufferSize) {
-		this.delegate = new ReferenceCountingAllocator<Buffer>(
-				poolSize,
-				new Supplier<Buffer>() {
-					@Override
-					public Buffer get() {
-						return new Buffer(direct
-						                  ? ByteBuffer.allocateDirect(bufferSize)
-						                  : ByteBuffer.allocate(bufferSize));
-					}
-				}
-		);
-	}
+  public Event(Class<T> klass) {
+    this.headers = null;
+    this.data = null;
+    this.errorConsumer = null;
+  }
 
-	@Override
-	public Reference<Buffer> allocate() {
-		return delegate.allocate();
-	}
 
-	@Override
-	public List<Reference<Buffer>> allocateBatch(int size) {
-		return delegate.allocateBatch(size);
-	}
+  public Event(Headers headers, T data) {
+    this.headers = headers;
+    this.data = data;
+    this.errorConsumer = null;
+  }
 
-	@Override
-	public void release(List<Reference<Buffer>> batch) {
-		delegate.release(batch);
-	}
+
+  public Event(Headers headers, T data, Consumer<Throwable> errorConsumer) {
+    this.headers = headers;
+    this.data = data;
+    this.errorConsumer = errorConsumer;
+  }
+
+
+  public Event(T data) {
+    this.data = data;
+    this.errorConsumer = null;
+  }
+
+
+  public static <T> Event<T> wrap(T obj) {
+    return new Event<T>(obj);
+  }
+
+
+  public static <T> Event<T> wrap(T obj, Object replyToKey) {
+    return new Event<T>(obj).setReplyTo(replyToKey);
+  }
+
+
+  public synchronized UUID getId() {
+    if (null == id) {
+      id = UUIDUtils.create();
+    }
+    return id;
+  }
+
+
+  public synchronized Headers getHeaders() {
+    if (null == headers) {
+      headers = new Headers();
+    }
+    return headers;
+  }
+
+
+  public Object getReplyTo() {
+    return replyTo;
+  }
+
+
+  public Event<T> setReplyTo(Object replyTo) {
+    Assert.notNull(replyTo, "ReplyTo cannot be null.");
+    this.replyTo = replyTo;
+    return this;
+  }
+
+
+  public Object getKey() {
+    return key;
+  }
+
+
+  public Event<T> setKey(Object key) {
+    this.key = key;
+    return this;
+  }
+
+
+  public T getData() {
+    return data;
+  }
+
+
+  public Event<T> setData(T data) {
+    this.data = data;
+    return this;
+  }
+
+
+  public Consumer<Throwable> getErrorConsumer() {
+    return errorConsumer;
+  }
+
+
+  public Event<T> copy() {
+    return copy(data);
+  }
+
+
+  public <E> Event<E> copy(E data) {
+    if (null != replyTo) {
+      return new Event<E>(headers, data, errorConsumer).setReplyTo(replyTo);
+    } else {
+      return new Event<E>(headers, data, errorConsumer);
+    }
+  }
+
+
+  public void consumeError(Throwable throwable) {
+    if (null != errorConsumer) {
+      errorConsumer.accept(throwable);
+    }
+  }
+
+  @Override
+  public void recycle() {
+    this.id = null;
+    if (null != this.headers) {
+      this.headers.headers.clear();
+    }
+    this.replyTo = null;
+    this.key = null;
+    this.data = null;
+  }
+
+  public void override(Event<T> ev) {
+    this.id = ev.id;
+    this.headers = ev.headers;
+    this.replyTo = ev.replyTo;
+    this.data = ev.data;
+  }
+
+  @Override
+  public String toString() {
+    return "Event{" +
+        "id=" + id +
+        ", headers=" + headers +
+        ", replyTo=" + replyTo +
+        ", key=" + key +
+        ", data=" + data +
+        '}';
+  }
+
+
+  public static class Headers implements Serializable, Iterable<Tuple2<String, Object>> {
+
+
+    public static final String ORIGIN = "x-reactor-origin";
+
+    private static final long serialVersionUID = 4984692586458514948L;
+
+    private final Object monitor = UUIDUtils.create();
+    private final Map<String, Object> headers;
+
+    private Headers(boolean sealed, Map<String, Object> headers) {
+      Map<String, Object> copy = new TreeMap<String, Object>(String.CASE_INSENSITIVE_ORDER);
+      copyHeaders(headers, copy);
+      if (sealed) {
+        this.headers = Collections.unmodifiableMap(copy);
+      } else {
+        this.headers = copy;
+      }
+    }
+
+
+    public Headers(Map<String, Object> headers) {
+      this(false, headers);
+    }
+
+
+    public Headers() {
+      this(false, null);
+    }
+
+
+    public Headers setAll(Map<String, Object> headers) {
+      if (null == headers || headers.isEmpty()) {
+        return this;
+      } else {
+        synchronized (this.monitor) {
+          copyHeaders(headers, this.headers);
+        }
+      }
+      return this;
+    }
+
+
+    public <V> Headers set(String name, V value) {
+      synchronized (this.monitor) {
+        setHeader(name, value, headers);
+      }
+      return this;
+    }
+
+
+    public Headers setOrigin(UUID id) {
+      String idString = id == null ? null : id.toString();
+      return setOrigin(idString);
+    }
+
+
+    public String getOrigin() {
+      synchronized (this.monitor) {
+        return (String) headers.get(ORIGIN);
+      }
+    }
+
+
+    public Headers setOrigin(String id) {
+      synchronized (this.monitor) {
+        setHeader(ORIGIN, id, headers);
+      }
+      return this;
+    }
+
+
+    @SuppressWarnings("unchecked")
+    public <V> V get(String name) {
+      synchronized (monitor) {
+        return (V) headers.get(name);
+      }
+    }
+
+
+    public boolean contains(String name) {
+      synchronized (monitor) {
+        return headers.containsKey(name);
+      }
+    }
+
+
+    public Map<String, Object> asMap() {
+      synchronized (monitor) {
+        return Collections.unmodifiableMap(headers);
+      }
+    }
+
+
+    public Headers readOnly() {
+      synchronized (monitor) {
+        return new Headers(true, headers);
+      }
+    }
+
+
+    @Override
+    public Iterator<Tuple2<String, Object>> iterator() {
+      synchronized (this.monitor) {
+        List<Tuple2<String, Object>> headers = new ArrayList<Tuple2<String, Object>>(this.headers.size());
+        for (Map.Entry<String, Object> header : this.headers.entrySet()) {
+          headers.add(Tuple.of(header.getKey(), header.getValue()));
+        }
+        return Collections.unmodifiableList(headers).iterator();
+      }
+    }
+
+    @Override
+    public String toString() {
+      return headers.toString();
+    }
+
+    private void copyHeaders(Map<String, Object> source, Map<String, Object> target) {
+      if (source != null) {
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+          setHeader(entry.getKey(), entry.getValue(), target);
+        }
+      }
+    }
+
+    private void setHeader(String name, Object value, Map<String, Object> target) {
+      if (value == null) {
+        target.remove(name);
+      } else {
+        target.put(name, value);
+      }
+    }
+  }
 
 }
 
 <code block>
 
 
-package reactor.alloc;
+package reactor.bus.alloc;
 
-import reactor.core.support.Recyclable;
+import reactor.bus.Event;
+import reactor.fn.Supplier;
 
 
-public class RecyclableString implements Recyclable {
+public class EventFactorySupplier<T> implements Supplier<Event<T>> {
 
-	private volatile String value = "";
+  private final Class<T> klass;
 
-	public void setValue(String value) {
-		this.value = (null == value ? "" : value);
+  public EventFactorySupplier(Class<T> klass) {
+    this.klass = klass;
+  }
+
+  @Override
+  public Event<T> get() {
+    return new Event<T>(klass);
+  }
+}
+
+<code block>
+
+
+package reactor.bus.alloc;
+
+import reactor.bus.Event;
+import reactor.core.alloc.Allocator;
+import reactor.core.alloc.Reference;
+import reactor.core.alloc.ReferenceCountingAllocator;
+
+import java.util.HashMap;
+
+
+public abstract class EventAllocator {
+
+	private final Object                    monitor;
+	private final HashMap<Class, Allocator> eventPools;
+
+	public EventAllocator() {
+		this(new Class[0]);
+	}
+
+
+	@SuppressWarnings("unchecked")
+	public EventAllocator(Class[] classes) {
+		this.eventPools = new HashMap<Class, Allocator>();
+		this.monitor = new Object();
+		for (Class c : classes) {
+			eventPools.put(c, makeAllocator(c));
+    }
+  }
+
+
+  @SuppressWarnings("unchecked")
+  public <T> Reference<Event<T>> get(Class<T> klass) {
+    if(!eventPools.containsKey(klass)) {
+      synchronized (monitor) {
+
+        if(!eventPools.containsKey(klass)) {
+          eventPools.put(klass, makeAllocator(klass));
+        }
+      }
+    }
+    return eventPools.get(klass).allocate();
+  }
+
+
+  protected abstract <T> Allocator<Event<T>> makeAllocator(Class<T> klass);
+
+
+  public static EventAllocator defaultEventAllocator() {
+    return new EventAllocator() {
+      @SuppressWarnings("unchecked")
+      @Override
+      protected <T> Allocator<Event<T>> makeAllocator(Class<T> klass) {
+        return new ReferenceCountingAllocator<Event<T>>(new EventFactorySupplier(klass));
+      }
+    };
+  }
+}
+
+<code block>
+
+package reactor.bus.alloc;
+
+import org.junit.Assert;
+import org.junit.Test;
+import reactor.bus.Event;
+
+public class EventAllocatorTests {
+
+  @Test
+  public void eventAllocatorTest() {
+    EventAllocator eventAllocator = EventAllocator.defaultEventAllocator();
+
+    Event<String> eStr = eventAllocator.get(String.class).get();
+    eStr.setData("string");
+    Assert.assertTrue("String data is settable into the String event", eStr.getData() == "string");
+
+
+    Event<Integer> eInt = eventAllocator.get(Integer.class).get();
+    eInt.setData(1);
+    Assert.assertTrue("Integer data is settable into the Integer event", eInt.getData() == 1);
+  }
+}
+
+<code block>
+
+
+package reactor.core.dispatch;
+
+import reactor.Environment;
+import reactor.core.Dispatcher;
+import reactor.core.alloc.Recyclable;
+import reactor.core.support.Assert;
+import reactor.fn.Consumer;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+
+public abstract class AbstractLifecycleDispatcher implements Dispatcher {
+
+	protected static final int DEFAULT_BUFFER_SIZE = 1024;
+
+	private final AtomicBoolean alive   = new AtomicBoolean(true);
+	public final  ClassLoader   context = new ClassLoader(Thread.currentThread()
+			.getContextClassLoader()) {
+	};
+
+	protected AbstractLifecycleDispatcher() {
+		super();
 	}
 
 	@Override
-	public void recycle() {
-		this.value = "";
+	public boolean alive() {
+		return alive.get();
+	}
+
+	@Override
+	public boolean awaitAndShutdown() {
+		return awaitAndShutdown(Integer.MAX_VALUE, TimeUnit.SECONDS);
+	}
+
+	@Override
+	public void shutdown() {
+		alive.compareAndSet(true, false);
+	}
+
+	@Override
+	public void forceShutdown() {
+		alive.compareAndSet(true, false);
+	}
+
+
+	@Override
+	public boolean inContext() {
+		return context == Thread.currentThread().getContextClassLoader();
+	}
+
+	protected final ClassLoader getContext() {
+		return context;
+	}
+
+	@Override
+	public final <E> void tryDispatch(E event, Consumer<E> eventConsumer, Consumer<Throwable> errorConsumer)
+			throws InsufficientCapacityException {
+		Assert.isTrue(alive(), "This Dispatcher has been shut down.");
+		boolean isInContext = inContext();
+		Task task;
+		if (isInContext) {
+			task = allocateRecursiveTask();
+		} else {
+			task = tryAllocateTask();
+		}
+
+		task.setData(event)
+				.setErrorConsumer(errorConsumer)
+				.setEventConsumer(eventConsumer);
+
+		if (!isInContext) {
+			execute(task);
+		} else {
+			scheduleLater(task);
+		}
+	}
+
+	@Override
+	public final <E> void dispatch(E event,
+	                               Consumer<E> eventConsumer,
+	                               Consumer<Throwable> errorConsumer) {
+
+		Assert.isTrue(alive(), "This Dispatcher has been shut down.");
+		Assert.isTrue(eventConsumer != null, "The signal consumer has not been passed.");
+		boolean isInContext = inContext();
+		Task task;
+		if (isInContext) {
+			task = allocateRecursiveTask();
+		} else {
+			task = allocateTask();
+		}
+
+		task.setData(event)
+				.setErrorConsumer(errorConsumer)
+				.setEventConsumer(eventConsumer);
+
+		if (!isInContext) {
+			execute(task);
+		} else {
+			scheduleLater(task);
+		}
+	}
+
+	@Override
+	public void execute(final Runnable command) {
+		dispatch(null, new Consumer<Object>() {
+			@Override
+			public void accept(Object ev) {
+				command.run();
+			}
+		}, null);
+	}
+
+	protected void scheduleLater(final Task task){
+	}
+
+	protected Task tryAllocateTask() throws InsufficientCapacityException {
+		return allocateTask();
+	}
+
+	protected abstract Task allocateTask();
+
+	protected abstract Task allocateRecursiveTask();
+
+	protected abstract void execute(Task task);
+
+	@SuppressWarnings("unchecked")
+	protected static void route(Task task) {
+		try {
+			if (task.eventConsumer == null) return;
+
+			task.eventConsumer.accept(task.data);
+
+		} catch (Exception e) {
+			if (task.errorConsumer != null) {
+
+				task.errorConsumer.accept(e);
+
+			} else if (Environment.alive()) {
+
+				Environment.get().routeError(e);
+
+			}
+		} finally {
+			task.recycle();
+		}
 	}
 
 	@Override
 	public String toString() {
-		return value;
+		return getClass().getSimpleName().replaceAll("Dispatcher", "");
+	}
+
+	public abstract class Task implements Runnable, Recyclable {
+
+		protected volatile Object              data;
+		protected volatile Consumer            eventConsumer;
+		protected volatile Consumer<Throwable> errorConsumer;
+
+		public Task setData(Object data) {
+			this.data = data;
+			return this;
+		}
+
+		public Task setEventConsumer(Consumer<?> eventConsumer) {
+			this.eventConsumer = eventConsumer;
+			return this;
+		}
+
+		public Task setErrorConsumer(Consumer<Throwable> errorConsumer) {
+			this.errorConsumer = errorConsumer;
+			return this;
+		}
+
+		@Override
+		public void recycle() {
+			data = null;
+			errorConsumer = null;
+			eventConsumer = null;
+		}
+
 	}
 
 }
@@ -83,14 +603,8 @@ public class RecyclableString implements Recyclable {
 <code block>
 
 
+package reactor.core.alloc;
 
-package reactor.alloc;
-<code block>
-
-
-package reactor.alloc;
-
-import reactor.core.support.Recyclable;
 import reactor.fn.Supplier;
 
 import java.util.ArrayList;
@@ -144,8 +658,8 @@ public class ReferenceCountingAllocator<T extends Recyclable> implements Allocat
 
 		ref = references.get(next);
 		if (null == ref) {
-			
-			
+
+
 			refLock.lock();
 			try {
 				ref = new ReferenceCountingAllocatorReference<T>(factory.get(), next);
@@ -219,7 +733,7 @@ public class ReferenceCountingAllocator<T extends Recyclable> implements Allocat
 			try {
 				super.release(decr);
 				if (getReferenceCount() < 1) {
-					
+
 					leaseMask.clear(bit);
 				}
 			} finally {
@@ -233,32 +747,171 @@ public class ReferenceCountingAllocator<T extends Recyclable> implements Allocat
 <code block>
 
 
-package reactor.alloc;
+package reactor.core.alloc;
 
-import reactor.bus.Event;
-import reactor.fn.Supplier;
+import java.util.List;
 
 
-public class  EventFactorySupplier<T> implements Supplier<Event<T>> {
+public interface Allocator<T extends Recyclable> {
 
-  private final Class<T> klass;
 
-  public EventFactorySupplier(Class<T> klass) {
-    this.klass = klass;
-  }
+	Reference<T> allocate();
 
-  @Override
-  public Event<T> get() {
-    return new Event<T>(klass);
-  }
+
+	List<Reference<T>> allocateBatch(int size);
+
+
+	void release(List<Reference<T>> batch);
+
 }
 
 <code block>
 
 
-package reactor.alloc;
+package reactor.core.alloc;
 
-import reactor.core.support.Recyclable;
+
+public interface Recyclable {
+
+
+	void recycle();
+
+}
+
+<code block>
+
+
+
+package reactor.core.alloc;
+<code block>
+
+
+package reactor.core.alloc;
+
+import reactor.fn.Supplier;
+
+
+public interface Reference<T extends Recyclable> extends Supplier<T> {
+
+
+	long getAge();
+
+
+	int getReferenceCount();
+
+
+	void retain();
+
+
+	void retain(int incr);
+
+
+	void release();
+
+
+	void release(int decr);
+
+}
+
+<code block>
+
+
+package reactor.core.alloc;
+
+
+public class RecyclableString implements Recyclable {
+
+	private volatile String value = "";
+
+	public void setValue(String value) {
+		this.value = (null == value ? "" : value);
+	}
+
+	@Override
+	public void recycle() {
+		this.value = "";
+	}
+
+	@Override
+	public String toString() {
+		return value;
+	}
+
+}
+
+<code block>
+
+
+package reactor.core.alloc;
+
+import reactor.fn.timer.TimeUtils;
+
+
+public abstract class AbstractReference<T extends Recyclable> implements Reference<T> {
+
+	private volatile int refCnt = 0;
+
+	private final long inception;
+	private final T    obj;
+
+	protected AbstractReference(T obj) {
+		this.obj = obj;
+		this.inception = TimeUtils.approxCurrentTimeMillis();
+	}
+
+	@Override
+	public long getAge() {
+		return TimeUtils.approxCurrentTimeMillis() - inception;
+	}
+
+	@Override
+	public int getReferenceCount() {
+		return refCnt;
+	}
+
+	@Override
+	public void retain() {
+		retain(1);
+	}
+
+	@Override
+	public void retain(int incr) {
+		refCnt += incr;
+	}
+
+	@Override
+	public void release() {
+		release(1);
+	}
+
+	@Override
+	public void release(int decr) {
+		refCnt -= Math.min(decr, refCnt);
+		if(refCnt < 1) {
+			obj.recycle();
+		}
+	}
+
+	@Override
+	public T get() {
+		return obj;
+	}
+
+	@Override
+	public String toString() {
+		return "Reference{" +
+				"refCnt=" + refCnt +
+				", inception=" + inception +
+				", obj=" + obj +
+				'}';
+	}
+
+}
+
+<code block>
+
+
+package reactor.core.alloc;
 
 
 public class RecyclableNumber extends Number implements Recyclable {
@@ -311,31 +964,2070 @@ public class RecyclableNumber extends Number implements Recyclable {
 <code block>
 
 
+package reactor.io.buffer;
+
+import reactor.core.alloc.Recyclable;
+import reactor.core.support.Assert;
+import reactor.fn.Supplier;
+
+import javax.annotation.concurrent.NotThreadSafe;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.BufferOverflowException;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+
+
+@NotThreadSafe
+public class Buffer implements Recyclable,
+		Comparable<Buffer>,
+		Iterable<Byte>,
+		ReadableByteChannel,
+		WritableByteChannel {
+
+
+	public static int SMALL_BUFFER_SIZE = Integer.parseInt(
+			System.getProperty("reactor.io.defaultBufferSize", "" + 1024 * 16)
+	);
+
+
+	public static int MAX_BUFFER_SIZE = Integer.parseInt(
+			System.getProperty("reactor.io.maxBufferSize", "" + 1024 * 1000 * 16)
+	);
+
+	private static final Charset UTF8 = Charset.forName("UTF-8");
+	private final boolean        dynamic;
+	private       ByteBuffer     buffer;
+	private       CharsetDecoder decoder;
+	private       CharBuffer     chars;
+	private       int            position;
+	private       int            limit;
+
+
+	public Buffer() {
+		this.dynamic = true;
+	}
+
+
+	public Buffer(int atLeast, boolean fixed) {
+		if (fixed) {
+			if (atLeast <= MAX_BUFFER_SIZE) {
+				this.buffer = ByteBuffer.allocate(atLeast);
+			} else {
+				throw new IllegalArgumentException("Requested buffer size exceeds maximum allowed (" + MAX_BUFFER_SIZE + ")");
+			}
+		} else {
+			ensureCapacity(atLeast);
+		}
+		this.dynamic = !fixed;
+	}
+
+
+	public Buffer(Buffer bufferToCopy) {
+		this.dynamic = bufferToCopy.dynamic;
+		this.buffer = bufferToCopy.buffer.duplicate();
+	}
+
+
+	public Buffer(ByteBuffer bufferToStartWith) {
+		this.dynamic = true;
+		this.buffer = bufferToStartWith;
+	}
+
+
+	@SuppressWarnings("resource")
+	public static Buffer wrap(byte[] bytes) {
+		return new Buffer(bytes.length, true)
+				.append(bytes)
+				.flip();
+	}
+
+
+	@SuppressWarnings("resource")
+	public static Buffer wrap(String str, boolean fixed) {
+		if(fixed){
+			return wrap(str.getBytes());
+		}else {
+			return new Buffer(str.length(), false)
+			  .append(str)
+			  .flip();
+		}
+	}
+
+
+	public static Buffer wrap(String str) {
+		return wrap(str, true);
+	}
+
+
+	public static Integer parseInt(Buffer b, int start, int end) {
+		b.snapshot();
+
+		b.buffer.limit(end);
+		b.buffer.position(start);
+
+		Integer i = parseInt(b);
+
+		b.reset();
+
+		return i;
+	}
+
+
+	public static Integer parseInt(Buffer b) {
+		if (b.remaining() == 0) {
+			return null;
+		}
+
+		b.snapshot();
+		int len = b.remaining();
+
+		int num = 0;
+		int dec = 1;
+		for (int i = (b.position + len); i > b.position; ) {
+			char c = (char) b.buffer.get(--i);
+			num += Character.getNumericValue(c) * dec;
+			dec *= 10;
+		}
+
+		b.reset();
+
+		return num;
+	}
+
+
+	public static Long parseLong(Buffer b, int start, int end) {
+		int origPos = b.buffer.position();
+		int origLimit = b.buffer.limit();
+
+		b.buffer.position(start);
+		b.buffer.limit(end);
+
+		Long l = parseLong(b);
+
+		b.buffer.position(origPos);
+		b.buffer.limit(origLimit);
+
+		return l;
+	}
+
+
+	public static Long parseLong(Buffer b) {
+		if (b.remaining() == 0) {
+			return null;
+		}
+		ByteBuffer bb = b.buffer;
+		int origPos = bb.position();
+		int len = bb.remaining();
+
+		long num = 0;
+		int dec = 1;
+		for (int i = len; i > 0; ) {
+			char c = (char) bb.get(--i);
+			num += Character.getNumericValue(c) * dec;
+			dec *= 10;
+		}
+
+		bb.position(origPos);
+
+		return num;
+	}
+
+	@Override
+	public void recycle() {
+		if (null != buffer) {
+			buffer.position(0);
+			position = 0;
+			limit = buffer.capacity();
+			buffer.limit(limit);
+		}
+	}
+
+
+	public final boolean isDynamic() {
+		return dynamic;
+	}
+
+
+	public final int position() {
+		return (null == buffer ? 0 : buffer.position());
+	}
+
+
+	public Buffer position(int pos) {
+		if (null != buffer) {
+			buffer.position(pos);
+		}
+		return this;
+	}
+
+
+	public Buffer limit(int limit) {
+		if (null != buffer) {
+			buffer.limit(limit);
+		}
+		return this;
+	}
+
+
+	public Buffer skip(int len) {
+		if (len < 0) {
+			throw new IllegalArgumentException("len must >= 0");
+		}
+		if (null != buffer) {
+			int pos = buffer.position();
+			buffer.position(pos + len);
+		}
+		return this;
+	}
+
+
+	public int limit() {
+		return (null == buffer ? 0 : buffer.limit());
+	}
+
+
+	public int capacity() {
+		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.capacity());
+	}
+
+
+	public int remaining() {
+		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.remaining());
+	}
+
+
+	public Buffer clear() {
+		if (null != buffer) {
+			buffer.position(0);
+			buffer.limit(buffer.capacity());
+		}
+		return this;
+	}
+
+
+	public Buffer compact() {
+		if (null != buffer) {
+			buffer.compact();
+		}
+		return this;
+	}
+
+
+	public Buffer flip() {
+		if (null != buffer) {
+			buffer.flip();
+		}
+		return this;
+	}
+
+
+	public Buffer rewind() {
+		if (null != buffer) {
+			buffer.rewind();
+		}
+		return this;
+	}
+
+
+	public Buffer rewind(int len) {
+		if (len < 0) {
+			throw new IllegalArgumentException("len must >= 0");
+		}
+		if (null != buffer) {
+			int pos = buffer.position();
+			buffer.position(pos - len);
+		}
+		return this;
+	}
+
+
+	public Buffer duplicate() {
+		return new Buffer(buffer.duplicate());
+	}
+
+
+	public Buffer copy() {
+		if (buffer == null) return new Buffer();
+		snapshot();
+		Buffer b = new Buffer(buffer.remaining(), false);
+		b.append(buffer);
+		reset();
+
+		return b.flip();
+	}
+
+
+	public Buffer prepend(Buffer b) {
+		if (null == b) {
+			return this;
+		}
+		return prepend(b.buffer);
+	}
+
+
+	public Buffer prepend(String s) {
+		if (null == s) {
+			return this;
+		}
+		return prepend(s.getBytes());
+	}
+
+
+	public Buffer prepend(byte[] bytes) {
+		shift(bytes.length);
+		buffer.put(bytes);
+		reset();
+		return this;
+	}
+
+
+	public Buffer prepend(ByteBuffer b) {
+		if (null == b) {
+			return this;
+		}
+		shift(b.remaining());
+		this.buffer.put(b);
+		reset();
+		return this;
+
+	}
+
+
+	public Buffer prepend(byte b) {
+		shift(1);
+		this.buffer.put(b);
+		reset();
+		return this;
+	}
+
+
+	public Buffer prepend(char c) {
+		shift(2);
+		this.buffer.putChar(c);
+		reset();
+		return this;
+	}
+
+
+	public Buffer prepend(short s) {
+		shift(2);
+		this.buffer.putShort(s);
+		reset();
+		return this;
+	}
+
+
+	public Buffer prepend(int i) {
+		shift(4);
+		this.buffer.putInt(i);
+		reset();
+		return this;
+	}
+
+
+	public Buffer prepend(long l) {
+		shift(8);
+		this.buffer.putLong(l);
+		reset();
+		return this;
+	}
+
+
+	public Buffer append(String s) {
+		ensureCapacity(s.length());
+		buffer.put(s.getBytes());
+		return this;
+	}
+
+
+	public Buffer append(short s) {
+		ensureCapacity(2);
+		buffer.putShort(s);
+		return this;
+	}
+
+
+	public Buffer append(int i) {
+		ensureCapacity(4);
+		buffer.putInt(i);
+		return this;
+	}
+
+
+	public Buffer append(long l) {
+		ensureCapacity(8);
+		buffer.putLong(l);
+		return this;
+	}
+
+
+	public Buffer append(char c) {
+		ensureCapacity(2);
+		buffer.putChar(c);
+		return this;
+	}
+
+
+	public Buffer append(ByteBuffer... buffers) {
+		for (ByteBuffer bb : buffers) {
+			if (bb != null) {
+				ensureCapacity(bb.remaining());
+				buffer.put(bb);
+			}
+		}
+		return this;
+	}
+
+
+	public Buffer append(Buffer... buffers) {
+		for (Buffer b : buffers) {
+			int pos = position();
+			int len = b.remaining();
+			ensureCapacity(len);
+			if (b.byteBuffer() != null) {
+				buffer.put(b.byteBuffer());
+				buffer.position(pos + len);
+			}
+		}
+		return this;
+	}
+
+
+	public Buffer append(byte b) {
+		ensureCapacity(1);
+		buffer.put(b);
+		return this;
+	}
+
+
+	public Buffer append(byte[] b) {
+		ensureCapacity(b.length);
+		buffer.put(b);
+		return this;
+	}
+
+
+	public Buffer append(byte[] b, int start, int len) {
+		ensureCapacity(b.length);
+		buffer.put(b, start, len);
+		return this;
+	}
+
+
+	public byte first() {
+		snapshot();
+		if (this.position > 0) {
+			buffer.position(0); 
+		}
+		byte b = buffer.get(); 
+		reset(); 
+		return b;
+	}
+
+
+	public byte last() {
+		int pos = buffer.position();
+		int limit = buffer.limit();
+		buffer.position(limit - 1); 
+		byte b = buffer.get(); 
+		buffer.position(pos); 
+		return b;
+	}
+
+
+	public byte read() {
+		if (null != buffer) {
+			return buffer.get();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public Buffer read(byte[] b) {
+		if (null != buffer) {
+			buffer.get(b);
+		}
+		return this;
+	}
+
+
+	public short readShort() {
+		if (null != buffer) {
+			return buffer.getShort();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public int readInt() {
+		if (null != buffer) {
+			return buffer.getInt();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public float readFloat() {
+		if (null != buffer) {
+			return buffer.getFloat();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public double readDouble() {
+		if (null != buffer) {
+			return buffer.getDouble();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public long readLong() {
+		if (null != buffer) {
+			return buffer.getLong();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public char readChar() {
+		if (null != buffer) {
+			return buffer.getChar();
+		}
+		throw new BufferUnderflowException();
+	}
+
+
+	public void snapshot() {
+		this.position = buffer.position();
+		this.limit = buffer.limit();
+	}
+
+
+	public Buffer reset() {
+		buffer.limit(limit);
+		buffer.position(position);
+		return this;
+	}
+
+	@Override
+	public Iterator<Byte> iterator() {
+		return new Iterator<Byte>() {
+			@Override
+			public boolean hasNext() {
+				return buffer.remaining() > 0;
+			}
+
+			@Override
+			public Byte next() {
+				return buffer.get();
+			}
+
+			@Override
+			public void remove() {
+
+			}
+		};
+	}
+
+	@Override
+	public int read(ByteBuffer dst) throws IOException {
+		snapshot();
+		if (dst.remaining() < this.limit) {
+			buffer.limit(dst.remaining());
+		}
+		int pos = dst.position();
+		dst.put(buffer);
+		buffer.limit(this.limit);
+		return dst.position() - pos;
+	}
+
+	@Override
+	public int write(ByteBuffer src) throws IOException {
+		int pos = src.position();
+		append(src);
+		return src.position() - pos;
+	}
+
+	@Override
+	public boolean isOpen() {
+		return isDynamic();
+	}
+
+	@Override
+	public void close() throws IOException {
+		clear();
+	}
+
+
+	public String asString() {
+		if (null != buffer) {
+			return decode();
+		} else {
+			return null;
+		}
+	}
+
+
+	public String substring(int start, int end) {
+		snapshot();
+
+		buffer.limit((end > start ? end : this.limit));
+		buffer.position(start);
+		String s = asString();
+
+		reset();
+		return s;
+	}
+
+
+	public byte[] asBytes() {
+		if (null != buffer) {
+			snapshot();
+			byte[] b = new byte[buffer.remaining()];
+			buffer.get(b);
+			reset();
+			return b;
+		} else {
+			return null;
+		}
+	}
+
+
+	public InputStream inputStream() {
+		return new BufferInputStream();
+	}
+
+
+	public Buffer slice(int start, int len) {
+		snapshot();
+		ByteBuffer bb = ByteBuffer.allocate(len);
+		buffer.position(start);
+		bb.put(buffer);
+		reset();
+		bb.flip();
+		return new Buffer(bb);
+	}
+
+
+	public List<View> split(int delimiter) {
+		return split(new ArrayList<View>(), delimiter, false);
+	}
+
+
+	public List<View> split(List<View> views, int delimiter) {
+		return split(views, delimiter, false);
+	}
+
+
+	public List<View> split(int delimiter, boolean stripDelimiter) {
+		return split(new ArrayList<View>(), delimiter, stripDelimiter);
+	}
+
+
+	public List<View> split(List<View> views, int delimiter, boolean stripDelimiter) {
+		snapshot();
+
+		int start = this.position;
+		for (byte b : this) {
+			if (b == delimiter) {
+				int end = stripDelimiter ? buffer.position() - 1 : buffer.position();
+				views.add(createView(start, end));
+				start = end + (stripDelimiter ? 1 : 0);
+			}
+		}
+		if (start != buffer.position()) {
+			buffer.position(start);
+		}
+
+		reset();
+
+		return views;
+	}
+
+
+	public Iterable<View> split(Buffer delimiter) {
+		return split(new ArrayList<View>(), delimiter, false);
+	}
+
+
+	public Iterable<View> split(Buffer delimiter, boolean stripDelimiter) {
+		return split(new ArrayList<View>(), delimiter, stripDelimiter);
+	}
+
+
+	public Iterable<View> split(List<View> views, Buffer delimiter, boolean stripDelimiter) {
+		snapshot();
+
+		byte[] delimBytes = delimiter.asBytes();
+		if (delimBytes.length == 0) {
+			return Collections.emptyList();
+		}
+
+		int start = this.position;
+		for (byte b : this) {
+			if (b != delimBytes[0]) {
+				continue;
+			}
+			int end = -1;
+			for (int i = 1; i < delimBytes.length; i++) {
+				if (read() == delimBytes[i]) {
+					end = stripDelimiter ? buffer.position() - delimBytes.length : buffer.position();
+				} else {
+					end = -1;
+					break;
+				}
+			}
+			if (end > 0) {
+				views.add(createView(start, end));
+				start = end + (stripDelimiter ? delimBytes.length : 0);
+			}
+		}
+		if (start != buffer.position()) {
+			buffer.position(start);
+		}
+
+		reset();
+
+		return views;
+	}
+
+
+	public int indexOf(byte b) {
+		return indexOf(b, buffer.position(), buffer.remaining());
+	}
+
+
+	public int indexOf(byte b, int start, int end) {
+		snapshot();
+		if (buffer.position() != start) {
+			buffer.position(start);
+		}
+		int pos = -1;
+		while (buffer.hasRemaining() && buffer.position() < end) {
+			if (buffer.get() == b) {
+				pos = buffer.position();
+				break;
+			}
+		}
+		reset();
+		return pos;
+	}
+
+
+	public View createView() {
+		snapshot();
+		return new View(position, limit);
+	}
+
+
+	public View createView(int start, int end) {
+		snapshot();
+		return new View(start, end);
+	}
+
+
+	public List<View> slice(int... positions) {
+		Assert.notNull(positions, "Positions cannot be null.");
+		if (positions.length == 0) {
+			return Collections.emptyList();
+		}
+
+		snapshot();
+
+		List<View> views = new ArrayList<View>();
+		int len = positions.length;
+		for (int i = 0; i < len; i++) {
+			int start = positions[i];
+			int end = (i + 1 < len ? positions[++i] : this.limit);
+			views.add(createView(start, end));
+			reset();
+		}
+
+		return views;
+	}
+
+
+	public ByteBuffer byteBuffer() {
+		return buffer;
+	}
+
+
+	public boolean isDelimitingBuffer(){
+		return this == DELIMITING_BUFFER;
+	}
+
+	@Override
+	public String toString() {
+		return (null != buffer ? buffer.toString() : "<EMPTY>");
+	}
+
+	@Override
+	public int compareTo(Buffer buffer) {
+		return (null != buffer ? this.buffer.compareTo(buffer.buffer) : -1);
+	}
+
+	private synchronized void ensureCapacity(int atLeast) {
+		if (null == buffer) {
+			buffer = ByteBuffer.allocate(Math.max(atLeast, SMALL_BUFFER_SIZE));
+			return;
+		}
+		int pos = buffer.position();
+		int cap = buffer.capacity();
+		if (dynamic) {
+			int neededCapacity = pos + atLeast;
+			if (neededCapacity > cap) {
+
+				expand(neededCapacity - cap);
+			}
+			buffer.limit(Math.max(neededCapacity, buffer.limit()));
+		} else if (pos + SMALL_BUFFER_SIZE > MAX_BUFFER_SIZE) {
+			throw new BufferOverflowException();
+		}
+	}
+
+	private void expand(int expandSize) {
+		snapshot();
+		ByteBuffer newBuff = (buffer.isDirect()
+				? ByteBuffer.allocateDirect(buffer.capacity() + expandSize)
+				: ByteBuffer.allocate(buffer.capacity() + expandSize));
+		buffer.flip();
+		newBuff.put(buffer);
+		buffer = newBuff;
+		reset();
+	}
+
+	private String decode() {
+		if (null == decoder) {
+			decoder = UTF8.newDecoder();
+		}
+		snapshot();
+		try {
+			if (null == chars || chars.remaining() < buffer.remaining()) {
+				chars = CharBuffer.allocate(buffer.remaining());
+			} else {
+				chars.rewind();
+			}
+			decoder.reset();
+			CoderResult cr = decoder.decode(buffer, chars, true);
+			if (cr.isUnderflow()) {
+				decoder.flush(chars);
+			}
+			chars.flip();
+
+			return chars.toString();
+		} finally {
+			reset();
+		}
+	}
+
+	private void shift(int right) {
+		ByteBuffer currentBuffer;
+		if (null == buffer) {
+			ensureCapacity(right);
+			currentBuffer = buffer;
+		} else {
+			currentBuffer = buffer.slice();
+		}
+
+		int len = buffer.remaining();
+		int pos = buffer.position();
+		ensureCapacity(right + len);
+
+		buffer.position(pos + right);
+		buffer.put(currentBuffer);
+		buffer.position(pos);
+
+		snapshot();
+	}
+
+	private class BufferInputStream extends InputStream {
+		ByteBuffer buffer = Buffer.this.buffer.slice();
+
+		@Override
+		public int read(byte[] b) throws IOException {
+			int pos = buffer.position();
+			buffer.get(b);
+			syncPos();
+			return buffer.position() - pos;
+		}
+
+		@Override
+		public int read(byte[] b, int off, int len) throws IOException {
+			if (null == buffer || buffer.remaining() == 0) {
+				return -1;
+			}
+			byte[] bytes = asBytes();
+			int bytesLen = bytes.length;
+			System.arraycopy(bytes, 0, b, off, bytesLen);
+			if (len < bytesLen) {
+				buffer.position(position + len);
+			}
+			syncPos();
+			return bytesLen;
+		}
+
+		@Override
+		public long skip(long n) throws IOException {
+			if (n < buffer.remaining()) {
+				throw new IOException(new BufferUnderflowException());
+			}
+			int pos = buffer.position();
+			buffer.position((int) (pos + n));
+			syncPos();
+			return buffer.position() - pos;
+		}
+
+		@Override
+		public int available() throws IOException {
+			return buffer.remaining();
+		}
+
+		@Override
+		public void close() throws IOException {
+			buffer.position(buffer.limit());
+			syncPos();
+		}
+
+		@Override
+		public synchronized void mark(int readlimit) {
+			buffer.mark();
+			int pos = buffer.position();
+			int max = buffer.capacity() - pos;
+			int newLimit = Math.min(max, pos + readlimit);
+			buffer.limit(newLimit);
+		}
+
+		@Override
+		public synchronized void reset() throws IOException {
+			buffer.reset();
+			syncPos();
+		}
+
+		@Override
+		public boolean markSupported() {
+			return true;
+		}
+
+		@Override
+		public int read() throws IOException {
+			int b = buffer.get();
+			syncPos();
+			return b;
+		}
+
+		private void syncPos() {
+			int oldPos = Buffer.this.buffer.position();
+			Buffer.this.buffer.position(buffer.position() + oldPos);
+		}
+	}
+
+
+	public class View implements Supplier<Buffer> {
+		private final int start;
+		private final int end;
+
+		private View(int start, int end) {
+			this.start = start;
+			this.end = end;
+		}
+
+
+		public int getStart() {
+			return start;
+		}
+
+
+		public int getEnd() {
+			return end;
+		}
+
+		@Override
+		public Buffer get() {
+			buffer.limit(end);
+			buffer.position(start);
+			return Buffer.this;
+		}
+	}
+
+
+	public static final Buffer DELIMITING_BUFFER = new Buffer();
+
+}
+
+<code block>
+
+package reactor.rx.action;
+
+import org.reactivestreams.Processor;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
+import reactor.Environment;
+import reactor.core.Dispatcher;
+import reactor.core.alloc.Recyclable;
+import reactor.core.dispatch.SynchronousDispatcher;
+import reactor.core.dispatch.TailRecurseDispatcher;
+import reactor.core.processor.CancelException;
+import reactor.core.queue.CompletableLinkedQueue;
+import reactor.core.queue.CompletableQueue;
+import reactor.core.support.Exceptions;
+import reactor.core.support.NonBlocking;
+import reactor.core.support.SpecificationExceptions;
+import reactor.fn.Consumer;
+import reactor.fn.Supplier;
+import reactor.fn.tuple.Tuple;
+import reactor.fn.tuple.Tuple2;
+import reactor.rx.Stream;
+import reactor.rx.StreamUtils;
+import reactor.rx.action.combination.FanInAction;
+import reactor.rx.broadcast.Broadcaster;
+import reactor.rx.subscription.DropSubscription;
+import reactor.rx.subscription.FanOutSubscription;
+import reactor.rx.subscription.PushSubscription;
+import reactor.rx.subscription.ReactiveSubscription;
+
+
+public abstract class Action<I, O> extends Stream<O>
+		implements Processor<I, O>, Consumer<I>, Recyclable, Control {
+
+
+	public static final int RESERVED_SLOTS = 4;
+	public static final int NO_CAPACITY    = -1;
+
+
+	protected PushSubscription<I> upstreamSubscription;
+	protected PushSubscription<O> downstreamSubscription;
+
+	protected long capacity;
+
+	public static void checkRequest(long n) {
+		if (n <= 0l) {
+			throw SpecificationExceptions.spec_3_09_exception(n);
+		}
+	}
+
+	public static long evaluateCapacity(long n) {
+		return n != Long.MAX_VALUE ?
+				Math.max(Action.RESERVED_SLOTS, n - Action.RESERVED_SLOTS) :
+				Long.MAX_VALUE;
+	}
+
+	public Action() {
+		this(Long.MAX_VALUE);
+	}
+
+	public Action(long batchSize) {
+		this.capacity = batchSize;
+	}
+
+
+
+
+	@Override
+	public void subscribe(final Subscriber<? super O> subscriber) {
+		try {
+			final NonBlocking asyncSubscriber = NonBlocking.class.isAssignableFrom(subscriber.getClass()) ?
+					(NonBlocking) subscriber :
+					null;
+
+			boolean isReactiveCapacity = null == asyncSubscriber || asyncSubscriber.isReactivePull(getDispatcher(),
+					capacity);
+
+			final PushSubscription<O> subscription = createSubscription(subscriber,
+					isReactiveCapacity);
+
+			if (subscription == null)
+				return;
+
+			if (null != asyncSubscriber && isReactiveCapacity) {
+				subscription.maxCapacity(asyncSubscriber.getCapacity());
+			}
+
+			subscribeWithSubscription(subscriber, subscription);
+
+		}catch (Throwable throwable){
+			Exceptions.throwIfFatal(throwable);
+			subscriber.onError(throwable);
+		}
+	}
+
+	@Override
+	public void onSubscribe(Subscription subscription) {
+		if (subscription == null) {
+			throw new NullPointerException("Spec 2.13: Subscription cannot be null");
+		}
+
+		final boolean hasRequestTracker = upstreamSubscription != null;
+
+
+		if (hasRequestTracker) {
+			subscription.cancel();
+			return;
+		}
+
+		upstreamSubscription = createTrackingSubscription(subscription);
+		upstreamSubscription.maxCapacity(getCapacity());
+
+		try {
+			doOnSubscribe(subscription);
+			doStart();
+		} catch (Throwable t) {
+			Exceptions.throwIfFatal(t);
+			doError(t);
+		}
+	}
+
+	protected final void doStart() {
+		final PushSubscription<O> downSub = downstreamSubscription;
+		if (downSub != null) {
+				downSub.start();
+		}
+	}
+
+	@Override
+	public final void accept(I i) {
+		onNext(i);
+	}
+
+	@Override
+	public void onNext(I ev) {
+		if (ev == null) {
+			throw new NullPointerException("Spec 2.13: Signal cannot be null");
+		}
+
+		if (upstreamSubscription == null && downstreamSubscription == null) {
+			throw CancelException.get();
+		}
+
+		try {
+			doNext(ev);
+		} catch (CancelException uae){
+			throw uae;
+		} catch (Throwable cause) {
+			doError(Exceptions.addValueAsLastCause(cause, ev));
+		}
+	}
+
+	@Override
+	public void onComplete() {
+		try {
+			doComplete();
+			doShutdown();
+		} catch (Throwable t) {
+			doError(t);
+		}
+	}
+
+	@Override
+	public void onError(Throwable cause) {
+		if (cause == null) {
+			throw new NullPointerException("Spec 2.13: Signal cannot be null");
+		}
+		if (upstreamSubscription != null) upstreamSubscription.updatePendingRequests(0l);
+		doError(cause);
+		doShutdown();
+	}
+
+
+
+	@Override
+	public Action<I, O> capacity(long elements) {
+		Dispatcher dispatcher = getDispatcher();
+		if (dispatcher != SynchronousDispatcher.INSTANCE && dispatcher.getClass() != TailRecurseDispatcher.class) {
+			long dispatcherCapacity = evaluateCapacity(dispatcher.backlogSize());
+			capacity = elements > dispatcherCapacity ? dispatcherCapacity : elements;
+		} else {
+			capacity = elements;
+		}
+
+		if (upstreamSubscription != null) {
+			upstreamSubscription.maxCapacity(capacity);
+		}
+		return this;
+	}
+
+
+	protected void broadcastNext(final O ev) {
+
+		PushSubscription<O> downstreamSubscription = this.downstreamSubscription;
+		if (downstreamSubscription == null) {
+				throw CancelException.get();
+		}
+
+		try {
+			downstreamSubscription.onNext(ev);
+		} catch(CancelException ce){
+			throw ce;
+		} catch (Throwable throwable) {
+			doError(Exceptions.addValueAsLastCause(throwable, ev));
+		}
+	}
+
+
+	protected void broadcastError(final Throwable throwable) {
+
+
+
+		if (downstreamSubscription == null) {
+			if (Environment.alive()) {
+				Environment.get().routeError(throwable);
+			}
+			return;
+		}
+
+		downstreamSubscription.onError(throwable);
+	}
+
+
+	protected void broadcastComplete() {
+
+		if (downstreamSubscription == null) {
+			return;
+		}
+
+		try {
+			downstreamSubscription.onComplete();
+		} catch (Throwable throwable) {
+			doError(throwable);
+		}
+	}
+
+	@Override
+	public boolean isPublishing() {
+		PushSubscription<I> parentSubscription = upstreamSubscription;
+		return parentSubscription != null && !parentSubscription.isComplete();
+	}
+
+
+	public void cancel() {
+		PushSubscription<I> parentSub = upstreamSubscription;
+		if (parentSub != null) {
+			upstreamSubscription = null;
+			parentSub.cancel();
+		}
+	}
+
+	@Override
+	public void requestAll() {
+		if (downstreamSubscription == null) {
+			requestMore(Long.MAX_VALUE);
+		}
+	}
+
+
+	@SuppressWarnings("unchecked")
+	public StreamUtils.StreamVisitor debug() {
+		return StreamUtils.browse(findOldestUpstream(Action.class));
+	}
+
+
+
+
+	public final <E> Action<I, O> control(Stream<E> controlStream, final Consumer<Tuple2<Action<I, O>,
+			? super E>> controller) {
+		final Action<I, O> thiz = this;
+		controlStream.consume(new Consumer<E>() {
+			@Override
+			public void accept(E e) {
+				controller.accept(Tuple.of(thiz, e));
+			}
+		});
+		return this;
+	}
+
+	@Override
+	public final Stream<O> onOverflowBuffer(final Supplier<? extends CompletableQueue<O>> queueSupplier) {
+		return lift(new Supplier<Action<O, O>>() {
+			@Override
+			public Action<O, O> get() {
+				Broadcaster<O> newStream = Broadcaster.<O>create(getEnvironment(), getDispatcher()).capacity(capacity);
+				if (queueSupplier == null) {
+					subscribeWithSubscription(newStream, new DropSubscription<O>(Action.this, newStream) {
+						@Override
+						public void request(long elements) {
+							super.request(elements);
+							requestUpstream(capacity, isComplete(), elements);
+						}
+					});
+				} else {
+					subscribeWithSubscription(newStream,
+							createSubscription(newStream, queueSupplier.get()));
+				}
+				return newStream;
+			}
+		});
+	}
+
+	@SuppressWarnings("unchecked")
+	@Override
+	public final <E> CompositeAction<E, O> combine() {
+		final Action<E, ?> subscriber = (Action<E, ?>) findOldestUpstream(Action.class);
+		subscriber.upstreamSubscription = null;
+		return new CompositeAction<E, O>(subscriber, this);
+	}
+
+
+	public final Consumer<?> toBroadcastCompleteConsumer() {
+		return new Consumer<Object>() {
+			@Override
+			public void accept(Object o) {
+				broadcastComplete();
+			}
+		};
+	}
+
+
+
+	public final Consumer<O> toBroadcastNextConsumer() {
+		return new Consumer<O>() {
+			@Override
+			public void accept(O o) {
+				broadcastNext(o);
+			}
+		};
+	}
+
+
+	public final Consumer<Throwable> toBroadcastErrorConsumer() {
+		return new Consumer<Throwable>() {
+			@Override
+			public void accept(Throwable o) {
+				broadcastError(o);
+			}
+		};
+	}
+
+
+	@SuppressWarnings("unchecked")
+	public <P extends Publisher<?>> P findOldestUpstream(Class<P> clazz) {
+		Action<?, ?> that = this;
+
+		while (inspectPublisher(that, Action.class)) {
+
+			that = (Action<?, ?>) that.upstreamSubscription.getPublisher();
+
+			if (that != null) {
+
+				if (FanInAction.class.isAssignableFrom(that.getClass())) {
+					that = ((FanInAction) that).dynamicMergeAction() != null ? ((FanInAction) that).dynamicMergeAction() : that;
+				}
+			}
+		}
+
+		if (inspectPublisher(that, clazz)) {
+			return (P) ((PushSubscription<?>) that.upstreamSubscription).getPublisher();
+		} else {
+			return (P) that;
+		}
+	}
+
+
+
+	@Override
+	public final long getCapacity() {
+		return capacity;
+	}
+
+
+	public PushSubscription<I> getSubscription() {
+		return upstreamSubscription;
+	}
+
+
+
+	public final PushSubscription<O> downstreamSubscription() {
+		return downstreamSubscription;
+	}
+
+
+
+	@Override
+	public boolean cancelSubscription(final PushSubscription<O> subscription) {
+		if (this.downstreamSubscription == null) return false;
+
+		if (subscription == this.downstreamSubscription) {
+			this.downstreamSubscription = null;
+			cancel();
+			return true;
+		} else {
+			PushSubscription<O> dsub = this.downstreamSubscription;
+			if (FanOutSubscription.class.isAssignableFrom(dsub.getClass())) {
+				FanOutSubscription<O> fsub =
+						((FanOutSubscription<O>) this.downstreamSubscription);
+
+				if (fsub.remove(subscription) && fsub.isEmpty()) {
+					cancel();
+					return true;
+				}
+			}
+			return false;
+		}
+	}
+
+	protected PushSubscription<O> createSubscription(final Subscriber<? super O> subscriber, boolean reactivePull) {
+		return createSubscription(subscriber, reactivePull ? new CompletableLinkedQueue<O>() : null);
+	}
+
+	protected PushSubscription<O> createSubscription(final Subscriber<? super O> subscriber, CompletableQueue<O> queue) {
+		if (queue != null) {
+			return new ReactiveSubscription<O>(this, subscriber, queue) {
+
+				@Override
+				protected void onRequest(long elements) {
+					requestUpstream(capacity, buffer.isComplete(), elements);
+				}
+			};
+		} else {
+			return new PushSubscription<O>(this, subscriber) {
+				@Override
+				protected void onRequest(long elements) {
+					requestUpstream(NO_CAPACITY, isComplete(), elements);
+				}
+			};
+		}
+	}
+
+	protected void requestUpstream(long capacity, boolean terminated, long elements) {
+		if (upstreamSubscription != null && !terminated) {
+			requestMore(elements);
+		} else {
+			PushSubscription<O> _downstreamSubscription = downstreamSubscription;
+			if (_downstreamSubscription != null) {
+				_downstreamSubscription.updatePendingRequests(elements);
+			}
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	protected PushSubscription<I> createTrackingSubscription(Subscription subscription) {
+
+		if (!PushSubscription.class.isAssignableFrom(subscription.getClass())) {
+			return PushSubscription.wrap(subscription, this);
+		} else {
+			return ((PushSubscription<I>) subscription);
+		}
+	}
+
+	protected void doOnSubscribe(Subscription subscription) {
+	}
+
+	protected void doComplete() {
+		broadcastComplete();
+	}
+
+	abstract protected void doNext(I ev);
+
+	protected void doError(Throwable ev) {
+		if (downstreamSubscription != null) {
+			try {
+				downstreamSubscription.onError(ev);
+				return;
+			} catch (Throwable t) {
+				Environment.get().routeError(t);
+			}
+		}
+
+		if (Environment.alive()) {
+			Environment.get().routeError(ev);
+		}
+	}
+
+	@Override
+	public void requestMore(final long n) {
+		checkRequest(n);
+		if (upstreamSubscription != null) {
+			upstreamSubscription.request(n);
+		}
+	}
+
+
+	protected void subscribeWithSubscription(final Subscriber<? super O> subscriber, final PushSubscription<O>
+			subscription) {
+		try {
+			if (!addSubscription(subscription)) {
+				subscriber.onError(new IllegalStateException("The subscription cannot be linked to this Stream"));
+			} else {
+				subscription.markAsDeferredStart();
+				if (upstreamSubscription != null) {
+					subscription.start();
+				}
+			}
+		} catch (Exception e) {
+			Exceptions.throwIfFatal(e);
+			subscriber.onError(e);
+		}
+	}
+
+
+	@SuppressWarnings("unchecked")
+	protected boolean addSubscription(final PushSubscription<O> subscription) {
+		PushSubscription<O> currentSubscription = this.downstreamSubscription;
+		if (currentSubscription == null) {
+			this.downstreamSubscription = subscription;
+			return true;
+		} else if (currentSubscription.equals(subscription)) {
+			subscription.onError(SpecificationExceptions.spec_2_12_exception());
+			return false;
+		} else if (FanOutSubscription.class.isAssignableFrom(currentSubscription.getClass())) {
+			if (((FanOutSubscription<O>) currentSubscription).contains(subscription)) {
+				subscription.onError(SpecificationExceptions.spec_2_12_exception());
+				return false;
+			} else {
+				return ((FanOutSubscription<O>) currentSubscription).add(subscription);
+			}
+		} else {
+			this.downstreamSubscription = new FanOutSubscription<O>(this, currentSubscription, subscription);
+			return true;
+		}
+	}
+
+	protected void doShutdown() {
+
+	}
+
+	private boolean inspectPublisher(Action<?, ?> that, Class<?> actionClass) {
+		return that.upstreamSubscription != null
+				&& ((PushSubscription<?>) that.upstreamSubscription).getPublisher() != null
+				&& actionClass.isAssignableFrom(((PushSubscription<?>) that.upstreamSubscription).getPublisher().getClass());
+	}
+
+	@Override
+	public void recycle() {
+		downstreamSubscription = null;
+		upstreamSubscription = null;
+	}
+
+	@Override
+	@SuppressWarnings("unchecked")
+	public String toString() {
+		return "{" +
+				(capacity != Long.MAX_VALUE || upstreamSubscription == null ?
+						"{dispatcher=" + getDispatcher() +
+								((!SynchronousDispatcher.class.isAssignableFrom(getDispatcher().getClass()) ? (":" + getDispatcher()
+										.remainingSlots()) :
+										"")) +
+								", max-capacity=" + (capacity == Long.MAX_VALUE ? "infinite" : capacity) + "}"
+						: "") +
+				(upstreamSubscription != null ? upstreamSubscription : "") + '}';
+	}
+
+}
+
+<code block>
+
+
+package reactor.bus;
+
+import reactor.core.support.Assert;
+import reactor.core.support.Recyclable;
+import reactor.core.support.UUIDUtils;
+import reactor.fn.Consumer;
+import reactor.fn.tuple.Tuple;
+import reactor.fn.tuple.Tuple2;
+
+import java.io.Serializable;
+import java.util.*;
+
+
+public class Event<T> implements Serializable, Recyclable {
+
+  private static final long serialVersionUID = -2476263092040373361L;
+  private final transient Consumer<Throwable> errorConsumer;
+  private volatile        UUID                id;
+  private volatile        Headers             headers;
+  private volatile        Object              replyTo;
+  private volatile        Object              key;
+  private volatile        T                   data;
+
+
+  public Event(Class<T> klass) {
+    this.headers = null;
+    this.data = null;
+    this.errorConsumer = null;
+  }
+
+
+  public Event(Headers headers, T data) {
+    this.headers = headers;
+    this.data = data;
+    this.errorConsumer = null;
+  }
+
+
+  public Event(Headers headers, T data, Consumer<Throwable> errorConsumer) {
+    this.headers = headers;
+    this.data = data;
+    this.errorConsumer = errorConsumer;
+  }
+
+
+  public Event(T data) {
+    this.data = data;
+    this.errorConsumer = null;
+  }
+
+
+  public static <T> Event<T> wrap(T obj) {
+    return new Event<T>(obj);
+  }
+
+
+  public static <T> Event<T> wrap(T obj, Object replyToKey) {
+    return new Event<T>(obj).setReplyTo(replyToKey);
+  }
+
+
+  public synchronized UUID getId() {
+    if (null == id) {
+      id = UUIDUtils.create();
+    }
+    return id;
+  }
+
+
+  public synchronized Headers getHeaders() {
+    if (null == headers) {
+      headers = new Headers();
+    }
+    return headers;
+  }
+
+
+  public Object getReplyTo() {
+    return replyTo;
+  }
+
+
+  public Event<T> setReplyTo(Object replyTo) {
+    Assert.notNull(replyTo, "ReplyTo cannot be null.");
+    this.replyTo = replyTo;
+    return this;
+  }
+
+
+  public Object getKey() {
+    return key;
+  }
+
+
+  public Event<T> setKey(Object key) {
+    this.key = key;
+    return this;
+  }
+
+
+  public T getData() {
+    return data;
+  }
+
+
+  public Event<T> setData(T data) {
+    this.data = data;
+    return this;
+  }
+
+
+  public Consumer<Throwable> getErrorConsumer() {
+    return errorConsumer;
+  }
+
+
+  public Event<T> copy() {
+    return copy(data);
+  }
+
+
+  public <E> Event<E> copy(E data) {
+    if (null != replyTo) {
+      return new Event<E>(headers, data, errorConsumer).setReplyTo(replyTo);
+    } else {
+      return new Event<E>(headers, data, errorConsumer);
+    }
+  }
+
+
+  public void consumeError(Throwable throwable) {
+    if (null != errorConsumer) {
+      errorConsumer.accept(throwable);
+    }
+  }
+
+  @Override
+  public void recycle() {
+    this.id = null;
+    if (null != this.headers) {
+      this.headers.headers.clear();
+    }
+    this.replyTo = null;
+    this.key = null;
+    this.data = null;
+  }
+
+  public void override(Event<T> ev) {
+    this.id = ev.id;
+    this.headers = ev.headers;
+    this.replyTo = ev.replyTo;
+    this.data = ev.data;
+  }
+
+  @Override
+  public String toString() {
+    return "Event{" +
+        "id=" + id +
+        ", headers=" + headers +
+        ", replyTo=" + replyTo +
+        ", key=" + key +
+        ", data=" + data +
+        '}';
+  }
+
+
+  public static class Headers implements Serializable, Iterable<Tuple2<String, Object>> {
+
+
+    public static final String ORIGIN = "x-reactor-origin";
+
+    private static final long serialVersionUID = 4984692586458514948L;
+
+    private final Object monitor = UUIDUtils.create();
+    private final Map<String, Object> headers;
+
+    private Headers(boolean sealed, Map<String, Object> headers) {
+      Map<String, Object> copy = new TreeMap<String, Object>(String.CASE_INSENSITIVE_ORDER);
+      copyHeaders(headers, copy);
+      if (sealed) {
+        this.headers = Collections.unmodifiableMap(copy);
+      } else {
+        this.headers = copy;
+      }
+    }
+
+
+    public Headers(Map<String, Object> headers) {
+      this(false, headers);
+    }
+
+
+    public Headers() {
+      this(false, null);
+    }
+
+
+    public Headers setAll(Map<String, Object> headers) {
+      if (null == headers || headers.isEmpty()) {
+        return this;
+      } else {
+        synchronized (this.monitor) {
+          copyHeaders(headers, this.headers);
+        }
+      }
+      return this;
+    }
+
+
+    public <V> Headers set(String name, V value) {
+      synchronized (this.monitor) {
+        setHeader(name, value, headers);
+      }
+      return this;
+    }
+
+
+    public Headers setOrigin(UUID id) {
+      String idString = id == null ? null : id.toString();
+      return setOrigin(idString);
+    }
+
+
+    public String getOrigin() {
+      synchronized (this.monitor) {
+        return (String) headers.get(ORIGIN);
+      }
+    }
+
+
+    public Headers setOrigin(String id) {
+      synchronized (this.monitor) {
+        setHeader(ORIGIN, id, headers);
+      }
+      return this;
+    }
+
+
+    @SuppressWarnings("unchecked")
+    public <V> V get(String name) {
+      synchronized (monitor) {
+        return (V) headers.get(name);
+      }
+    }
+
+
+    public boolean contains(String name) {
+      synchronized (monitor) {
+        return headers.containsKey(name);
+      }
+    }
+
+
+    public Map<String, Object> asMap() {
+      synchronized (monitor) {
+        return Collections.unmodifiableMap(headers);
+      }
+    }
+
+
+    public Headers readOnly() {
+      synchronized (monitor) {
+        return new Headers(true, headers);
+      }
+    }
+
+
+    @Override
+    public Iterator<Tuple2<String, Object>> iterator() {
+      synchronized (this.monitor) {
+        List<Tuple2<String, Object>> headers = new ArrayList<Tuple2<String, Object>>(this.headers.size());
+        for (Map.Entry<String, Object> header : this.headers.entrySet()) {
+          headers.add(Tuple.of(header.getKey(), header.getValue()));
+        }
+        return Collections.unmodifiableList(headers).iterator();
+      }
+    }
+
+    @Override
+    public String toString() {
+      return headers.toString();
+    }
+
+    private void copyHeaders(Map<String, Object> source, Map<String, Object> target) {
+      if (source != null) {
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+          setHeader(entry.getKey(), entry.getValue(), target);
+        }
+      }
+    }
+
+    private void setHeader(String name, Object value, Map<String, Object> target) {
+      if (value == null) {
+        target.remove(name);
+      } else {
+        target.put(name, value);
+      }
+    }
+  }
+
+}
+
+<code block>
+
+
+package reactor.io.buffer;
+
+import reactor.alloc.Allocator;
+import reactor.alloc.Reference;
+import reactor.alloc.ReferenceCountingAllocator;
+import reactor.fn.Supplier;
+
+import java.nio.ByteBuffer;
+import java.util.List;
+
+
+public class BufferAllocator implements Allocator<Buffer> {
+
+	private final Allocator<Buffer> delegate;
+
+
+	public BufferAllocator() {
+		this(256, false, Buffer.SMALL_BUFFER_SIZE);
+	}
+
+
+	public BufferAllocator(int poolSize, final boolean direct, final int bufferSize) {
+		this.delegate = new ReferenceCountingAllocator<Buffer>(
+				poolSize,
+				new Supplier<Buffer>() {
+					@Override
+					public Buffer get() {
+						return new Buffer(direct
+						                  ? ByteBuffer.allocateDirect(bufferSize)
+						                  : ByteBuffer.allocate(bufferSize));
+					}
+				}
+		);
+	}
+
+	@Override
+	public Reference<Buffer> allocate() {
+		return delegate.allocate();
+	}
+
+	@Override
+	public List<Reference<Buffer>> allocateBatch(int size) {
+		return delegate.allocateBatch(size);
+	}
+
+	@Override
+	public void release(List<Reference<Buffer>> batch) {
+		delegate.release(batch);
+	}
+
+}
+
+<code block>
+
+
 package reactor.alloc;
 
 import reactor.core.support.Recyclable;
 import reactor.fn.Supplier;
 
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
-public interface Reference<T extends Recyclable> extends Supplier<T> {
 
-	
-	long getAge();
+public class ReferenceCountingAllocator<T extends Recyclable> implements Allocator<T> {
 
-	
-	int getReferenceCount();
+	private static final int DEFAULT_INITIAL_SIZE = 2048;
 
-	
-	void retain();
+	private final ReentrantLock           refLock    = new ReentrantLock();
+	private final ReentrantLock           leaseLock  = new ReentrantLock();
+	private final ArrayList<Reference<T>> references = new ArrayList<Reference<T>>();
+	private final Supplier<T> factory;
 
-	
-	void retain(int incr);
+	private volatile BitSet leaseMask;
 
-	
-	void release();
+	public ReferenceCountingAllocator(Supplier<T> factory) {
+		this(DEFAULT_INITIAL_SIZE, factory);
+	}
 
-	
-	void release(int decr);
+	public ReferenceCountingAllocator(int initialSize, Supplier<T> factory) {
+		this.factory = factory;
+		this.references.ensureCapacity(initialSize);
+		this.leaseMask = new BitSet(initialSize);
+		expand(initialSize);
+	}
+
+	@Override
+	public Reference<T> allocate() {
+		Reference<T> ref;
+		int len = refCnt();
+		int next;
+
+		leaseLock.lock();
+		try {
+			next = leaseMask.nextClearBit(0);
+			if (next >= len) {
+				expand(len);
+			}
+			leaseMask.set(next);
+		} finally {
+			leaseLock.unlock();
+		}
+
+		if (next < 0) {
+			throw new RuntimeException("Allocator is exhausted.");
+		}
+
+		ref = references.get(next);
+		if (null == ref) {
+
+
+			refLock.lock();
+			try {
+				ref = new ReferenceCountingAllocatorReference<T>(factory.get(), next);
+				references.set(next, ref);
+			} finally {
+				refLock.unlock();
+			}
+		}
+		ref.retain();
+
+		return ref;
+	}
+
+	@Override
+	public List<Reference<T>> allocateBatch(int size) {
+		List<Reference<T>> refs = new ArrayList<Reference<T>>(size);
+		for (int i = 0; i < size; i++) {
+			refs.add(allocate());
+		}
+		return refs;
+	}
+
+	@Override
+	public void release(List<Reference<T>> batch) {
+		if (null != batch && !batch.isEmpty()) {
+			for (Reference<T> ref : batch) {
+				ref.release();
+			}
+		}
+	}
+
+	private int refCnt() {
+		refLock.lock();
+		try {
+			return references.size();
+		} finally {
+			refLock.unlock();
+		}
+	}
+
+	private void expand(int num) {
+		refLock.lock();
+		try {
+			int len = references.size();
+			int newLen = len + num;
+			for (int i = len; i <= newLen; i++) {
+				references.add(new ReferenceCountingAllocatorReference<T>(factory.get(), i));
+			}
+			BitSet newLeaseMask = new BitSet(newLen);
+			int leases = leaseMask.length();
+			for (int i = 0; i < leases; i++) {
+				newLeaseMask.set(i, leaseMask.get(i));
+			}
+			leaseMask = newLeaseMask;
+		} finally {
+			refLock.unlock();
+		}
+	}
+
+	private class ReferenceCountingAllocatorReference<T extends Recyclable> extends AbstractReference<T> {
+		private final int bit;
+
+		private ReferenceCountingAllocatorReference(T obj, int bit) {
+			super(obj);
+			this.bit = bit;
+		}
+
+		@Override
+		public void release(int decr) {
+			leaseLock.lock();
+			try {
+				super.release(decr);
+				if (getReferenceCount() < 1) {
+
+					leaseMask.clear(bit);
+				}
+			} finally {
+				leaseLock.unlock();
+			}
+		}
+	}
 
 }
 
@@ -351,13 +3043,13 @@ import java.util.List;
 
 public interface Allocator<T extends Recyclable> {
 
-	
+
 	Reference<T> allocate();
 
-	
+
 	List<Reference<T>> allocateBatch(int size);
 
-	
+
 	void release(List<Reference<T>> batch);
 
 }
@@ -368,56 +3060,85 @@ public interface Allocator<T extends Recyclable> {
 package reactor.alloc;
 
 import reactor.bus.Event;
+import reactor.fn.Supplier;
 
-import java.util.HashMap;
+
+public class  EventFactorySupplier<T> implements Supplier<Event<T>> {
+
+  private final Class<T> klass;
+
+  public EventFactorySupplier(Class<T> klass) {
+    this.klass = klass;
+  }
+
+  @Override
+  public Event<T> get() {
+    return new Event<T>(klass);
+  }
+}
+
+<code block>
 
 
-public abstract class EventAllocator {
 
-	private final Object                    monitor;
-	private final HashMap<Class, Allocator> eventPools;
+package reactor.alloc;
+<code block>
 
-	public EventAllocator() {
-		this(new Class[0]);
+
+package reactor.alloc;
+
+import reactor.core.support.Recyclable;
+import reactor.fn.Supplier;
+
+
+public interface Reference<T extends Recyclable> extends Supplier<T> {
+
+
+	long getAge();
+
+
+	int getReferenceCount();
+
+
+	void retain();
+
+
+	void retain(int incr);
+
+
+	void release();
+
+
+	void release(int decr);
+
+}
+
+<code block>
+
+
+package reactor.alloc;
+
+import reactor.core.support.Recyclable;
+
+
+public class RecyclableString implements Recyclable {
+
+	private volatile String value = "";
+
+	public void setValue(String value) {
+		this.value = (null == value ? "" : value);
 	}
 
-	
-	@SuppressWarnings("unchecked")
-	public EventAllocator(Class[] classes) {
-		this.eventPools = new HashMap<Class, Allocator>();
-		this.monitor = new Object();
-		for (Class c : classes) {
-			eventPools.put(c, makeAllocator(c));
-    }
-  }
+	@Override
+	public void recycle() {
+		this.value = "";
+	}
 
-  
-  @SuppressWarnings("unchecked")
-  public <T> Reference<Event<T>> get(Class<T> klass) {
-    if(!eventPools.containsKey(klass)) {
-      synchronized (monitor) {
-        
-        if(!eventPools.containsKey(klass)) {
-          eventPools.put(klass, makeAllocator(klass));
-        }
-      }
-    }
-    return eventPools.get(klass).allocate();
-  }
+	@Override
+	public String toString() {
+		return value;
+	}
 
-  
-  protected abstract <T> Allocator<Event<T>> makeAllocator(Class<T> klass);
-
-  
-  public static EventAllocator defaultEventAllocator() {
-    return new EventAllocator() {
-      @SuppressWarnings("unchecked")
-      @Override
-      protected <T> Allocator<Event<T>> makeAllocator(Class<T> klass) {
-        return new ReferenceCountingAllocator<Event<T>>(new EventFactorySupplier(klass));
-      }
-    };
-  }
 }
 
 <code block>
@@ -492,6 +3213,119 @@ public abstract class AbstractReference<T extends Recyclable> implements Referen
 
 <code block>
 
+
+package reactor.alloc;
+
+import reactor.bus.Event;
+
+import java.util.HashMap;
+
+
+public abstract class EventAllocator {
+
+	private final Object                    monitor;
+	private final HashMap<Class, Allocator> eventPools;
+
+	public EventAllocator() {
+		this(new Class[0]);
+	}
+
+
+	@SuppressWarnings("unchecked")
+	public EventAllocator(Class[] classes) {
+		this.eventPools = new HashMap<Class, Allocator>();
+		this.monitor = new Object();
+		for (Class c : classes) {
+			eventPools.put(c, makeAllocator(c));
+    }
+  }
+
+
+  @SuppressWarnings("unchecked")
+  public <T> Reference<Event<T>> get(Class<T> klass) {
+    if(!eventPools.containsKey(klass)) {
+      synchronized (monitor) {
+
+        if(!eventPools.containsKey(klass)) {
+          eventPools.put(klass, makeAllocator(klass));
+        }
+      }
+    }
+    return eventPools.get(klass).allocate();
+  }
+
+
+  protected abstract <T> Allocator<Event<T>> makeAllocator(Class<T> klass);
+
+
+  public static EventAllocator defaultEventAllocator() {
+    return new EventAllocator() {
+      @SuppressWarnings("unchecked")
+      @Override
+      protected <T> Allocator<Event<T>> makeAllocator(Class<T> klass) {
+        return new ReferenceCountingAllocator<Event<T>>(new EventFactorySupplier(klass));
+      }
+    };
+  }
+}
+
+<code block>
+
+
+package reactor.alloc;
+
+import reactor.core.support.Recyclable;
+
+
+public class RecyclableNumber extends Number implements Recyclable {
+
+	private volatile double value = -1;
+
+	public void setValue(int value) {
+		this.value = value;
+	}
+
+	public void setValue(long value) {
+		this.value = value;
+	}
+
+	public void setValue(float value) {
+		this.value = value;
+	}
+
+	public void setValue(double value) {
+		this.value = value;
+	}
+
+	@Override
+	public int intValue() {
+		return (int) value;
+	}
+
+	@Override
+	public long longValue() {
+		return (long) value;
+	}
+
+	@Override
+	public float floatValue() {
+		return (float) value;
+	}
+
+	@Override
+	public double doubleValue() {
+		return value;
+	}
+
+	@Override
+	public void recycle() {
+		value = -1;
+	}
+
+}
+
+<code block>
+
 package reactor.alloc;
 
 import org.junit.Assert;
@@ -513,870 +3347,6 @@ public class EventAllocatorTests {
     eInt.setData(1);
     Assert.assertTrue("Integer data is settable into the Integer event", eInt.getData() == 1);
   }
-}
-
-<code block>
-
-
-package reactor.bus;
-
-import reactor.core.support.Assert;
-import reactor.core.support.Recyclable;
-import reactor.core.support.UUIDUtils;
-import reactor.fn.Consumer;
-import reactor.fn.tuple.Tuple;
-import reactor.fn.tuple.Tuple2;
-
-import java.io.Serializable;
-import java.util.*;
-
-
-public class Event<T> implements Serializable, Recyclable {
-
-  private static final long serialVersionUID = -2476263092040373361L;
-  private final transient Consumer<Throwable> errorConsumer;
-  private volatile        UUID                id;
-  private volatile        Headers             headers;
-  private volatile        Object              replyTo;
-  private volatile        Object              key;
-  private volatile        T                   data;
-
-  
-  public Event(Class<T> klass) {
-    this.headers = null;
-    this.data = null;
-    this.errorConsumer = null;
-  }
-
-  
-  public Event(Headers headers, T data) {
-    this.headers = headers;
-    this.data = data;
-    this.errorConsumer = null;
-  }
-
-  
-  public Event(Headers headers, T data, Consumer<Throwable> errorConsumer) {
-    this.headers = headers;
-    this.data = data;
-    this.errorConsumer = errorConsumer;
-  }
-
-  
-  public Event(T data) {
-    this.data = data;
-    this.errorConsumer = null;
-  }
-
-  
-  public static <T> Event<T> wrap(T obj) {
-    return new Event<T>(obj);
-  }
-
-  
-  public static <T> Event<T> wrap(T obj, Object replyToKey) {
-    return new Event<T>(obj).setReplyTo(replyToKey);
-  }
-
-  
-  public synchronized UUID getId() {
-    if (null == id) {
-      id = UUIDUtils.create();
-    }
-    return id;
-  }
-
-  
-  public synchronized Headers getHeaders() {
-    if (null == headers) {
-      headers = new Headers();
-    }
-    return headers;
-  }
-
-  
-  public Object getReplyTo() {
-    return replyTo;
-  }
-
-  
-  public Event<T> setReplyTo(Object replyTo) {
-    Assert.notNull(replyTo, "ReplyTo cannot be null.");
-    this.replyTo = replyTo;
-    return this;
-  }
-
-  
-  public Object getKey() {
-    return key;
-  }
-
-  
-  public Event<T> setKey(Object key) {
-    this.key = key;
-    return this;
-  }
-
-  
-  public T getData() {
-    return data;
-  }
-
-  
-  public Event<T> setData(T data) {
-    this.data = data;
-    return this;
-  }
-
-  
-  public Consumer<Throwable> getErrorConsumer() {
-    return errorConsumer;
-  }
-
-  
-  public Event<T> copy() {
-    return copy(data);
-  }
-
-  
-  public <E> Event<E> copy(E data) {
-    if (null != replyTo) {
-      return new Event<E>(headers, data, errorConsumer).setReplyTo(replyTo);
-    } else {
-      return new Event<E>(headers, data, errorConsumer);
-    }
-  }
-
-  
-  public void consumeError(Throwable throwable) {
-    if (null != errorConsumer) {
-      errorConsumer.accept(throwable);
-    }
-  }
-
-  @Override
-  public void recycle() {
-    this.id = null;
-    if (null != this.headers) {
-      this.headers.headers.clear();
-    }
-    this.replyTo = null;
-    this.key = null;
-    this.data = null;
-  }
-
-  public void override(Event<T> ev) {
-    this.id = ev.id;
-    this.headers = ev.headers;
-    this.replyTo = ev.replyTo;
-    this.data = ev.data;
-  }
-
-  @Override
-  public String toString() {
-    return "Event{" +
-        "id=" + id +
-        ", headers=" + headers +
-        ", replyTo=" + replyTo +
-        ", key=" + key +
-        ", data=" + data +
-        '}';
-  }
-
-  
-  public static class Headers implements Serializable, Iterable<Tuple2<String, Object>> {
-
-    
-    public static final String ORIGIN = "x-reactor-origin";
-
-    private static final long serialVersionUID = 4984692586458514948L;
-
-    private final Object monitor = UUIDUtils.create();
-    private final Map<String, Object> headers;
-
-    private Headers(boolean sealed, Map<String, Object> headers) {
-      Map<String, Object> copy = new TreeMap<String, Object>(String.CASE_INSENSITIVE_ORDER);
-      copyHeaders(headers, copy);
-      if (sealed) {
-        this.headers = Collections.unmodifiableMap(copy);
-      } else {
-        this.headers = copy;
-      }
-    }
-
-    
-    public Headers(Map<String, Object> headers) {
-      this(false, headers);
-    }
-
-    
-    public Headers() {
-      this(false, null);
-    }
-
-    
-    public Headers setAll(Map<String, Object> headers) {
-      if (null == headers || headers.isEmpty()) {
-        return this;
-      } else {
-        synchronized (this.monitor) {
-          copyHeaders(headers, this.headers);
-        }
-      }
-      return this;
-    }
-
-    
-    public <V> Headers set(String name, V value) {
-      synchronized (this.monitor) {
-        setHeader(name, value, headers);
-      }
-      return this;
-    }
-
-    
-    public Headers setOrigin(UUID id) {
-      String idString = id == null ? null : id.toString();
-      return setOrigin(idString);
-    }
-
-    
-    public String getOrigin() {
-      synchronized (this.monitor) {
-        return (String) headers.get(ORIGIN);
-      }
-    }
-
-    
-    public Headers setOrigin(String id) {
-      synchronized (this.monitor) {
-        setHeader(ORIGIN, id, headers);
-      }
-      return this;
-    }
-
-    
-    @SuppressWarnings("unchecked")
-    public <V> V get(String name) {
-      synchronized (monitor) {
-        return (V) headers.get(name);
-      }
-    }
-
-    
-    public boolean contains(String name) {
-      synchronized (monitor) {
-        return headers.containsKey(name);
-      }
-    }
-
-    
-    public Map<String, Object> asMap() {
-      synchronized (monitor) {
-        return Collections.unmodifiableMap(headers);
-      }
-    }
-
-    
-    public Headers readOnly() {
-      synchronized (monitor) {
-        return new Headers(true, headers);
-      }
-    }
-
-    
-    @Override
-    public Iterator<Tuple2<String, Object>> iterator() {
-      synchronized (this.monitor) {
-        List<Tuple2<String, Object>> headers = new ArrayList<Tuple2<String, Object>>(this.headers.size());
-        for (Map.Entry<String, Object> header : this.headers.entrySet()) {
-          headers.add(Tuple.of(header.getKey(), header.getValue()));
-        }
-        return Collections.unmodifiableList(headers).iterator();
-      }
-    }
-
-    @Override
-    public String toString() {
-      return headers.toString();
-    }
-
-    private void copyHeaders(Map<String, Object> source, Map<String, Object> target) {
-      if (source != null) {
-        for (Map.Entry<String, Object> entry : source.entrySet()) {
-          setHeader(entry.getKey(), entry.getValue(), target);
-        }
-      }
-    }
-
-    private void setHeader(String name, Object value, Map<String, Object> target) {
-      if (value == null) {
-        target.remove(name);
-      } else {
-        target.put(name, value);
-      }
-    }
-  }
-
-}
-
-<code block>
-
-package reactor.rx.action;
-
-import org.reactivestreams.Processor;
-import org.reactivestreams.Publisher;
-import org.reactivestreams.Subscriber;
-import org.reactivestreams.Subscription;
-import reactor.Environment;
-import reactor.core.Dispatcher;
-import reactor.core.dispatch.SynchronousDispatcher;
-import reactor.core.dispatch.TailRecurseDispatcher;
-import reactor.core.processor.CancelException;
-import reactor.core.queue.CompletableLinkedQueue;
-import reactor.core.queue.CompletableQueue;
-import reactor.core.support.Exceptions;
-import reactor.core.support.NonBlocking;
-import reactor.core.support.Recyclable;
-import reactor.core.support.SpecificationExceptions;
-import reactor.fn.Consumer;
-import reactor.fn.Supplier;
-import reactor.fn.tuple.Tuple;
-import reactor.fn.tuple.Tuple2;
-import reactor.rx.Stream;
-import reactor.rx.StreamUtils;
-import reactor.rx.action.combination.FanInAction;
-import reactor.rx.broadcast.Broadcaster;
-import reactor.rx.subscription.DropSubscription;
-import reactor.rx.subscription.FanOutSubscription;
-import reactor.rx.subscription.PushSubscription;
-import reactor.rx.subscription.ReactiveSubscription;
-
-
-public abstract class Action<I, O> extends Stream<O>
-		implements Processor<I, O>, Consumer<I>, Recyclable, Control {
-
-	
-	public static final int RESERVED_SLOTS = 4;
-	public static final int NO_CAPACITY    = -1;
-
-	
-	protected PushSubscription<I> upstreamSubscription;
-	protected PushSubscription<O> downstreamSubscription;
-
-	protected long capacity;
-
-	public static void checkRequest(long n) {
-		if (n <= 0l) {
-			throw SpecificationExceptions.spec_3_09_exception(n);
-		}
-	}
-
-	public static long evaluateCapacity(long n) {
-		return n != Long.MAX_VALUE ?
-				Math.max(Action.RESERVED_SLOTS, n - Action.RESERVED_SLOTS) :
-				Long.MAX_VALUE;
-	}
-
-	public Action() {
-		this(Long.MAX_VALUE);
-	}
-
-	public Action(long batchSize) {
-		this.capacity = batchSize;
-	}
-
-	
-
-
-	@Override
-	public void subscribe(final Subscriber<? super O> subscriber) {
-		try {
-			final NonBlocking asyncSubscriber = NonBlocking.class.isAssignableFrom(subscriber.getClass()) ?
-					(NonBlocking) subscriber :
-					null;
-
-			boolean isReactiveCapacity = null == asyncSubscriber || asyncSubscriber.isReactivePull(getDispatcher(),
-					capacity);
-
-			final PushSubscription<O> subscription = createSubscription(subscriber,
-					isReactiveCapacity);
-
-			if (subscription == null)
-				return;
-
-			if (null != asyncSubscriber && isReactiveCapacity) {
-				subscription.maxCapacity(asyncSubscriber.getCapacity());
-			}
-
-			subscribeWithSubscription(subscriber, subscription);
-
-		}catch (Throwable throwable){
-			Exceptions.throwIfFatal(throwable);
-			subscriber.onError(throwable);
-		}
-	}
-
-	@Override
-	public void onSubscribe(Subscription subscription) {
-		if (subscription == null) {
-			throw new NullPointerException("Spec 2.13: Subscription cannot be null");
-		}
-
-		final boolean hasRequestTracker = upstreamSubscription != null;
-
-		
-		if (hasRequestTracker) {
-			subscription.cancel();
-			return;
-		}
-
-		upstreamSubscription = createTrackingSubscription(subscription);
-		upstreamSubscription.maxCapacity(getCapacity());
-
-		try {
-			doOnSubscribe(subscription);
-			doStart();
-		} catch (Throwable t) {
-			Exceptions.throwIfFatal(t);
-			doError(t);
-		}
-	}
-
-	protected final void doStart() {
-		final PushSubscription<O> downSub = downstreamSubscription;
-		if (downSub != null) {
-				downSub.start();
-		}
-	}
-
-	@Override
-	public final void accept(I i) {
-		onNext(i);
-	}
-
-	@Override
-	public void onNext(I ev) {
-		if (ev == null) {
-			throw new NullPointerException("Spec 2.13: Signal cannot be null");
-		}
-
-		if (upstreamSubscription == null && downstreamSubscription == null) {
-			throw CancelException.get();
-		}
-
-		try {
-			doNext(ev);
-		} catch (CancelException uae){
-			throw uae;
-		} catch (Throwable cause) {
-			doError(Exceptions.addValueAsLastCause(cause, ev));
-		}
-	}
-
-	@Override
-	public void onComplete() {
-		try {
-			doComplete();
-			doShutdown();
-		} catch (Throwable t) {
-			doError(t);
-		}
-	}
-
-	@Override
-	public void onError(Throwable cause) {
-		if (cause == null) {
-			throw new NullPointerException("Spec 2.13: Signal cannot be null");
-		}
-		if (upstreamSubscription != null) upstreamSubscription.updatePendingRequests(0l);
-		doError(cause);
-		doShutdown();
-	}
-
-	
-
-	@Override
-	public Action<I, O> capacity(long elements) {
-		Dispatcher dispatcher = getDispatcher();
-		if (dispatcher != SynchronousDispatcher.INSTANCE && dispatcher.getClass() != TailRecurseDispatcher.class) {
-			long dispatcherCapacity = evaluateCapacity(dispatcher.backlogSize());
-			capacity = elements > dispatcherCapacity ? dispatcherCapacity : elements;
-		} else {
-			capacity = elements;
-		}
-
-		if (upstreamSubscription != null) {
-			upstreamSubscription.maxCapacity(capacity);
-		}
-		return this;
-	}
-
-	
-	protected void broadcastNext(final O ev) {
-		
-		PushSubscription<O> downstreamSubscription = this.downstreamSubscription;
-		if (downstreamSubscription == null) {
-				throw CancelException.get();
-		}
-
-		try {
-			downstreamSubscription.onNext(ev);
-		} catch(CancelException ce){
-			throw ce;
-		} catch (Throwable throwable) {
-			doError(Exceptions.addValueAsLastCause(throwable, ev));
-		}
-	}
-
-	
-	protected void broadcastError(final Throwable throwable) {
-		
-		
-
-		if (downstreamSubscription == null) {
-			if (Environment.alive()) {
-				Environment.get().routeError(throwable);
-			}
-			return;
-		}
-
-		downstreamSubscription.onError(throwable);
-	}
-
-	
-	protected void broadcastComplete() {
-		
-		if (downstreamSubscription == null) {
-			return;
-		}
-
-		try {
-			downstreamSubscription.onComplete();
-		} catch (Throwable throwable) {
-			doError(throwable);
-		}
-	}
-
-	@Override
-	public boolean isPublishing() {
-		PushSubscription<I> parentSubscription = upstreamSubscription;
-		return parentSubscription != null && !parentSubscription.isComplete();
-	}
-
-
-	public void cancel() {
-		PushSubscription<I> parentSub = upstreamSubscription;
-		if (parentSub != null) {
-			upstreamSubscription = null;
-			parentSub.cancel();
-		}
-	}
-
-	@Override
-	public void requestAll() {
-		if (downstreamSubscription == null) {
-			requestMore(Long.MAX_VALUE);
-		}
-	}
-
-	
-	@SuppressWarnings("unchecked")
-	public StreamUtils.StreamVisitor debug() {
-		return StreamUtils.browse(findOldestUpstream(Action.class));
-	}
-
-	
-
-	
-	public final <E> Action<I, O> control(Stream<E> controlStream, final Consumer<Tuple2<Action<I, O>,
-			? super E>> controller) {
-		final Action<I, O> thiz = this;
-		controlStream.consume(new Consumer<E>() {
-			@Override
-			public void accept(E e) {
-				controller.accept(Tuple.of(thiz, e));
-			}
-		});
-		return this;
-	}
-
-	@Override
-	public final Stream<O> onOverflowBuffer(final Supplier<? extends CompletableQueue<O>> queueSupplier) {
-		return lift(new Supplier<Action<O, O>>() {
-			@Override
-			public Action<O, O> get() {
-				Broadcaster<O> newStream = Broadcaster.<O>create(getEnvironment(), getDispatcher()).capacity(capacity);
-				if (queueSupplier == null) {
-					subscribeWithSubscription(newStream, new DropSubscription<O>(Action.this, newStream) {
-						@Override
-						public void request(long elements) {
-							super.request(elements);
-							requestUpstream(capacity, isComplete(), elements);
-						}
-					});
-				} else {
-					subscribeWithSubscription(newStream,
-							createSubscription(newStream, queueSupplier.get()));
-				}
-				return newStream;
-			}
-		});
-	}
-
-	@SuppressWarnings("unchecked")
-	@Override
-	public final <E> CompositeAction<E, O> combine() {
-		final Action<E, ?> subscriber = (Action<E, ?>) findOldestUpstream(Action.class);
-		subscriber.upstreamSubscription = null;
-		return new CompositeAction<E, O>(subscriber, this);
-	}
-
-	
-	public final Consumer<?> toBroadcastCompleteConsumer() {
-		return new Consumer<Object>() {
-			@Override
-			public void accept(Object o) {
-				broadcastComplete();
-			}
-		};
-	}
-
-
-	
-	public final Consumer<O> toBroadcastNextConsumer() {
-		return new Consumer<O>() {
-			@Override
-			public void accept(O o) {
-				broadcastNext(o);
-			}
-		};
-	}
-
-	
-	public final Consumer<Throwable> toBroadcastErrorConsumer() {
-		return new Consumer<Throwable>() {
-			@Override
-			public void accept(Throwable o) {
-				broadcastError(o);
-			}
-		};
-	}
-
-	
-	@SuppressWarnings("unchecked")
-	public <P extends Publisher<?>> P findOldestUpstream(Class<P> clazz) {
-		Action<?, ?> that = this;
-
-		while (inspectPublisher(that, Action.class)) {
-
-			that = (Action<?, ?>) that.upstreamSubscription.getPublisher();
-
-			if (that != null) {
-
-				if (FanInAction.class.isAssignableFrom(that.getClass())) {
-					that = ((FanInAction) that).dynamicMergeAction() != null ? ((FanInAction) that).dynamicMergeAction() : that;
-				}
-			}
-		}
-
-		if (inspectPublisher(that, clazz)) {
-			return (P) ((PushSubscription<?>) that.upstreamSubscription).getPublisher();
-		} else {
-			return (P) that;
-		}
-	}
-
-	
-
-	@Override
-	public final long getCapacity() {
-		return capacity;
-	}
-
-	
-	public PushSubscription<I> getSubscription() {
-		return upstreamSubscription;
-	}
-
-
-	
-	public final PushSubscription<O> downstreamSubscription() {
-		return downstreamSubscription;
-	}
-
-	
-
-	@Override
-	public boolean cancelSubscription(final PushSubscription<O> subscription) {
-		if (this.downstreamSubscription == null) return false;
-
-		if (subscription == this.downstreamSubscription) {
-			this.downstreamSubscription = null;
-			cancel();
-			return true;
-		} else {
-			PushSubscription<O> dsub = this.downstreamSubscription;
-			if (FanOutSubscription.class.isAssignableFrom(dsub.getClass())) {
-				FanOutSubscription<O> fsub =
-						((FanOutSubscription<O>) this.downstreamSubscription);
-
-				if (fsub.remove(subscription) && fsub.isEmpty()) {
-					cancel();
-					return true;
-				}
-			}
-			return false;
-		}
-	}
-
-	protected PushSubscription<O> createSubscription(final Subscriber<? super O> subscriber, boolean reactivePull) {
-		return createSubscription(subscriber, reactivePull ? new CompletableLinkedQueue<O>() : null);
-	}
-
-	protected PushSubscription<O> createSubscription(final Subscriber<? super O> subscriber, CompletableQueue<O> queue) {
-		if (queue != null) {
-			return new ReactiveSubscription<O>(this, subscriber, queue) {
-
-				@Override
-				protected void onRequest(long elements) {
-					requestUpstream(capacity, buffer.isComplete(), elements);
-				}
-			};
-		} else {
-			return new PushSubscription<O>(this, subscriber) {
-				@Override
-				protected void onRequest(long elements) {
-					requestUpstream(NO_CAPACITY, isComplete(), elements);
-				}
-			};
-		}
-	}
-
-	protected void requestUpstream(long capacity, boolean terminated, long elements) {
-		if (upstreamSubscription != null && !terminated) {
-			requestMore(elements);
-		} else {
-			PushSubscription<O> _downstreamSubscription = downstreamSubscription;
-			if (_downstreamSubscription != null) {
-				_downstreamSubscription.updatePendingRequests(elements);
-			}
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	protected PushSubscription<I> createTrackingSubscription(Subscription subscription) {
-		
-		if (!PushSubscription.class.isAssignableFrom(subscription.getClass())) {
-			return PushSubscription.wrap(subscription, this);
-		} else {
-			return ((PushSubscription<I>) subscription);
-		}
-	}
-
-	protected void doOnSubscribe(Subscription subscription) {
-	}
-
-	protected void doComplete() {
-		broadcastComplete();
-	}
-
-	abstract protected void doNext(I ev);
-
-	protected void doError(Throwable ev) {
-		if (downstreamSubscription != null) {
-			try {
-				downstreamSubscription.onError(ev);
-				return;
-			} catch (Throwable t) {
-				Environment.get().routeError(t);
-			}
-		}
-
-		if (Environment.alive()) {
-			Environment.get().routeError(ev);
-		}
-	}
-
-	@Override
-	public void requestMore(final long n) {
-		checkRequest(n);
-		if (upstreamSubscription != null) {
-			upstreamSubscription.request(n);
-		}
-	}
-
-	
-	protected void subscribeWithSubscription(final Subscriber<? super O> subscriber, final PushSubscription<O>
-			subscription) {
-		try {
-			if (!addSubscription(subscription)) {
-				subscriber.onError(new IllegalStateException("The subscription cannot be linked to this Stream"));
-			} else {
-				subscription.markAsDeferredStart();
-				if (upstreamSubscription != null) {
-					subscription.start();
-				}
-			}
-		} catch (Exception e) {
-			Exceptions.throwIfFatal(e);
-			subscriber.onError(e);
-		}
-	}
-
-
-	@SuppressWarnings("unchecked")
-	protected boolean addSubscription(final PushSubscription<O> subscription) {
-		PushSubscription<O> currentSubscription = this.downstreamSubscription;
-		if (currentSubscription == null) {
-			this.downstreamSubscription = subscription;
-			return true;
-		} else if (currentSubscription.equals(subscription)) {
-			subscription.onError(SpecificationExceptions.spec_2_12_exception());
-			return false;
-		} else if (FanOutSubscription.class.isAssignableFrom(currentSubscription.getClass())) {
-			if (((FanOutSubscription<O>) currentSubscription).contains(subscription)) {
-				subscription.onError(SpecificationExceptions.spec_2_12_exception());
-				return false;
-			} else {
-				return ((FanOutSubscription<O>) currentSubscription).add(subscription);
-			}
-		} else {
-			this.downstreamSubscription = new FanOutSubscription<O>(this, currentSubscription, subscription);
-			return true;
-		}
-	}
-
-	protected void doShutdown() {
-		
-	}
-
-	private boolean inspectPublisher(Action<?, ?> that, Class<?> actionClass) {
-		return that.upstreamSubscription != null
-				&& ((PushSubscription<?>) that.upstreamSubscription).getPublisher() != null
-				&& actionClass.isAssignableFrom(((PushSubscription<?>) that.upstreamSubscription).getPublisher().getClass());
-	}
-
-	@Override
-	public void recycle() {
-		downstreamSubscription = null;
-		upstreamSubscription = null;
-	}
-
-	@Override
-	@SuppressWarnings("unchecked")
-	public String toString() {
-		return "{" +
-				(capacity != Long.MAX_VALUE || upstreamSubscription == null ?
-						"{dispatcher=" + getDispatcher() +
-								((!SynchronousDispatcher.class.isAssignableFrom(getDispatcher().getClass()) ? (":" + getDispatcher()
-										.remainingSlots()) :
-										"")) +
-								", max-capacity=" + (capacity == Long.MAX_VALUE ? "infinite" : capacity) + "}"
-						: "") +
-				(upstreamSubscription != null ? upstreamSubscription : "") + '}';
-	}
-
 }
 
 <code block>
@@ -1427,7 +3397,7 @@ public abstract class AbstractLifecycleDispatcher implements Dispatcher {
 		alive.compareAndSet(true, false);
 	}
 
-	
+
 	@Override
 	public boolean inContext() {
 		return context == Thread.currentThread().getContextClassLoader();
@@ -1576,7 +3546,7 @@ package reactor.core.support;
 
 public interface Recyclable {
 
-	
+
 	void recycle();
 
 }
@@ -1615,12 +3585,12 @@ public class Buffer implements Recyclable,
 		ReadableByteChannel,
 		WritableByteChannel {
 
-	
+
 	public static int SMALL_BUFFER_SIZE = Integer.parseInt(
 			System.getProperty("reactor.io.defaultBufferSize", "" + 1024 * 16)
 	);
 
-	
+
 	public static int MAX_BUFFER_SIZE = Integer.parseInt(
 			System.getProperty("reactor.io.maxBufferSize", "" + 1024 * 1000 * 16)
 	);
@@ -1633,12 +3603,12 @@ public class Buffer implements Recyclable,
 	private       int            position;
 	private       int            limit;
 
-	
+
 	public Buffer() {
 		this.dynamic = true;
 	}
 
-	
+
 	public Buffer(int atLeast, boolean fixed) {
 		if (fixed) {
 			if (atLeast <= MAX_BUFFER_SIZE) {
@@ -1652,19 +3622,19 @@ public class Buffer implements Recyclable,
 		this.dynamic = !fixed;
 	}
 
-	
+
 	public Buffer(Buffer bufferToCopy) {
 		this.dynamic = bufferToCopy.dynamic;
 		this.buffer = bufferToCopy.buffer.duplicate();
 	}
 
-	
+
 	public Buffer(ByteBuffer bufferToStartWith) {
 		this.dynamic = true;
 		this.buffer = bufferToStartWith;
 	}
 
-	
+
 	@SuppressWarnings("resource")
 	public static Buffer wrap(byte[] bytes) {
 		return new Buffer(bytes.length, true)
@@ -1672,7 +3642,7 @@ public class Buffer implements Recyclable,
 				.flip();
 	}
 
-	
+
 	@SuppressWarnings("resource")
 	public static Buffer wrap(String str, boolean fixed) {
 		if(fixed){
@@ -1684,12 +3654,12 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public static Buffer wrap(String str) {
 		return wrap(str, true);
 	}
 
-	
+
 	public static Integer parseInt(Buffer b, int start, int end) {
 		b.snapshot();
 
@@ -1703,7 +3673,7 @@ public class Buffer implements Recyclable,
 		return i;
 	}
 
-	
+
 	public static Integer parseInt(Buffer b) {
 		if (b.remaining() == 0) {
 			return null;
@@ -1725,7 +3695,7 @@ public class Buffer implements Recyclable,
 		return num;
 	}
 
-	
+
 	public static Long parseLong(Buffer b, int start, int end) {
 		int origPos = b.buffer.position();
 		int origLimit = b.buffer.limit();
@@ -1741,7 +3711,7 @@ public class Buffer implements Recyclable,
 		return l;
 	}
 
-	
+
 	public static Long parseLong(Buffer b) {
 		if (b.remaining() == 0) {
 			return null;
@@ -1773,17 +3743,17 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public final boolean isDynamic() {
 		return dynamic;
 	}
 
-	
+
 	public final int position() {
 		return (null == buffer ? 0 : buffer.position());
 	}
 
-	
+
 	public Buffer position(int pos) {
 		if (null != buffer) {
 			buffer.position(pos);
@@ -1791,7 +3761,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer limit(int limit) {
 		if (null != buffer) {
 			buffer.limit(limit);
@@ -1799,7 +3769,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer skip(int len) {
 		if (len < 0) {
 			throw new IllegalArgumentException("len must >= 0");
@@ -1811,22 +3781,22 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public int limit() {
 		return (null == buffer ? 0 : buffer.limit());
 	}
 
-	
+
 	public int capacity() {
 		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.capacity());
 	}
 
-	
+
 	public int remaining() {
 		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.remaining());
 	}
 
-	
+
 	public Buffer clear() {
 		if (null != buffer) {
 			buffer.position(0);
@@ -1835,7 +3805,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer compact() {
 		if (null != buffer) {
 			buffer.compact();
@@ -1843,7 +3813,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer flip() {
 		if (null != buffer) {
 			buffer.flip();
@@ -1851,7 +3821,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer rewind() {
 		if (null != buffer) {
 			buffer.rewind();
@@ -1859,7 +3829,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer rewind(int len) {
 		if (len < 0) {
 			throw new IllegalArgumentException("len must >= 0");
@@ -1871,12 +3841,12 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer duplicate() {
 		return new Buffer(buffer.duplicate());
 	}
 
-	
+
 	public Buffer copy() {
 		if (buffer == null) return new Buffer();
 		snapshot();
@@ -1887,7 +3857,7 @@ public class Buffer implements Recyclable,
 		return b.flip();
 	}
 
-	
+
 	public Buffer prepend(Buffer b) {
 		if (null == b) {
 			return this;
@@ -1895,7 +3865,7 @@ public class Buffer implements Recyclable,
 		return prepend(b.buffer);
 	}
 
-	
+
 	public Buffer prepend(String s) {
 		if (null == s) {
 			return this;
@@ -1903,7 +3873,7 @@ public class Buffer implements Recyclable,
 		return prepend(s.getBytes());
 	}
 
-	
+
 	public Buffer prepend(byte[] bytes) {
 		shift(bytes.length);
 		buffer.put(bytes);
@@ -1911,7 +3881,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer prepend(ByteBuffer b) {
 		if (null == b) {
 			return this;
@@ -1923,7 +3893,7 @@ public class Buffer implements Recyclable,
 
 	}
 
-	
+
 	public Buffer prepend(byte b) {
 		shift(1);
 		this.buffer.put(b);
@@ -1931,7 +3901,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer prepend(char c) {
 		shift(2);
 		this.buffer.putChar(c);
@@ -1939,7 +3909,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer prepend(short s) {
 		shift(2);
 		this.buffer.putShort(s);
@@ -1947,7 +3917,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer prepend(int i) {
 		shift(4);
 		this.buffer.putInt(i);
@@ -1955,7 +3925,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer prepend(long l) {
 		shift(8);
 		this.buffer.putLong(l);
@@ -1963,42 +3933,42 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer append(String s) {
 		ensureCapacity(s.length());
 		buffer.put(s.getBytes());
 		return this;
 	}
 
-	
+
 	public Buffer append(short s) {
 		ensureCapacity(2);
 		buffer.putShort(s);
 		return this;
 	}
 
-	
+
 	public Buffer append(int i) {
 		ensureCapacity(4);
 		buffer.putInt(i);
 		return this;
 	}
 
-	
+
 	public Buffer append(long l) {
 		ensureCapacity(8);
 		buffer.putLong(l);
 		return this;
 	}
 
-	
+
 	public Buffer append(char c) {
 		ensureCapacity(2);
 		buffer.putChar(c);
 		return this;
 	}
 
-	
+
 	public Buffer append(ByteBuffer... buffers) {
 		for (ByteBuffer bb : buffers) {
 			if (bb != null) {
@@ -2009,7 +3979,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer append(Buffer... buffers) {
 		for (Buffer b : buffers) {
 			int pos = position();
@@ -2023,28 +3993,28 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public Buffer append(byte b) {
 		ensureCapacity(1);
 		buffer.put(b);
 		return this;
 	}
 
-	
+
 	public Buffer append(byte[] b) {
 		ensureCapacity(b.length);
 		buffer.put(b);
 		return this;
 	}
 
-	
+
 	public Buffer append(byte[] b, int start, int len) {
 		ensureCapacity(b.length);
 		buffer.put(b, start, len);
 		return this;
 	}
 
-	
+
 	public byte first() {
 		snapshot();
 		if (this.position > 0) {
@@ -2055,7 +4025,7 @@ public class Buffer implements Recyclable,
 		return b;
 	}
 
-	
+
 	public byte last() {
 		int pos = buffer.position();
 		int limit = buffer.limit();
@@ -2065,7 +4035,7 @@ public class Buffer implements Recyclable,
 		return b;
 	}
 
-	
+
 	public byte read() {
 		if (null != buffer) {
 			return buffer.get();
@@ -2073,7 +4043,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public Buffer read(byte[] b) {
 		if (null != buffer) {
 			buffer.get(b);
@@ -2081,7 +4051,7 @@ public class Buffer implements Recyclable,
 		return this;
 	}
 
-	
+
 	public short readShort() {
 		if (null != buffer) {
 			return buffer.getShort();
@@ -2089,7 +4059,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public int readInt() {
 		if (null != buffer) {
 			return buffer.getInt();
@@ -2097,7 +4067,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public float readFloat() {
 		if (null != buffer) {
 			return buffer.getFloat();
@@ -2105,7 +4075,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public double readDouble() {
 		if (null != buffer) {
 			return buffer.getDouble();
@@ -2113,7 +4083,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public long readLong() {
 		if (null != buffer) {
 			return buffer.getLong();
@@ -2121,7 +4091,7 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public char readChar() {
 		if (null != buffer) {
 			return buffer.getChar();
@@ -2129,13 +4099,13 @@ public class Buffer implements Recyclable,
 		throw new BufferUnderflowException();
 	}
 
-	
+
 	public void snapshot() {
 		this.position = buffer.position();
 		this.limit = buffer.limit();
 	}
 
-	
+
 	public Buffer reset() {
 		buffer.limit(limit);
 		buffer.position(position);
@@ -2157,7 +4127,7 @@ public class Buffer implements Recyclable,
 
 			@Override
 			public void remove() {
-				
+
 			}
 		};
 	}
@@ -2191,7 +4161,7 @@ public class Buffer implements Recyclable,
 		clear();
 	}
 
-	
+
 	public String asString() {
 		if (null != buffer) {
 			return decode();
@@ -2200,7 +4170,7 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public String substring(int start, int end) {
 		snapshot();
 
@@ -2212,7 +4182,7 @@ public class Buffer implements Recyclable,
 		return s;
 	}
 
-	
+
 	public byte[] asBytes() {
 		if (null != buffer) {
 			snapshot();
@@ -2225,12 +4195,12 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public InputStream inputStream() {
 		return new BufferInputStream();
 	}
 
-	
+
 	public Buffer slice(int start, int len) {
 		snapshot();
 		ByteBuffer bb = ByteBuffer.allocate(len);
@@ -2241,22 +4211,22 @@ public class Buffer implements Recyclable,
 		return new Buffer(bb);
 	}
 
-	
+
 	public List<View> split(int delimiter) {
 		return split(new ArrayList<View>(), delimiter, false);
 	}
 
-	
+
 	public List<View> split(List<View> views, int delimiter) {
 		return split(views, delimiter, false);
 	}
 
-	
+
 	public List<View> split(int delimiter, boolean stripDelimiter) {
 		return split(new ArrayList<View>(), delimiter, stripDelimiter);
 	}
 
-	
+
 	public List<View> split(List<View> views, int delimiter, boolean stripDelimiter) {
 		snapshot();
 
@@ -2277,17 +4247,17 @@ public class Buffer implements Recyclable,
 		return views;
 	}
 
-	
+
 	public Iterable<View> split(Buffer delimiter) {
 		return split(new ArrayList<View>(), delimiter, false);
 	}
 
-	
+
 	public Iterable<View> split(Buffer delimiter, boolean stripDelimiter) {
 		return split(new ArrayList<View>(), delimiter, stripDelimiter);
 	}
 
-	
+
 	public Iterable<View> split(List<View> views, Buffer delimiter, boolean stripDelimiter) {
 		snapshot();
 
@@ -2324,12 +4294,12 @@ public class Buffer implements Recyclable,
 		return views;
 	}
 
-	
+
 	public int indexOf(byte b) {
 		return indexOf(b, buffer.position(), buffer.remaining());
 	}
 
-	
+
 	public int indexOf(byte b, int start, int end) {
 		snapshot();
 		if (buffer.position() != start) {
@@ -2346,19 +4316,19 @@ public class Buffer implements Recyclable,
 		return pos;
 	}
 
-	
+
 	public View createView() {
 		snapshot();
 		return new View(position, limit);
 	}
 
-	
+
 	public View createView(int start, int end) {
 		snapshot();
 		return new View(start, end);
 	}
 
-	
+
 	public List<View> slice(int... positions) {
 		Assert.notNull(positions, "Positions cannot be null.");
 		if (positions.length == 0) {
@@ -2379,12 +4349,12 @@ public class Buffer implements Recyclable,
 		return views;
 	}
 
-	
+
 	public ByteBuffer byteBuffer() {
 		return buffer;
 	}
 
-	
+
 	public boolean isDelimitingBuffer(){
 		return this == DELIMITING_BUFFER;
 	}
@@ -2409,7 +4379,7 @@ public class Buffer implements Recyclable,
 		if (dynamic) {
 			int neededCapacity = pos + atLeast;
 			if (neededCapacity > cap) {
-				
+
 				expand(neededCapacity - cap);
 			}
 			buffer.limit(Math.max(neededCapacity, buffer.limit()));
@@ -2554,7 +4524,7 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public class View implements Supplier<Buffer> {
 		private final int start;
 		private final int end;
@@ -2564,12 +4534,12 @@ public class Buffer implements Recyclable,
 			this.end = end;
 		}
 
-		
+
 		public int getStart() {
 			return start;
 		}
 
-		
+
 		public int getEnd() {
 			return end;
 		}
@@ -2582,423 +4552,9 @@ public class Buffer implements Recyclable,
 		}
 	}
 
-	
+
 	public static final Buffer DELIMITING_BUFFER = new Buffer();
 
-}
-
-<code block>
-
-
-package reactor.bus;
-
-import reactor.core.alloc.Recyclable;
-import reactor.core.support.Assert;
-import reactor.core.support.UUIDUtils;
-import reactor.fn.Consumer;
-import reactor.fn.tuple.Tuple;
-import reactor.fn.tuple.Tuple2;
-
-import java.io.Serializable;
-import java.util.*;
-
-
-public class Event<T> implements Serializable, Recyclable {
-
-  private static final long serialVersionUID = -2476263092040373361L;
-  private final transient Consumer<Throwable> errorConsumer;
-  private volatile        UUID                id;
-  private volatile        Headers             headers;
-  private volatile        Object              replyTo;
-  private volatile        Object              key;
-  private volatile        T                   data;
-
-  
-  public Event(Class<T> klass) {
-    this.headers = null;
-    this.data = null;
-    this.errorConsumer = null;
-  }
-
-  
-  public Event(Headers headers, T data) {
-    this.headers = headers;
-    this.data = data;
-    this.errorConsumer = null;
-  }
-
-  
-  public Event(Headers headers, T data, Consumer<Throwable> errorConsumer) {
-    this.headers = headers;
-    this.data = data;
-    this.errorConsumer = errorConsumer;
-  }
-
-  
-  public Event(T data) {
-    this.data = data;
-    this.errorConsumer = null;
-  }
-
-  
-  public static <T> Event<T> wrap(T obj) {
-    return new Event<T>(obj);
-  }
-
-  
-  public static <T> Event<T> wrap(T obj, Object replyToKey) {
-    return new Event<T>(obj).setReplyTo(replyToKey);
-  }
-
-  
-  public synchronized UUID getId() {
-    if (null == id) {
-      id = UUIDUtils.create();
-    }
-    return id;
-  }
-
-  
-  public synchronized Headers getHeaders() {
-    if (null == headers) {
-      headers = new Headers();
-    }
-    return headers;
-  }
-
-  
-  public Object getReplyTo() {
-    return replyTo;
-  }
-
-  
-  public Event<T> setReplyTo(Object replyTo) {
-    Assert.notNull(replyTo, "ReplyTo cannot be null.");
-    this.replyTo = replyTo;
-    return this;
-  }
-
-  
-  public Object getKey() {
-    return key;
-  }
-
-  
-  public Event<T> setKey(Object key) {
-    this.key = key;
-    return this;
-  }
-
-  
-  public T getData() {
-    return data;
-  }
-
-  
-  public Event<T> setData(T data) {
-    this.data = data;
-    return this;
-  }
-
-  
-  public Consumer<Throwable> getErrorConsumer() {
-    return errorConsumer;
-  }
-
-  
-  public Event<T> copy() {
-    return copy(data);
-  }
-
-  
-  public <E> Event<E> copy(E data) {
-    if (null != replyTo) {
-      return new Event<E>(headers, data, errorConsumer).setReplyTo(replyTo);
-    } else {
-      return new Event<E>(headers, data, errorConsumer);
-    }
-  }
-
-  
-  public void consumeError(Throwable throwable) {
-    if (null != errorConsumer) {
-      errorConsumer.accept(throwable);
-    }
-  }
-
-  @Override
-  public void recycle() {
-    this.id = null;
-    if (null != this.headers) {
-      this.headers.headers.clear();
-    }
-    this.replyTo = null;
-    this.key = null;
-    this.data = null;
-  }
-
-  public void override(Event<T> ev) {
-    this.id = ev.id;
-    this.headers = ev.headers;
-    this.replyTo = ev.replyTo;
-    this.data = ev.data;
-  }
-
-  @Override
-  public String toString() {
-    return "Event{" +
-        "id=" + id +
-        ", headers=" + headers +
-        ", replyTo=" + replyTo +
-        ", key=" + key +
-        ", data=" + data +
-        '}';
-  }
-
-  
-  public static class Headers implements Serializable, Iterable<Tuple2<String, Object>> {
-
-    
-    public static final String ORIGIN = "x-reactor-origin";
-
-    private static final long serialVersionUID = 4984692586458514948L;
-
-    private final Object monitor = UUIDUtils.create();
-    private final Map<String, Object> headers;
-
-    private Headers(boolean sealed, Map<String, Object> headers) {
-      Map<String, Object> copy = new TreeMap<String, Object>(String.CASE_INSENSITIVE_ORDER);
-      copyHeaders(headers, copy);
-      if (sealed) {
-        this.headers = Collections.unmodifiableMap(copy);
-      } else {
-        this.headers = copy;
-      }
-    }
-
-    
-    public Headers(Map<String, Object> headers) {
-      this(false, headers);
-    }
-
-    
-    public Headers() {
-      this(false, null);
-    }
-
-    
-    public Headers setAll(Map<String, Object> headers) {
-      if (null == headers || headers.isEmpty()) {
-        return this;
-      } else {
-        synchronized (this.monitor) {
-          copyHeaders(headers, this.headers);
-        }
-      }
-      return this;
-    }
-
-    
-    public <V> Headers set(String name, V value) {
-      synchronized (this.monitor) {
-        setHeader(name, value, headers);
-      }
-      return this;
-    }
-
-    
-    public Headers setOrigin(UUID id) {
-      String idString = id == null ? null : id.toString();
-      return setOrigin(idString);
-    }
-
-    
-    public String getOrigin() {
-      synchronized (this.monitor) {
-        return (String) headers.get(ORIGIN);
-      }
-    }
-
-    
-    public Headers setOrigin(String id) {
-      synchronized (this.monitor) {
-        setHeader(ORIGIN, id, headers);
-      }
-      return this;
-    }
-
-    
-    @SuppressWarnings("unchecked")
-    public <V> V get(String name) {
-      synchronized (monitor) {
-        return (V) headers.get(name);
-      }
-    }
-
-    
-    public boolean contains(String name) {
-      synchronized (monitor) {
-        return headers.containsKey(name);
-      }
-    }
-
-    
-    public Map<String, Object> asMap() {
-      synchronized (monitor) {
-        return Collections.unmodifiableMap(headers);
-      }
-    }
-
-    
-    public Headers readOnly() {
-      synchronized (monitor) {
-        return new Headers(true, headers);
-      }
-    }
-
-    
-    @Override
-    public Iterator<Tuple2<String, Object>> iterator() {
-      synchronized (this.monitor) {
-        List<Tuple2<String, Object>> headers = new ArrayList<Tuple2<String, Object>>(this.headers.size());
-        for (Map.Entry<String, Object> header : this.headers.entrySet()) {
-          headers.add(Tuple.of(header.getKey(), header.getValue()));
-        }
-        return Collections.unmodifiableList(headers).iterator();
-      }
-    }
-
-    @Override
-    public String toString() {
-      return headers.toString();
-    }
-
-    private void copyHeaders(Map<String, Object> source, Map<String, Object> target) {
-      if (source != null) {
-        for (Map.Entry<String, Object> entry : source.entrySet()) {
-          setHeader(entry.getKey(), entry.getValue(), target);
-        }
-      }
-    }
-
-    private void setHeader(String name, Object value, Map<String, Object> target) {
-      if (value == null) {
-        target.remove(name);
-      } else {
-        target.put(name, value);
-      }
-    }
-  }
-
-}
-
-<code block>
-
-
-package reactor.bus.alloc;
-
-import reactor.bus.Event;
-import reactor.fn.Supplier;
-
-
-public class EventFactorySupplier<T> implements Supplier<Event<T>> {
-
-  private final Class<T> klass;
-
-  public EventFactorySupplier(Class<T> klass) {
-    this.klass = klass;
-  }
-
-  @Override
-  public Event<T> get() {
-    return new Event<T>(klass);
-  }
-}
-
-<code block>
-
-
-package reactor.bus.alloc;
-
-import reactor.bus.Event;
-import reactor.core.alloc.Allocator;
-import reactor.core.alloc.Reference;
-import reactor.core.alloc.ReferenceCountingAllocator;
-
-import java.util.HashMap;
-
-
-public abstract class EventAllocator {
-
-	private final Object                    monitor;
-	private final HashMap<Class, Allocator> eventPools;
-
-	public EventAllocator() {
-		this(new Class[0]);
-	}
-
-	
-	@SuppressWarnings("unchecked")
-	public EventAllocator(Class[] classes) {
-		this.eventPools = new HashMap<Class, Allocator>();
-		this.monitor = new Object();
-		for (Class c : classes) {
-			eventPools.put(c, makeAllocator(c));
-    }
-  }
-
-  
-  @SuppressWarnings("unchecked")
-  public <T> Reference<Event<T>> get(Class<T> klass) {
-    if(!eventPools.containsKey(klass)) {
-      synchronized (monitor) {
-        
-        if(!eventPools.containsKey(klass)) {
-          eventPools.put(klass, makeAllocator(klass));
-        }
-      }
-    }
-    return eventPools.get(klass).allocate();
-  }
-
-  
-  protected abstract <T> Allocator<Event<T>> makeAllocator(Class<T> klass);
-
-  
-  public static EventAllocator defaultEventAllocator() {
-    return new EventAllocator() {
-      @SuppressWarnings("unchecked")
-      @Override
-      protected <T> Allocator<Event<T>> makeAllocator(Class<T> klass) {
-        return new ReferenceCountingAllocator<Event<T>>(new EventFactorySupplier(klass));
-      }
-    };
-  }
-}
-
-<code block>
-
-package reactor.bus.alloc;
-
-import org.junit.Assert;
-import org.junit.Test;
-import reactor.bus.Event;
-
-public class EventAllocatorTests {
-
-  @Test
-  public void eventAllocatorTest() {
-    EventAllocator eventAllocator = EventAllocator.defaultEventAllocator();
-
-    Event<String> eStr = eventAllocator.get(String.class).get();
-    eStr.setData("string");
-    Assert.assertTrue("String data is settable into the String event", eStr.getData() == "string");
-
-
-    Event<Integer> eInt = eventAllocator.get(Integer.class).get();
-    eInt.setData(1);
-    Assert.assertTrue("Integer data is settable into the Integer event", eInt.getData() == 1);
-  }
 }
 
 <code block>
@@ -3011,7 +4567,6 @@ import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import reactor.Environment;
 import reactor.core.Dispatcher;
-import reactor.core.alloc.Recyclable;
 import reactor.core.dispatch.SynchronousDispatcher;
 import reactor.core.dispatch.TailRecurseDispatcher;
 import reactor.core.processor.CancelException;
@@ -3019,6 +4574,7 @@ import reactor.core.queue.CompletableLinkedQueue;
 import reactor.core.queue.CompletableQueue;
 import reactor.core.support.Exceptions;
 import reactor.core.support.NonBlocking;
+import reactor.core.support.Recyclable;
 import reactor.core.support.SpecificationExceptions;
 import reactor.fn.Consumer;
 import reactor.fn.Supplier;
@@ -3037,11 +4593,11 @@ import reactor.rx.subscription.ReactiveSubscription;
 public abstract class Action<I, O> extends Stream<O>
 		implements Processor<I, O>, Consumer<I>, Recyclable, Control {
 
-	
+
 	public static final int RESERVED_SLOTS = 4;
 	public static final int NO_CAPACITY    = -1;
 
-	
+
 	protected PushSubscription<I> upstreamSubscription;
 	protected PushSubscription<O> downstreamSubscription;
 
@@ -3067,7 +4623,7 @@ public abstract class Action<I, O> extends Stream<O>
 		this.capacity = batchSize;
 	}
 
-	
+
 
 
 	@Override
@@ -3106,7 +4662,7 @@ public abstract class Action<I, O> extends Stream<O>
 
 		final boolean hasRequestTracker = upstreamSubscription != null;
 
-		
+
 		if (hasRequestTracker) {
 			subscription.cancel();
 			return;
@@ -3175,7 +4731,7 @@ public abstract class Action<I, O> extends Stream<O>
 		doShutdown();
 	}
 
-	
+
 
 	@Override
 	public Action<I, O> capacity(long elements) {
@@ -3193,9 +4749,9 @@ public abstract class Action<I, O> extends Stream<O>
 		return this;
 	}
 
-	
+
 	protected void broadcastNext(final O ev) {
-		
+
 		PushSubscription<O> downstreamSubscription = this.downstreamSubscription;
 		if (downstreamSubscription == null) {
 				throw CancelException.get();
@@ -3210,10 +4766,10 @@ public abstract class Action<I, O> extends Stream<O>
 		}
 	}
 
-	
+
 	protected void broadcastError(final Throwable throwable) {
-		
-		
+
+
 
 		if (downstreamSubscription == null) {
 			if (Environment.alive()) {
@@ -3225,9 +4781,9 @@ public abstract class Action<I, O> extends Stream<O>
 		downstreamSubscription.onError(throwable);
 	}
 
-	
+
 	protected void broadcastComplete() {
-		
+
 		if (downstreamSubscription == null) {
 			return;
 		}
@@ -3261,15 +4817,15 @@ public abstract class Action<I, O> extends Stream<O>
 		}
 	}
 
-	
+
 	@SuppressWarnings("unchecked")
 	public StreamUtils.StreamVisitor debug() {
 		return StreamUtils.browse(findOldestUpstream(Action.class));
 	}
 
-	
 
-	
+
+
 	public final <E> Action<I, O> control(Stream<E> controlStream, final Consumer<Tuple2<Action<I, O>,
 			? super E>> controller) {
 		final Action<I, O> thiz = this;
@@ -3313,7 +4869,7 @@ public abstract class Action<I, O> extends Stream<O>
 		return new CompositeAction<E, O>(subscriber, this);
 	}
 
-	
+
 	public final Consumer<?> toBroadcastCompleteConsumer() {
 		return new Consumer<Object>() {
 			@Override
@@ -3324,7 +4880,7 @@ public abstract class Action<I, O> extends Stream<O>
 	}
 
 
-	
+
 	public final Consumer<O> toBroadcastNextConsumer() {
 		return new Consumer<O>() {
 			@Override
@@ -3334,7 +4890,7 @@ public abstract class Action<I, O> extends Stream<O>
 		};
 	}
 
-	
+
 	public final Consumer<Throwable> toBroadcastErrorConsumer() {
 		return new Consumer<Throwable>() {
 			@Override
@@ -3344,7 +4900,7 @@ public abstract class Action<I, O> extends Stream<O>
 		};
 	}
 
-	
+
 	@SuppressWarnings("unchecked")
 	public <P extends Publisher<?>> P findOldestUpstream(Class<P> clazz) {
 		Action<?, ?> that = this;
@@ -3368,25 +4924,25 @@ public abstract class Action<I, O> extends Stream<O>
 		}
 	}
 
-	
+
 
 	@Override
 	public final long getCapacity() {
 		return capacity;
 	}
 
-	
+
 	public PushSubscription<I> getSubscription() {
 		return upstreamSubscription;
 	}
 
 
-	
+
 	public final PushSubscription<O> downstreamSubscription() {
 		return downstreamSubscription;
 	}
 
-	
+
 
 	@Override
 	public boolean cancelSubscription(final PushSubscription<O> subscription) {
@@ -3447,7 +5003,7 @@ public abstract class Action<I, O> extends Stream<O>
 
 	@SuppressWarnings("unchecked")
 	protected PushSubscription<I> createTrackingSubscription(Subscription subscription) {
-		
+
 		if (!PushSubscription.class.isAssignableFrom(subscription.getClass())) {
 			return PushSubscription.wrap(subscription, this);
 		} else {
@@ -3487,7 +5043,7 @@ public abstract class Action<I, O> extends Stream<O>
 		}
 	}
 
-	
+
 	protected void subscribeWithSubscription(final Subscriber<? super O> subscriber, final PushSubscription<O>
 			subscription) {
 		try {
@@ -3529,7 +5085,7 @@ public abstract class Action<I, O> extends Stream<O>
 	}
 
 	protected void doShutdown() {
-		
+
 	}
 
 	private boolean inspectPublisher(Action<?, ?> that, Class<?> actionClass) {
@@ -3557,1561 +5113,5 @@ public abstract class Action<I, O> extends Stream<O>
 						: "") +
 				(upstreamSubscription != null ? upstreamSubscription : "") + '}';
 	}
-
-}
-
-<code block>
-
-
-package reactor.core.dispatch;
-
-import reactor.Environment;
-import reactor.core.Dispatcher;
-import reactor.core.alloc.Recyclable;
-import reactor.core.support.Assert;
-import reactor.fn.Consumer;
-
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-
-public abstract class AbstractLifecycleDispatcher implements Dispatcher {
-
-	protected static final int DEFAULT_BUFFER_SIZE = 1024;
-
-	private final AtomicBoolean alive   = new AtomicBoolean(true);
-	public final  ClassLoader   context = new ClassLoader(Thread.currentThread()
-			.getContextClassLoader()) {
-	};
-
-	protected AbstractLifecycleDispatcher() {
-		super();
-	}
-
-	@Override
-	public boolean alive() {
-		return alive.get();
-	}
-
-	@Override
-	public boolean awaitAndShutdown() {
-		return awaitAndShutdown(Integer.MAX_VALUE, TimeUnit.SECONDS);
-	}
-
-	@Override
-	public void shutdown() {
-		alive.compareAndSet(true, false);
-	}
-
-	@Override
-	public void forceShutdown() {
-		alive.compareAndSet(true, false);
-	}
-
-	
-	@Override
-	public boolean inContext() {
-		return context == Thread.currentThread().getContextClassLoader();
-	}
-
-	protected final ClassLoader getContext() {
-		return context;
-	}
-
-	@Override
-	public final <E> void tryDispatch(E event, Consumer<E> eventConsumer, Consumer<Throwable> errorConsumer)
-			throws InsufficientCapacityException {
-		Assert.isTrue(alive(), "This Dispatcher has been shut down.");
-		boolean isInContext = inContext();
-		Task task;
-		if (isInContext) {
-			task = allocateRecursiveTask();
-		} else {
-			task = tryAllocateTask();
-		}
-
-		task.setData(event)
-				.setErrorConsumer(errorConsumer)
-				.setEventConsumer(eventConsumer);
-
-		if (!isInContext) {
-			execute(task);
-		} else {
-			scheduleLater(task);
-		}
-	}
-
-	@Override
-	public final <E> void dispatch(E event,
-	                               Consumer<E> eventConsumer,
-	                               Consumer<Throwable> errorConsumer) {
-
-		Assert.isTrue(alive(), "This Dispatcher has been shut down.");
-		Assert.isTrue(eventConsumer != null, "The signal consumer has not been passed.");
-		boolean isInContext = inContext();
-		Task task;
-		if (isInContext) {
-			task = allocateRecursiveTask();
-		} else {
-			task = allocateTask();
-		}
-
-		task.setData(event)
-				.setErrorConsumer(errorConsumer)
-				.setEventConsumer(eventConsumer);
-
-		if (!isInContext) {
-			execute(task);
-		} else {
-			scheduleLater(task);
-		}
-	}
-
-	@Override
-	public void execute(final Runnable command) {
-		dispatch(null, new Consumer<Object>() {
-			@Override
-			public void accept(Object ev) {
-				command.run();
-			}
-		}, null);
-	}
-
-	protected void scheduleLater(final Task task){
-	}
-
-	protected Task tryAllocateTask() throws InsufficientCapacityException {
-		return allocateTask();
-	}
-
-	protected abstract Task allocateTask();
-
-	protected abstract Task allocateRecursiveTask();
-
-	protected abstract void execute(Task task);
-
-	@SuppressWarnings("unchecked")
-	protected static void route(Task task) {
-		try {
-			if (task.eventConsumer == null) return;
-
-			task.eventConsumer.accept(task.data);
-
-		} catch (Exception e) {
-			if (task.errorConsumer != null) {
-
-				task.errorConsumer.accept(e);
-
-			} else if (Environment.alive()) {
-
-				Environment.get().routeError(e);
-
-			}
-		} finally {
-			task.recycle();
-		}
-	}
-
-	@Override
-	public String toString() {
-		return getClass().getSimpleName().replaceAll("Dispatcher", "");
-	}
-
-	public abstract class Task implements Runnable, Recyclable {
-
-		protected volatile Object              data;
-		protected volatile Consumer            eventConsumer;
-		protected volatile Consumer<Throwable> errorConsumer;
-
-		public Task setData(Object data) {
-			this.data = data;
-			return this;
-		}
-
-		public Task setEventConsumer(Consumer<?> eventConsumer) {
-			this.eventConsumer = eventConsumer;
-			return this;
-		}
-
-		public Task setErrorConsumer(Consumer<Throwable> errorConsumer) {
-			this.errorConsumer = errorConsumer;
-			return this;
-		}
-
-		@Override
-		public void recycle() {
-			data = null;
-			errorConsumer = null;
-			eventConsumer = null;
-		}
-
-	}
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-
-public class RecyclableString implements Recyclable {
-
-	private volatile String value = "";
-
-	public void setValue(String value) {
-		this.value = (null == value ? "" : value);
-	}
-
-	@Override
-	public void recycle() {
-		this.value = "";
-	}
-
-	@Override
-	public String toString() {
-		return value;
-	}
-
-}
-
-<code block>
-
-
-
-package reactor.core.alloc;
-<code block>
-
-
-package reactor.core.alloc;
-
-import reactor.fn.Supplier;
-
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
-
-
-public class ReferenceCountingAllocator<T extends Recyclable> implements Allocator<T> {
-
-	private static final int DEFAULT_INITIAL_SIZE = 2048;
-
-	private final ReentrantLock           refLock    = new ReentrantLock();
-	private final ReentrantLock           leaseLock  = new ReentrantLock();
-	private final ArrayList<Reference<T>> references = new ArrayList<Reference<T>>();
-	private final Supplier<T> factory;
-
-	private volatile BitSet leaseMask;
-
-	public ReferenceCountingAllocator(Supplier<T> factory) {
-		this(DEFAULT_INITIAL_SIZE, factory);
-	}
-
-	public ReferenceCountingAllocator(int initialSize, Supplier<T> factory) {
-		this.factory = factory;
-		this.references.ensureCapacity(initialSize);
-		this.leaseMask = new BitSet(initialSize);
-		expand(initialSize);
-	}
-
-	@Override
-	public Reference<T> allocate() {
-		Reference<T> ref;
-		int len = refCnt();
-		int next;
-
-		leaseLock.lock();
-		try {
-			next = leaseMask.nextClearBit(0);
-			if (next >= len) {
-				expand(len);
-			}
-			leaseMask.set(next);
-		} finally {
-			leaseLock.unlock();
-		}
-
-		if (next < 0) {
-			throw new RuntimeException("Allocator is exhausted.");
-		}
-
-		ref = references.get(next);
-		if (null == ref) {
-			
-			
-			refLock.lock();
-			try {
-				ref = new ReferenceCountingAllocatorReference<T>(factory.get(), next);
-				references.set(next, ref);
-			} finally {
-				refLock.unlock();
-			}
-		}
-		ref.retain();
-
-		return ref;
-	}
-
-	@Override
-	public List<Reference<T>> allocateBatch(int size) {
-		List<Reference<T>> refs = new ArrayList<Reference<T>>(size);
-		for (int i = 0; i < size; i++) {
-			refs.add(allocate());
-		}
-		return refs;
-	}
-
-	@Override
-	public void release(List<Reference<T>> batch) {
-		if (null != batch && !batch.isEmpty()) {
-			for (Reference<T> ref : batch) {
-				ref.release();
-			}
-		}
-	}
-
-	private int refCnt() {
-		refLock.lock();
-		try {
-			return references.size();
-		} finally {
-			refLock.unlock();
-		}
-	}
-
-	private void expand(int num) {
-		refLock.lock();
-		try {
-			int len = references.size();
-			int newLen = len + num;
-			for (int i = len; i <= newLen; i++) {
-				references.add(new ReferenceCountingAllocatorReference<T>(factory.get(), i));
-			}
-			BitSet newLeaseMask = new BitSet(newLen);
-			int leases = leaseMask.length();
-			for (int i = 0; i < leases; i++) {
-				newLeaseMask.set(i, leaseMask.get(i));
-			}
-			leaseMask = newLeaseMask;
-		} finally {
-			refLock.unlock();
-		}
-	}
-
-	private class ReferenceCountingAllocatorReference<T extends Recyclable> extends AbstractReference<T> {
-		private final int bit;
-
-		private ReferenceCountingAllocatorReference(T obj, int bit) {
-			super(obj);
-			this.bit = bit;
-		}
-
-		@Override
-		public void release(int decr) {
-			leaseLock.lock();
-			try {
-				super.release(decr);
-				if (getReferenceCount() < 1) {
-					
-					leaseMask.clear(bit);
-				}
-			} finally {
-				leaseLock.unlock();
-			}
-		}
-	}
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-
-public class RecyclableNumber extends Number implements Recyclable {
-
-	private volatile double value = -1;
-
-	public void setValue(int value) {
-		this.value = value;
-	}
-
-	public void setValue(long value) {
-		this.value = value;
-	}
-
-	public void setValue(float value) {
-		this.value = value;
-	}
-
-	public void setValue(double value) {
-		this.value = value;
-	}
-
-	@Override
-	public int intValue() {
-		return (int) value;
-	}
-
-	@Override
-	public long longValue() {
-		return (long) value;
-	}
-
-	@Override
-	public float floatValue() {
-		return (float) value;
-	}
-
-	@Override
-	public double doubleValue() {
-		return value;
-	}
-
-	@Override
-	public void recycle() {
-		value = -1;
-	}
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-import reactor.fn.Supplier;
-
-
-public interface Reference<T extends Recyclable> extends Supplier<T> {
-
-	
-	long getAge();
-
-	
-	int getReferenceCount();
-
-	
-	void retain();
-
-	
-	void retain(int incr);
-
-	
-	void release();
-
-	
-	void release(int decr);
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-import java.util.List;
-
-
-public interface Allocator<T extends Recyclable> {
-
-	
-	Reference<T> allocate();
-
-	
-	List<Reference<T>> allocateBatch(int size);
-
-	
-	void release(List<Reference<T>> batch);
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-
-public interface Recyclable {
-
-	
-	void recycle();
-
-}
-
-<code block>
-
-
-package reactor.core.alloc;
-
-import reactor.fn.timer.TimeUtils;
-
-
-public abstract class AbstractReference<T extends Recyclable> implements Reference<T> {
-
-	private volatile int refCnt = 0;
-
-	private final long inception;
-	private final T    obj;
-
-	protected AbstractReference(T obj) {
-		this.obj = obj;
-		this.inception = TimeUtils.approxCurrentTimeMillis();
-	}
-
-	@Override
-	public long getAge() {
-		return TimeUtils.approxCurrentTimeMillis() - inception;
-	}
-
-	@Override
-	public int getReferenceCount() {
-		return refCnt;
-	}
-
-	@Override
-	public void retain() {
-		retain(1);
-	}
-
-	@Override
-	public void retain(int incr) {
-		refCnt += incr;
-	}
-
-	@Override
-	public void release() {
-		release(1);
-	}
-
-	@Override
-	public void release(int decr) {
-		refCnt -= Math.min(decr, refCnt);
-		if(refCnt < 1) {
-			obj.recycle();
-		}
-	}
-
-	@Override
-	public T get() {
-		return obj;
-	}
-
-	@Override
-	public String toString() {
-		return "Reference{" +
-				"refCnt=" + refCnt +
-				", inception=" + inception +
-				", obj=" + obj +
-				'}';
-	}
-
-}
-
-<code block>
-
-
-package reactor.io.buffer;
-
-import reactor.core.alloc.Recyclable;
-import reactor.core.support.Assert;
-import reactor.fn.Supplier;
-
-import javax.annotation.concurrent.NotThreadSafe;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.BufferOverflowException;
-import java.nio.BufferUnderflowException;
-import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.channels.ReadableByteChannel;
-import java.nio.channels.WritableByteChannel;
-import java.nio.charset.Charset;
-import java.nio.charset.CharsetDecoder;
-import java.nio.charset.CoderResult;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-
-
-@NotThreadSafe
-public class Buffer implements Recyclable,
-		Comparable<Buffer>,
-		Iterable<Byte>,
-		ReadableByteChannel,
-		WritableByteChannel {
-
-	
-	public static int SMALL_BUFFER_SIZE = Integer.parseInt(
-			System.getProperty("reactor.io.defaultBufferSize", "" + 1024 * 16)
-	);
-
-	
-	public static int MAX_BUFFER_SIZE = Integer.parseInt(
-			System.getProperty("reactor.io.maxBufferSize", "" + 1024 * 1000 * 16)
-	);
-
-	private static final Charset UTF8 = Charset.forName("UTF-8");
-	private final boolean        dynamic;
-	private       ByteBuffer     buffer;
-	private       CharsetDecoder decoder;
-	private       CharBuffer     chars;
-	private       int            position;
-	private       int            limit;
-
-	
-	public Buffer() {
-		this.dynamic = true;
-	}
-
-	
-	public Buffer(int atLeast, boolean fixed) {
-		if (fixed) {
-			if (atLeast <= MAX_BUFFER_SIZE) {
-				this.buffer = ByteBuffer.allocate(atLeast);
-			} else {
-				throw new IllegalArgumentException("Requested buffer size exceeds maximum allowed (" + MAX_BUFFER_SIZE + ")");
-			}
-		} else {
-			ensureCapacity(atLeast);
-		}
-		this.dynamic = !fixed;
-	}
-
-	
-	public Buffer(Buffer bufferToCopy) {
-		this.dynamic = bufferToCopy.dynamic;
-		this.buffer = bufferToCopy.buffer.duplicate();
-	}
-
-	
-	public Buffer(ByteBuffer bufferToStartWith) {
-		this.dynamic = true;
-		this.buffer = bufferToStartWith;
-	}
-
-	
-	@SuppressWarnings("resource")
-	public static Buffer wrap(byte[] bytes) {
-		return new Buffer(bytes.length, true)
-				.append(bytes)
-				.flip();
-	}
-
-	
-	@SuppressWarnings("resource")
-	public static Buffer wrap(String str, boolean fixed) {
-		if(fixed){
-			return wrap(str.getBytes());
-		}else {
-			return new Buffer(str.length(), false)
-			  .append(str)
-			  .flip();
-		}
-	}
-
-	
-	public static Buffer wrap(String str) {
-		return wrap(str, true);
-	}
-
-	
-	public static Integer parseInt(Buffer b, int start, int end) {
-		b.snapshot();
-
-		b.buffer.limit(end);
-		b.buffer.position(start);
-
-		Integer i = parseInt(b);
-
-		b.reset();
-
-		return i;
-	}
-
-	
-	public static Integer parseInt(Buffer b) {
-		if (b.remaining() == 0) {
-			return null;
-		}
-
-		b.snapshot();
-		int len = b.remaining();
-
-		int num = 0;
-		int dec = 1;
-		for (int i = (b.position + len); i > b.position; ) {
-			char c = (char) b.buffer.get(--i);
-			num += Character.getNumericValue(c) * dec;
-			dec *= 10;
-		}
-
-		b.reset();
-
-		return num;
-	}
-
-	
-	public static Long parseLong(Buffer b, int start, int end) {
-		int origPos = b.buffer.position();
-		int origLimit = b.buffer.limit();
-
-		b.buffer.position(start);
-		b.buffer.limit(end);
-
-		Long l = parseLong(b);
-
-		b.buffer.position(origPos);
-		b.buffer.limit(origLimit);
-
-		return l;
-	}
-
-	
-	public static Long parseLong(Buffer b) {
-		if (b.remaining() == 0) {
-			return null;
-		}
-		ByteBuffer bb = b.buffer;
-		int origPos = bb.position();
-		int len = bb.remaining();
-
-		long num = 0;
-		int dec = 1;
-		for (int i = len; i > 0; ) {
-			char c = (char) bb.get(--i);
-			num += Character.getNumericValue(c) * dec;
-			dec *= 10;
-		}
-
-		bb.position(origPos);
-
-		return num;
-	}
-
-	@Override
-	public void recycle() {
-		if (null != buffer) {
-			buffer.position(0);
-			position = 0;
-			limit = buffer.capacity();
-			buffer.limit(limit);
-		}
-	}
-
-	
-	public final boolean isDynamic() {
-		return dynamic;
-	}
-
-	
-	public final int position() {
-		return (null == buffer ? 0 : buffer.position());
-	}
-
-	
-	public Buffer position(int pos) {
-		if (null != buffer) {
-			buffer.position(pos);
-		}
-		return this;
-	}
-
-	
-	public Buffer limit(int limit) {
-		if (null != buffer) {
-			buffer.limit(limit);
-		}
-		return this;
-	}
-
-	
-	public Buffer skip(int len) {
-		if (len < 0) {
-			throw new IllegalArgumentException("len must >= 0");
-		}
-		if (null != buffer) {
-			int pos = buffer.position();
-			buffer.position(pos + len);
-		}
-		return this;
-	}
-
-	
-	public int limit() {
-		return (null == buffer ? 0 : buffer.limit());
-	}
-
-	
-	public int capacity() {
-		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.capacity());
-	}
-
-	
-	public int remaining() {
-		return (null == buffer ? SMALL_BUFFER_SIZE : buffer.remaining());
-	}
-
-	
-	public Buffer clear() {
-		if (null != buffer) {
-			buffer.position(0);
-			buffer.limit(buffer.capacity());
-		}
-		return this;
-	}
-
-	
-	public Buffer compact() {
-		if (null != buffer) {
-			buffer.compact();
-		}
-		return this;
-	}
-
-	
-	public Buffer flip() {
-		if (null != buffer) {
-			buffer.flip();
-		}
-		return this;
-	}
-
-	
-	public Buffer rewind() {
-		if (null != buffer) {
-			buffer.rewind();
-		}
-		return this;
-	}
-
-	
-	public Buffer rewind(int len) {
-		if (len < 0) {
-			throw new IllegalArgumentException("len must >= 0");
-		}
-		if (null != buffer) {
-			int pos = buffer.position();
-			buffer.position(pos - len);
-		}
-		return this;
-	}
-
-	
-	public Buffer duplicate() {
-		return new Buffer(buffer.duplicate());
-	}
-
-	
-	public Buffer copy() {
-		if (buffer == null) return new Buffer();
-		snapshot();
-		Buffer b = new Buffer(buffer.remaining(), false);
-		b.append(buffer);
-		reset();
-
-		return b.flip();
-	}
-
-	
-	public Buffer prepend(Buffer b) {
-		if (null == b) {
-			return this;
-		}
-		return prepend(b.buffer);
-	}
-
-	
-	public Buffer prepend(String s) {
-		if (null == s) {
-			return this;
-		}
-		return prepend(s.getBytes());
-	}
-
-	
-	public Buffer prepend(byte[] bytes) {
-		shift(bytes.length);
-		buffer.put(bytes);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer prepend(ByteBuffer b) {
-		if (null == b) {
-			return this;
-		}
-		shift(b.remaining());
-		this.buffer.put(b);
-		reset();
-		return this;
-
-	}
-
-	
-	public Buffer prepend(byte b) {
-		shift(1);
-		this.buffer.put(b);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer prepend(char c) {
-		shift(2);
-		this.buffer.putChar(c);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer prepend(short s) {
-		shift(2);
-		this.buffer.putShort(s);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer prepend(int i) {
-		shift(4);
-		this.buffer.putInt(i);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer prepend(long l) {
-		shift(8);
-		this.buffer.putLong(l);
-		reset();
-		return this;
-	}
-
-	
-	public Buffer append(String s) {
-		ensureCapacity(s.length());
-		buffer.put(s.getBytes());
-		return this;
-	}
-
-	
-	public Buffer append(short s) {
-		ensureCapacity(2);
-		buffer.putShort(s);
-		return this;
-	}
-
-	
-	public Buffer append(int i) {
-		ensureCapacity(4);
-		buffer.putInt(i);
-		return this;
-	}
-
-	
-	public Buffer append(long l) {
-		ensureCapacity(8);
-		buffer.putLong(l);
-		return this;
-	}
-
-	
-	public Buffer append(char c) {
-		ensureCapacity(2);
-		buffer.putChar(c);
-		return this;
-	}
-
-	
-	public Buffer append(ByteBuffer... buffers) {
-		for (ByteBuffer bb : buffers) {
-			if (bb != null) {
-				ensureCapacity(bb.remaining());
-				buffer.put(bb);
-			}
-		}
-		return this;
-	}
-
-	
-	public Buffer append(Buffer... buffers) {
-		for (Buffer b : buffers) {
-			int pos = position();
-			int len = b.remaining();
-			ensureCapacity(len);
-			if (b.byteBuffer() != null) {
-				buffer.put(b.byteBuffer());
-				buffer.position(pos + len);
-			}
-		}
-		return this;
-	}
-
-	
-	public Buffer append(byte b) {
-		ensureCapacity(1);
-		buffer.put(b);
-		return this;
-	}
-
-	
-	public Buffer append(byte[] b) {
-		ensureCapacity(b.length);
-		buffer.put(b);
-		return this;
-	}
-
-	
-	public Buffer append(byte[] b, int start, int len) {
-		ensureCapacity(b.length);
-		buffer.put(b, start, len);
-		return this;
-	}
-
-	
-	public byte first() {
-		snapshot();
-		if (this.position > 0) {
-			buffer.position(0); 
-		}
-		byte b = buffer.get(); 
-		reset(); 
-		return b;
-	}
-
-	
-	public byte last() {
-		int pos = buffer.position();
-		int limit = buffer.limit();
-		buffer.position(limit - 1); 
-		byte b = buffer.get(); 
-		buffer.position(pos); 
-		return b;
-	}
-
-	
-	public byte read() {
-		if (null != buffer) {
-			return buffer.get();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public Buffer read(byte[] b) {
-		if (null != buffer) {
-			buffer.get(b);
-		}
-		return this;
-	}
-
-	
-	public short readShort() {
-		if (null != buffer) {
-			return buffer.getShort();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public int readInt() {
-		if (null != buffer) {
-			return buffer.getInt();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public float readFloat() {
-		if (null != buffer) {
-			return buffer.getFloat();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public double readDouble() {
-		if (null != buffer) {
-			return buffer.getDouble();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public long readLong() {
-		if (null != buffer) {
-			return buffer.getLong();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public char readChar() {
-		if (null != buffer) {
-			return buffer.getChar();
-		}
-		throw new BufferUnderflowException();
-	}
-
-	
-	public void snapshot() {
-		this.position = buffer.position();
-		this.limit = buffer.limit();
-	}
-
-	
-	public Buffer reset() {
-		buffer.limit(limit);
-		buffer.position(position);
-		return this;
-	}
-
-	@Override
-	public Iterator<Byte> iterator() {
-		return new Iterator<Byte>() {
-			@Override
-			public boolean hasNext() {
-				return buffer.remaining() > 0;
-			}
-
-			@Override
-			public Byte next() {
-				return buffer.get();
-			}
-
-			@Override
-			public void remove() {
-				
-			}
-		};
-	}
-
-	@Override
-	public int read(ByteBuffer dst) throws IOException {
-		snapshot();
-		if (dst.remaining() < this.limit) {
-			buffer.limit(dst.remaining());
-		}
-		int pos = dst.position();
-		dst.put(buffer);
-		buffer.limit(this.limit);
-		return dst.position() - pos;
-	}
-
-	@Override
-	public int write(ByteBuffer src) throws IOException {
-		int pos = src.position();
-		append(src);
-		return src.position() - pos;
-	}
-
-	@Override
-	public boolean isOpen() {
-		return isDynamic();
-	}
-
-	@Override
-	public void close() throws IOException {
-		clear();
-	}
-
-	
-	public String asString() {
-		if (null != buffer) {
-			return decode();
-		} else {
-			return null;
-		}
-	}
-
-	
-	public String substring(int start, int end) {
-		snapshot();
-
-		buffer.limit((end > start ? end : this.limit));
-		buffer.position(start);
-		String s = asString();
-
-		reset();
-		return s;
-	}
-
-	
-	public byte[] asBytes() {
-		if (null != buffer) {
-			snapshot();
-			byte[] b = new byte[buffer.remaining()];
-			buffer.get(b);
-			reset();
-			return b;
-		} else {
-			return null;
-		}
-	}
-
-	
-	public InputStream inputStream() {
-		return new BufferInputStream();
-	}
-
-	
-	public Buffer slice(int start, int len) {
-		snapshot();
-		ByteBuffer bb = ByteBuffer.allocate(len);
-		buffer.position(start);
-		bb.put(buffer);
-		reset();
-		bb.flip();
-		return new Buffer(bb);
-	}
-
-	
-	public List<View> split(int delimiter) {
-		return split(new ArrayList<View>(), delimiter, false);
-	}
-
-	
-	public List<View> split(List<View> views, int delimiter) {
-		return split(views, delimiter, false);
-	}
-
-	
-	public List<View> split(int delimiter, boolean stripDelimiter) {
-		return split(new ArrayList<View>(), delimiter, stripDelimiter);
-	}
-
-	
-	public List<View> split(List<View> views, int delimiter, boolean stripDelimiter) {
-		snapshot();
-
-		int start = this.position;
-		for (byte b : this) {
-			if (b == delimiter) {
-				int end = stripDelimiter ? buffer.position() - 1 : buffer.position();
-				views.add(createView(start, end));
-				start = end + (stripDelimiter ? 1 : 0);
-			}
-		}
-		if (start != buffer.position()) {
-			buffer.position(start);
-		}
-
-		reset();
-
-		return views;
-	}
-
-	
-	public Iterable<View> split(Buffer delimiter) {
-		return split(new ArrayList<View>(), delimiter, false);
-	}
-
-	
-	public Iterable<View> split(Buffer delimiter, boolean stripDelimiter) {
-		return split(new ArrayList<View>(), delimiter, stripDelimiter);
-	}
-
-	
-	public Iterable<View> split(List<View> views, Buffer delimiter, boolean stripDelimiter) {
-		snapshot();
-
-		byte[] delimBytes = delimiter.asBytes();
-		if (delimBytes.length == 0) {
-			return Collections.emptyList();
-		}
-
-		int start = this.position;
-		for (byte b : this) {
-			if (b != delimBytes[0]) {
-				continue;
-			}
-			int end = -1;
-			for (int i = 1; i < delimBytes.length; i++) {
-				if (read() == delimBytes[i]) {
-					end = stripDelimiter ? buffer.position() - delimBytes.length : buffer.position();
-				} else {
-					end = -1;
-					break;
-				}
-			}
-			if (end > 0) {
-				views.add(createView(start, end));
-				start = end + (stripDelimiter ? delimBytes.length : 0);
-			}
-		}
-		if (start != buffer.position()) {
-			buffer.position(start);
-		}
-
-		reset();
-
-		return views;
-	}
-
-	
-	public int indexOf(byte b) {
-		return indexOf(b, buffer.position(), buffer.remaining());
-	}
-
-	
-	public int indexOf(byte b, int start, int end) {
-		snapshot();
-		if (buffer.position() != start) {
-			buffer.position(start);
-		}
-		int pos = -1;
-		while (buffer.hasRemaining() && buffer.position() < end) {
-			if (buffer.get() == b) {
-				pos = buffer.position();
-				break;
-			}
-		}
-		reset();
-		return pos;
-	}
-
-	
-	public View createView() {
-		snapshot();
-		return new View(position, limit);
-	}
-
-	
-	public View createView(int start, int end) {
-		snapshot();
-		return new View(start, end);
-	}
-
-	
-	public List<View> slice(int... positions) {
-		Assert.notNull(positions, "Positions cannot be null.");
-		if (positions.length == 0) {
-			return Collections.emptyList();
-		}
-
-		snapshot();
-
-		List<View> views = new ArrayList<View>();
-		int len = positions.length;
-		for (int i = 0; i < len; i++) {
-			int start = positions[i];
-			int end = (i + 1 < len ? positions[++i] : this.limit);
-			views.add(createView(start, end));
-			reset();
-		}
-
-		return views;
-	}
-
-	
-	public ByteBuffer byteBuffer() {
-		return buffer;
-	}
-
-	
-	public boolean isDelimitingBuffer(){
-		return this == DELIMITING_BUFFER;
-	}
-
-	@Override
-	public String toString() {
-		return (null != buffer ? buffer.toString() : "<EMPTY>");
-	}
-
-	@Override
-	public int compareTo(Buffer buffer) {
-		return (null != buffer ? this.buffer.compareTo(buffer.buffer) : -1);
-	}
-
-	private synchronized void ensureCapacity(int atLeast) {
-		if (null == buffer) {
-			buffer = ByteBuffer.allocate(Math.max(atLeast, SMALL_BUFFER_SIZE));
-			return;
-		}
-		int pos = buffer.position();
-		int cap = buffer.capacity();
-		if (dynamic) {
-			int neededCapacity = pos + atLeast;
-			if (neededCapacity > cap) {
-				
-				expand(neededCapacity - cap);
-			}
-			buffer.limit(Math.max(neededCapacity, buffer.limit()));
-		} else if (pos + SMALL_BUFFER_SIZE > MAX_BUFFER_SIZE) {
-			throw new BufferOverflowException();
-		}
-	}
-
-	private void expand(int expandSize) {
-		snapshot();
-		ByteBuffer newBuff = (buffer.isDirect()
-				? ByteBuffer.allocateDirect(buffer.capacity() + expandSize)
-				: ByteBuffer.allocate(buffer.capacity() + expandSize));
-		buffer.flip();
-		newBuff.put(buffer);
-		buffer = newBuff;
-		reset();
-	}
-
-	private String decode() {
-		if (null == decoder) {
-			decoder = UTF8.newDecoder();
-		}
-		snapshot();
-		try {
-			if (null == chars || chars.remaining() < buffer.remaining()) {
-				chars = CharBuffer.allocate(buffer.remaining());
-			} else {
-				chars.rewind();
-			}
-			decoder.reset();
-			CoderResult cr = decoder.decode(buffer, chars, true);
-			if (cr.isUnderflow()) {
-				decoder.flush(chars);
-			}
-			chars.flip();
-
-			return chars.toString();
-		} finally {
-			reset();
-		}
-	}
-
-	private void shift(int right) {
-		ByteBuffer currentBuffer;
-		if (null == buffer) {
-			ensureCapacity(right);
-			currentBuffer = buffer;
-		} else {
-			currentBuffer = buffer.slice();
-		}
-
-		int len = buffer.remaining();
-		int pos = buffer.position();
-		ensureCapacity(right + len);
-
-		buffer.position(pos + right);
-		buffer.put(currentBuffer);
-		buffer.position(pos);
-
-		snapshot();
-	}
-
-	private class BufferInputStream extends InputStream {
-		ByteBuffer buffer = Buffer.this.buffer.slice();
-
-		@Override
-		public int read(byte[] b) throws IOException {
-			int pos = buffer.position();
-			buffer.get(b);
-			syncPos();
-			return buffer.position() - pos;
-		}
-
-		@Override
-		public int read(byte[] b, int off, int len) throws IOException {
-			if (null == buffer || buffer.remaining() == 0) {
-				return -1;
-			}
-			byte[] bytes = asBytes();
-			int bytesLen = bytes.length;
-			System.arraycopy(bytes, 0, b, off, bytesLen);
-			if (len < bytesLen) {
-				buffer.position(position + len);
-			}
-			syncPos();
-			return bytesLen;
-		}
-
-		@Override
-		public long skip(long n) throws IOException {
-			if (n < buffer.remaining()) {
-				throw new IOException(new BufferUnderflowException());
-			}
-			int pos = buffer.position();
-			buffer.position((int) (pos + n));
-			syncPos();
-			return buffer.position() - pos;
-		}
-
-		@Override
-		public int available() throws IOException {
-			return buffer.remaining();
-		}
-
-		@Override
-		public void close() throws IOException {
-			buffer.position(buffer.limit());
-			syncPos();
-		}
-
-		@Override
-		public synchronized void mark(int readlimit) {
-			buffer.mark();
-			int pos = buffer.position();
-			int max = buffer.capacity() - pos;
-			int newLimit = Math.min(max, pos + readlimit);
-			buffer.limit(newLimit);
-		}
-
-		@Override
-		public synchronized void reset() throws IOException {
-			buffer.reset();
-			syncPos();
-		}
-
-		@Override
-		public boolean markSupported() {
-			return true;
-		}
-
-		@Override
-		public int read() throws IOException {
-			int b = buffer.get();
-			syncPos();
-			return b;
-		}
-
-		private void syncPos() {
-			int oldPos = Buffer.this.buffer.position();
-			Buffer.this.buffer.position(buffer.position() + oldPos);
-		}
-	}
-
-	
-	public class View implements Supplier<Buffer> {
-		private final int start;
-		private final int end;
-
-		private View(int start, int end) {
-			this.start = start;
-			this.end = end;
-		}
-
-		
-		public int getStart() {
-			return start;
-		}
-
-		
-		public int getEnd() {
-			return end;
-		}
-
-		@Override
-		public Buffer get() {
-			buffer.limit(end);
-			buffer.position(start);
-			return Buffer.this;
-		}
-	}
-
-	
-	public static final Buffer DELIMITING_BUFFER = new Buffer();
 
 }

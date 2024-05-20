@@ -1,10 +1,10 @@
-Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
-Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/activity/NotificationDeleteConfirmation.java
-Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/service/NotificationActionService.java
-Java_Projects/k_9/k_9-23c49d83/prev/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
 Java_Projects/k_9/k_9-23c49d83/prev/k9mail/src/main/java/com/fsck/k9/activity/NotificationDeleteConfirmation.java
 Java_Projects/k_9/k_9-23c49d83/prev/k9mail/src/main/java/com/fsck/k9/service/NotificationActionService.java
-Java_Projects/k_9/k_9-9d44f0e0/curr/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
-Java_Projects/k_9/k_9-9d44f0e0/curr/k9mail-library/src/main/java/com/fsck/k9/mail/transport/SmtpTransport.java
+Java_Projects/k_9/k_9-23c49d83/prev/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
+Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/activity/NotificationDeleteConfirmation.java
+Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/service/NotificationActionService.java
+Java_Projects/k_9/k_9-23c49d83/curr/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
 Java_Projects/k_9/k_9-9d44f0e0/prev/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
 Java_Projects/k_9/k_9-9d44f0e0/prev/k9mail-library/src/main/java/com/fsck/k9/mail/transport/SmtpTransport.java
+Java_Projects/k_9/k_9-9d44f0e0/curr/k9mail/src/main/java/com/fsck/k9/controller/MessagingController.java
+Java_Projects/k_9/k_9-9d44f0e0/curr/k9mail-library/src/main/java/com/fsck/k9/mail/transport/SmtpTransport.java

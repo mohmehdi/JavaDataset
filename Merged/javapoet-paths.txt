@@ -1,6 +1,6 @@
+Java_Projects/javapoet/javapoet-5a37c2aa/prev/src/main/java/com/squareup/javapoet/TypeVariableName.java
+Java_Projects/javapoet/javapoet-5a37c2aa/prev/src/test/java/com/squareup/javapoet/TypesTest.java
 Java_Projects/javapoet/javapoet-5a37c2aa/curr/src/main/java/com/squareup/javapoet/TypeVariableName.java
 Java_Projects/javapoet/javapoet-5a37c2aa/curr/src/test/java/com/squareup/javapoet/AbstractTypesTest.java
 Java_Projects/javapoet/javapoet-5a37c2aa/curr/src/test/java/com/squareup/javapoet/TypesEclipseTest.java
 Java_Projects/javapoet/javapoet-5a37c2aa/curr/src/test/java/com/squareup/javapoet/TypesTest.java
-Java_Projects/javapoet/javapoet-5a37c2aa/prev/src/main/java/com/squareup/javapoet/TypeVariableName.java
-Java_Projects/javapoet/javapoet-5a37c2aa/prev/src/test/java/com/squareup/javapoet/TypesTest.java

@@ -3,6 +3,131 @@ package org.springframework.roo.classpath.details;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.commons.lang3.builder.ToStringBuilder;
+import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
+import org.springframework.roo.classpath.details.comments.CommentStructure;
+import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
+import org.springframework.roo.model.JavaSymbolName;
+import org.springframework.roo.model.JavaType;
+
+
+public final class MethodMetadataBuilder extends
+        AbstractInvocableMemberMetadataBuilder<MethodMetadata> {
+
+    private JavaSymbolName methodName;
+    private JavaType returnType;
+    private CommentStructure commentStructure;
+    private String genericDefinition;
+
+    public MethodMetadataBuilder(final MethodMetadata existing) {
+        super(existing);
+        init(existing.getMethodName(), existing.getReturnType());
+    }
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId) {
+        super(declaredbyMetadataId);
+    }
+
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final int modifier, final JavaSymbolName methodName,
+            final JavaType returnType,
+            final InvocableMemberBodyBuilder bodyBuilder) {
+        this(declaredbyMetadataId, modifier, methodName, returnType,
+                new ArrayList<AnnotatedJavaType>(),
+                new ArrayList<JavaSymbolName>(), bodyBuilder);
+    }
+
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final int modifier, final JavaSymbolName methodName,
+            final JavaType returnType,
+            final List<AnnotatedJavaType> parameterTypes,
+            final List<JavaSymbolName> parameterNames,
+            final InvocableMemberBodyBuilder bodyBuilder) {
+        this(declaredbyMetadataId);
+        setModifier(modifier);
+        setParameterTypes(parameterTypes);
+        setParameterNames(parameterNames);
+        init(methodName, returnType);
+        setBodyBuilder(bodyBuilder);
+    }
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final MethodMetadata existing) {
+        super(declaredbyMetadataId, existing);
+        init(existing.getMethodName(), existing.getReturnType());
+    }
+
+    public MethodMetadata build() {
+        DefaultMethodMetadata methodMetadata = new DefaultMethodMetadata(
+                getCustomData().build(), getDeclaredByMetadataId(),
+                getModifier(), buildAnnotations(), getMethodName(),
+                getReturnType(), getParameterTypes(), getParameterNames(),
+                getThrowsTypes(), getBodyBuilder().getOutput());
+
+        methodMetadata.setCommentStructure(this.commentStructure);
+
+        methodMetadata.setGenericDefinition(this.genericDefinition);
+
+        return methodMetadata;
+    }
+
+    public JavaSymbolName getMethodName() {
+        return methodName;
+    }
+
+    public JavaType getReturnType() {
+        return returnType;
+    }
+
+    private void init(final JavaSymbolName methodName, final JavaType returnType) {
+        this.methodName = methodName;
+        this.returnType = returnType;
+    }
+
+    public void setMethodName(final JavaSymbolName methodName) {
+        this.methodName = methodName;
+    }
+
+    public void setReturnType(final JavaType returnType) {
+        this.returnType = returnType;
+    }
+
+    public CommentStructure getCommentStructure() {
+        return commentStructure;
+    }
+
+    public void setCommentStructure(CommentStructure commentStructure) {
+        this.commentStructure = commentStructure;
+    }
+    
+
+    public void setGenericDefinition(String definition){
+    	this.genericDefinition = definition;
+    }
+    
+
+    public String getGenericDefinition(){
+    	return this.genericDefinition;
+    }
+
+    @Override
+    public String toString() {
+        return new ToStringBuilder(this)
+
+
+                .append("methodName", methodName)
+                .append("parameterTypes", getParameterTypes()).toString();
+    }
+}
+
+<code block>
+package org.springframework.roo.classpath.details;
+
+import java.util.ArrayList;
+import java.util.List;
+
 import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
 import org.springframework.roo.classpath.details.comments.CommentStructure;
 import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
@@ -18,13 +143,10 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
     private List<AnnotatedJavaType> parameterTypes = new ArrayList<AnnotatedJavaType>();
     private List<JavaType> throwsTypes = new ArrayList<JavaType>();
     private CommentStructure commentStructure;
-    private String genericDefinition;
 
     protected AbstractInvocableMemberMetadataBuilder(
             final InvocableMemberMetadata existing) {
         super(existing);
-        this.commentStructure = existing.getCommentStructure();
-        this.genericDefinition = existing.getGenericDefinition();
         this.parameterNames = new ArrayList<JavaSymbolName>(
                 existing.getParameterNames());
         this.parameterTypes = new ArrayList<AnnotatedJavaType>(
@@ -42,8 +164,6 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
             final String declaredbyMetadataId,
             final InvocableMemberMetadata existing) {
         super(declaredbyMetadataId, existing);
-        this.commentStructure = existing.getCommentStructure();
-        this.genericDefinition = existing.getGenericDefinition();
         this.parameterNames = new ArrayList<JavaSymbolName>(
                 existing.getParameterNames());
         this.parameterTypes = new ArrayList<AnnotatedJavaType>(
@@ -119,129 +239,16 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
     public void setCommentStructure(CommentStructure commentStructure) {
         this.commentStructure = commentStructure;
     }
-    
-    public String getGenericDefinition() {
-        return genericDefinition;
-    }
-
-    public void setGenericDefinition(String genericDefinition) {
-        this.genericDefinition = genericDefinition;
-    }
-}
-
-<code block>
-package org.springframework.roo.classpath.details;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import org.apache.commons.lang3.builder.ToStringBuilder;
-import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
-import org.springframework.roo.classpath.details.comments.CommentStructure;
-import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
-import org.springframework.roo.model.JavaSymbolName;
-import org.springframework.roo.model.JavaType;
-
-
-public final class MethodMetadataBuilder extends
-        AbstractInvocableMemberMetadataBuilder<MethodMetadata> {
-
-    private JavaSymbolName methodName;
-    private JavaType returnType;
-
-    public MethodMetadataBuilder(final MethodMetadata existing) {
-        super(existing);
-        init(existing.getMethodName(), existing.getReturnType());
-    }
-
-    public MethodMetadataBuilder(final String declaredbyMetadataId) {
-        super(declaredbyMetadataId);
-    }
-
-    
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final int modifier, final JavaSymbolName methodName,
-            final JavaType returnType,
-            final InvocableMemberBodyBuilder bodyBuilder) {
-        this(declaredbyMetadataId, modifier, methodName, returnType,
-                new ArrayList<AnnotatedJavaType>(),
-                new ArrayList<JavaSymbolName>(), bodyBuilder);
-    }
-
-    
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final int modifier, final JavaSymbolName methodName,
-            final JavaType returnType,
-            final List<AnnotatedJavaType> parameterTypes,
-            final List<JavaSymbolName> parameterNames,
-            final InvocableMemberBodyBuilder bodyBuilder) {
-        this(declaredbyMetadataId);
-        setModifier(modifier);
-        setParameterTypes(parameterTypes);
-        setParameterNames(parameterNames);
-        init(methodName, returnType);
-        setBodyBuilder(bodyBuilder);
-    }
-
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final MethodMetadata existing) {
-        super(declaredbyMetadataId, existing);
-        init(existing.getMethodName(), existing.getReturnType());
-    }
-
-    public MethodMetadata build() {
-        DefaultMethodMetadata methodMetadata = new DefaultMethodMetadata(
-                getCustomData().build(), getDeclaredByMetadataId(),
-                getModifier(), buildAnnotations(), getMethodName(),
-                getReturnType(), getParameterTypes(), getParameterNames(),
-                getThrowsTypes(), getBodyBuilder().getOutput());
-        
-        methodMetadata.setCommentStructure(this.getCommentStructure());
-        
-        methodMetadata.setGenericDefinition(this.getGenericDefinition());
-
-        return methodMetadata;
-    }
-
-    public JavaSymbolName getMethodName() {
-        return methodName;
-    }
-
-    public JavaType getReturnType() {
-        return returnType;
-    }
-
-    private void init(final JavaSymbolName methodName, final JavaType returnType) {
-        this.methodName = methodName;
-        this.returnType = returnType;
-    }
-
-    public void setMethodName(final JavaSymbolName methodName) {
-        this.methodName = methodName;
-    }
-
-    public void setReturnType(final JavaType returnType) {
-        this.returnType = returnType;
-    }
-
-    @Override
-    public String toString() {
-        return new ToStringBuilder(this)
-                
-                
-                .append("methodName", methodName)
-                .append("parameterTypes", getParameterTypes()).toString();
-    }
 }
 
 <code block>
 package org.springframework.roo.addon.web.mvc.controller.addon.scaffold;
 
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.COUNT_ALL_METHOD;
-import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_SORTED_METHOD;
-import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_SORTED_METHOD;
+import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_METHOD;
+import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.MERGE_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.PERSIST_METHOD;
@@ -332,7 +339,7 @@ public class WebScaffoldMetadata extends
 	private JavaTypeMetadataDetails javaTypeMetadataHolder;
 	private TypeLocationService typeLocationService;
 
-	
+
 	public WebScaffoldMetadata(
 			final String identifier,
 			final JavaType aspectName,
@@ -380,7 +387,7 @@ public class WebScaffoldMetadata extends
 			builder.addConstructor(getConstructor());
 		}
 
-		
+
 		final MemberTypeAdditions persistMethod = crudAdditions
 				.get(PERSIST_METHOD);
 		if (annotationValues.isCreate() && persistMethod != null) {
@@ -401,13 +408,13 @@ public class WebScaffoldMetadata extends
 		final MemberTypeAdditions findEntriesSortedMethod = crudAdditions
 				.get(FIND_ENTRIES_SORTED_METHOD);
 
-		
+
 		if (findMethod != null) {
 			builder.addMethod(getShowMethod(idField, findMethod));
 			findMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		if (countAllMethod != null && findAllSortedMethod != null
 				&& findEntriesSortedMethod != null) {
 			builder.addMethod(getListMethod(findAllSortedMethod,
@@ -417,7 +424,7 @@ public class WebScaffoldMetadata extends
 			findEntriesSortedMethod.copyAdditionsTo(builder,
 					governorTypeDetails);
 		}
-		
+
 		else if (countAllMethod != null && findAllMethod != null
 				&& findEntriesMethod != null) {
 			builder.addMethod(getListMethod(findAllMethod, countAllMethod,
@@ -427,7 +434,7 @@ public class WebScaffoldMetadata extends
 			findEntriesMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		final MemberTypeAdditions updateMethod = crudAdditions
 				.get(MERGE_METHOD);
 		if (annotationValues.isUpdate() && updateMethod != null
@@ -437,7 +444,7 @@ public class WebScaffoldMetadata extends
 			updateMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		final MemberTypeAdditions deleteMethod = crudAdditions
 				.get(REMOVE_METHOD);
 		if (annotationValues.isDelete() && deleteMethod != null
@@ -527,7 +534,7 @@ public class WebScaffoldMetadata extends
 	private MethodMetadataBuilder getCreateFormMethod(
 			final List<JavaTypeMetadataDetails> dependentTypes) {
 
-		
+
 		ClassOrInterfaceTypeDetails cid = typeLocationService
 				.getTypeDetails(formBackingType);
 
@@ -590,8 +597,8 @@ public class WebScaffoldMetadata extends
 
 			countMethod.copyAdditionsTo(builder, governorTypeDetails);
 
-			
-			
+
+
 			String dependentTypeName = fieldNamesList.get(fieldPosition)
 					.getFieldName().getSymbolName();
 			bodyBuilder.appendFormalLine("dependencies.add(new String[] { \""
@@ -617,12 +624,12 @@ public class WebScaffoldMetadata extends
 		return methodBuilder;
 	}
 
-	
+
 	private List<FieldMetadata> getEntityFields(
 			final List<JavaTypeMetadataDetails> dependentTypes,
 			ClassOrInterfaceTypeDetails cid) {
 		List<FieldMetadata> fieldsNamesList = new ArrayList<FieldMetadata>();
-		
+
 		List<? extends FieldMetadata> fieldList = cid.getDeclaredFields();
 		Iterator<? extends FieldMetadata> it = fieldList.iterator();
 		while (it.hasNext()) {
@@ -872,7 +879,7 @@ public class WebScaffoldMetadata extends
 				parameterNames, bodyBuilder);
 	}
 
-	
+
 	private MethodMetadataBuilder getListMethod(
 			final MemberTypeAdditions findAllAdditions,
 			final MemberTypeAdditions countAllAdditions,
@@ -1198,6 +1205,111 @@ package org.springframework.roo.classpath.details;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.commons.lang3.builder.ToStringBuilder;
+import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
+import org.springframework.roo.classpath.details.comments.CommentStructure;
+import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
+import org.springframework.roo.model.JavaSymbolName;
+import org.springframework.roo.model.JavaType;
+
+
+public final class MethodMetadataBuilder extends
+        AbstractInvocableMemberMetadataBuilder<MethodMetadata> {
+
+    private JavaSymbolName methodName;
+    private JavaType returnType;
+
+    public MethodMetadataBuilder(final MethodMetadata existing) {
+        super(existing);
+        init(existing.getMethodName(), existing.getReturnType());
+    }
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId) {
+        super(declaredbyMetadataId);
+    }
+
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final int modifier, final JavaSymbolName methodName,
+            final JavaType returnType,
+            final InvocableMemberBodyBuilder bodyBuilder) {
+        this(declaredbyMetadataId, modifier, methodName, returnType,
+                new ArrayList<AnnotatedJavaType>(),
+                new ArrayList<JavaSymbolName>(), bodyBuilder);
+    }
+
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final int modifier, final JavaSymbolName methodName,
+            final JavaType returnType,
+            final List<AnnotatedJavaType> parameterTypes,
+            final List<JavaSymbolName> parameterNames,
+            final InvocableMemberBodyBuilder bodyBuilder) {
+        this(declaredbyMetadataId);
+        setModifier(modifier);
+        setParameterTypes(parameterTypes);
+        setParameterNames(parameterNames);
+        init(methodName, returnType);
+        setBodyBuilder(bodyBuilder);
+    }
+
+    public MethodMetadataBuilder(final String declaredbyMetadataId,
+            final MethodMetadata existing) {
+        super(declaredbyMetadataId, existing);
+        init(existing.getMethodName(), existing.getReturnType());
+    }
+
+    public MethodMetadata build() {
+        DefaultMethodMetadata methodMetadata = new DefaultMethodMetadata(
+                getCustomData().build(), getDeclaredByMetadataId(),
+                getModifier(), buildAnnotations(), getMethodName(),
+                getReturnType(), getParameterTypes(), getParameterNames(),
+                getThrowsTypes(), getBodyBuilder().getOutput());
+        
+        methodMetadata.setCommentStructure(this.getCommentStructure());
+
+        methodMetadata.setGenericDefinition(this.getGenericDefinition());
+
+        return methodMetadata;
+    }
+
+    public JavaSymbolName getMethodName() {
+        return methodName;
+    }
+
+    public JavaType getReturnType() {
+        return returnType;
+    }
+
+    private void init(final JavaSymbolName methodName, final JavaType returnType) {
+        this.methodName = methodName;
+        this.returnType = returnType;
+    }
+
+    public void setMethodName(final JavaSymbolName methodName) {
+        this.methodName = methodName;
+    }
+
+    public void setReturnType(final JavaType returnType) {
+        this.returnType = returnType;
+    }
+
+    @Override
+    public String toString() {
+        return new ToStringBuilder(this)
+
+
+                .append("methodName", methodName)
+                .append("parameterTypes", getParameterTypes()).toString();
+    }
+}
+
+<code block>
+package org.springframework.roo.classpath.details;
+
+import java.util.ArrayList;
+import java.util.List;
+
 import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
 import org.springframework.roo.classpath.details.comments.CommentStructure;
 import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
@@ -1213,10 +1325,13 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
     private List<AnnotatedJavaType> parameterTypes = new ArrayList<AnnotatedJavaType>();
     private List<JavaType> throwsTypes = new ArrayList<JavaType>();
     private CommentStructure commentStructure;
+    private String genericDefinition;
 
     protected AbstractInvocableMemberMetadataBuilder(
             final InvocableMemberMetadata existing) {
         super(existing);
+        this.commentStructure = existing.getCommentStructure();
+        this.genericDefinition = existing.getGenericDefinition();
         this.parameterNames = new ArrayList<JavaSymbolName>(
                 existing.getParameterNames());
         this.parameterTypes = new ArrayList<AnnotatedJavaType>(
@@ -1234,6 +1349,8 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
             final String declaredbyMetadataId,
             final InvocableMemberMetadata existing) {
         super(declaredbyMetadataId, existing);
+        this.commentStructure = existing.getCommentStructure();
+        this.genericDefinition = existing.getGenericDefinition();
         this.parameterNames = new ArrayList<JavaSymbolName>(
                 existing.getParameterNames());
         this.parameterTypes = new ArrayList<AnnotatedJavaType>(
@@ -1309,130 +1426,13 @@ public abstract class AbstractInvocableMemberMetadataBuilder<T extends Invocable
     public void setCommentStructure(CommentStructure commentStructure) {
         this.commentStructure = commentStructure;
     }
-}
-
-<code block>
-package org.springframework.roo.classpath.details;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import org.apache.commons.lang3.builder.ToStringBuilder;
-import org.springframework.roo.classpath.details.annotations.AnnotatedJavaType;
-import org.springframework.roo.classpath.details.comments.CommentStructure;
-import org.springframework.roo.classpath.itd.InvocableMemberBodyBuilder;
-import org.springframework.roo.model.JavaSymbolName;
-import org.springframework.roo.model.JavaType;
-
-
-public final class MethodMetadataBuilder extends
-        AbstractInvocableMemberMetadataBuilder<MethodMetadata> {
-
-    private JavaSymbolName methodName;
-    private JavaType returnType;
-    private CommentStructure commentStructure;
-    private String genericDefinition;
-
-    public MethodMetadataBuilder(final MethodMetadata existing) {
-        super(existing);
-        init(existing.getMethodName(), existing.getReturnType());
-    }
-
-    public MethodMetadataBuilder(final String declaredbyMetadataId) {
-        super(declaredbyMetadataId);
-    }
-
     
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final int modifier, final JavaSymbolName methodName,
-            final JavaType returnType,
-            final InvocableMemberBodyBuilder bodyBuilder) {
-        this(declaredbyMetadataId, modifier, methodName, returnType,
-                new ArrayList<AnnotatedJavaType>(),
-                new ArrayList<JavaSymbolName>(), bodyBuilder);
+    public String getGenericDefinition() {
+        return genericDefinition;
     }
 
-    
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final int modifier, final JavaSymbolName methodName,
-            final JavaType returnType,
-            final List<AnnotatedJavaType> parameterTypes,
-            final List<JavaSymbolName> parameterNames,
-            final InvocableMemberBodyBuilder bodyBuilder) {
-        this(declaredbyMetadataId);
-        setModifier(modifier);
-        setParameterTypes(parameterTypes);
-        setParameterNames(parameterNames);
-        init(methodName, returnType);
-        setBodyBuilder(bodyBuilder);
-    }
-
-    public MethodMetadataBuilder(final String declaredbyMetadataId,
-            final MethodMetadata existing) {
-        super(declaredbyMetadataId, existing);
-        init(existing.getMethodName(), existing.getReturnType());
-    }
-
-    public MethodMetadata build() {
-        DefaultMethodMetadata methodMetadata = new DefaultMethodMetadata(
-                getCustomData().build(), getDeclaredByMetadataId(),
-                getModifier(), buildAnnotations(), getMethodName(),
-                getReturnType(), getParameterTypes(), getParameterNames(),
-                getThrowsTypes(), getBodyBuilder().getOutput());
-
-        methodMetadata.setCommentStructure(this.commentStructure);
-        
-        methodMetadata.setGenericDefinition(this.genericDefinition);
-
-        return methodMetadata;
-    }
-
-    public JavaSymbolName getMethodName() {
-        return methodName;
-    }
-
-    public JavaType getReturnType() {
-        return returnType;
-    }
-
-    private void init(final JavaSymbolName methodName, final JavaType returnType) {
-        this.methodName = methodName;
-        this.returnType = returnType;
-    }
-
-    public void setMethodName(final JavaSymbolName methodName) {
-        this.methodName = methodName;
-    }
-
-    public void setReturnType(final JavaType returnType) {
-        this.returnType = returnType;
-    }
-
-    public CommentStructure getCommentStructure() {
-        return commentStructure;
-    }
-
-    public void setCommentStructure(CommentStructure commentStructure) {
-        this.commentStructure = commentStructure;
-    }
-    
-    
-    public void setGenericDefinition(String definition){
-    	this.genericDefinition = definition;
-    }
-    
-    
-    public String getGenericDefinition(){
-    	return this.genericDefinition;
-    }
-
-    @Override
-    public String toString() {
-        return new ToStringBuilder(this)
-                
-                
-                .append("methodName", methodName)
-                .append("parameterTypes", getParameterTypes()).toString();
+    public void setGenericDefinition(String genericDefinition) {
+        this.genericDefinition = genericDefinition;
     }
 }
 
@@ -1440,10 +1440,10 @@ public final class MethodMetadataBuilder extends
 package org.springframework.roo.addon.web.mvc.controller.addon.scaffold;
 
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.COUNT_ALL_METHOD;
-import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_SORTED_METHOD;
-import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_SORTED_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_METHOD;
+import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ALL_SORTED_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_METHOD;
+import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_ENTRIES_SORTED_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.FIND_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.MERGE_METHOD;
 import static org.springframework.roo.classpath.customdata.CustomDataKeys.PERSIST_METHOD;
@@ -1534,7 +1534,7 @@ public class WebScaffoldMetadata extends
 	private JavaTypeMetadataDetails javaTypeMetadataHolder;
 	private TypeLocationService typeLocationService;
 
-	
+
 	public WebScaffoldMetadata(
 			final String identifier,
 			final JavaType aspectName,
@@ -1582,7 +1582,7 @@ public class WebScaffoldMetadata extends
 			builder.addConstructor(getConstructor());
 		}
 
-		
+
 		final MemberTypeAdditions persistMethod = crudAdditions
 				.get(PERSIST_METHOD);
 		if (annotationValues.isCreate() && persistMethod != null) {
@@ -1603,13 +1603,13 @@ public class WebScaffoldMetadata extends
 		final MemberTypeAdditions findEntriesSortedMethod = crudAdditions
 				.get(FIND_ENTRIES_SORTED_METHOD);
 
-		
+
 		if (findMethod != null) {
 			builder.addMethod(getShowMethod(idField, findMethod));
 			findMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		if (countAllMethod != null && findAllSortedMethod != null
 				&& findEntriesSortedMethod != null) {
 			builder.addMethod(getListMethod(findAllSortedMethod,
@@ -1619,7 +1619,7 @@ public class WebScaffoldMetadata extends
 			findEntriesSortedMethod.copyAdditionsTo(builder,
 					governorTypeDetails);
 		}
-		
+
 		else if (countAllMethod != null && findAllMethod != null
 				&& findEntriesMethod != null) {
 			builder.addMethod(getListMethod(findAllMethod, countAllMethod,
@@ -1629,7 +1629,7 @@ public class WebScaffoldMetadata extends
 			findEntriesMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		final MemberTypeAdditions updateMethod = crudAdditions
 				.get(MERGE_METHOD);
 		if (annotationValues.isUpdate() && updateMethod != null
@@ -1639,7 +1639,7 @@ public class WebScaffoldMetadata extends
 			updateMethod.copyAdditionsTo(builder, governorTypeDetails);
 		}
 
-		
+
 		final MemberTypeAdditions deleteMethod = crudAdditions
 				.get(REMOVE_METHOD);
 		if (annotationValues.isDelete() && deleteMethod != null
@@ -1729,7 +1729,7 @@ public class WebScaffoldMetadata extends
 	private MethodMetadataBuilder getCreateFormMethod(
 			final List<JavaTypeMetadataDetails> dependentTypes) {
 
-		
+
 		ClassOrInterfaceTypeDetails cid = typeLocationService
 				.getTypeDetails(formBackingType);
 
@@ -1792,8 +1792,8 @@ public class WebScaffoldMetadata extends
 
 			countMethod.copyAdditionsTo(builder, governorTypeDetails);
 
-			
-			
+
+
 			String dependentTypeName = fieldNamesList.get(fieldPosition)
 					.getFieldName().getSymbolName();
 			bodyBuilder.appendFormalLine("dependencies.add(new String[] { \""
@@ -1819,12 +1819,12 @@ public class WebScaffoldMetadata extends
 		return methodBuilder;
 	}
 
-	
+
 	private List<FieldMetadata> getEntityFields(
 			final List<JavaTypeMetadataDetails> dependentTypes,
 			ClassOrInterfaceTypeDetails cid) {
 		List<FieldMetadata> fieldsNamesList = new ArrayList<FieldMetadata>();
-		
+
 		List<? extends FieldMetadata> fieldList = cid.getDeclaredFields();
 		Iterator<? extends FieldMetadata> it = fieldList.iterator();
 		while (it.hasNext()) {
@@ -2074,7 +2074,7 @@ public class WebScaffoldMetadata extends
 				parameterNames, bodyBuilder);
 	}
 
-	
+
 	private MethodMetadataBuilder getListMethod(
 			final MemberTypeAdditions findAllAdditions,
 			final MemberTypeAdditions countAllAdditions,

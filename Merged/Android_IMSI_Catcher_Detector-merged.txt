@@ -39,7 +39,7 @@ public class AIMSICDDbAdapter {
     public static String FOLDER;
     public static final int DATABASE_VERSION = 9; 
 
-    
+
     private final Boolean MONO_DB_DUMP = true; 
 
     private final String TAG = "AIMSICD";
@@ -53,22 +53,22 @@ public class AIMSICDDbAdapter {
     private final String TABLE_DEFAULT_MCC  = "defaultlocation"; 
     private final String SILENT_SMS_TABLE   = "silentsms";       
 
-    
-    
+
+
     private final String CELL_SIGNAL_TABLE  = "cellSignal";      
 
-    
 
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
     private final String TABLE_EVENTLOG    = "EventLog";          
-    
-    
-    
+
+
+
 
     private final String[] mTables;
     private final DbHelper mDbHelper;
@@ -78,24 +78,24 @@ public class AIMSICDDbAdapter {
     private Cursor signalStrengthMeasurementDatA; 
 
 
-    
+
     public AIMSICDDbAdapter(Context context) {
         mContext = context;
         FOLDER = mContext.getExternalFilesDir(null) + File.separator; 
         mDbHelper = new DbHelper(context);
         mTables = new String[]{
-                
+
                 LOCATION_TABLE,
                 CELL_TABLE,
                 OPENCELLID_TABLE,
                 SILENT_SMS_TABLE,
-                
-                
-                
-                
+
+
+
+
                 TABLE_EVENTLOG,
-                
-                
+
+
         };
     }
 
@@ -109,9 +109,9 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
+
+
+
 
 
     public long insertSilentSms(Bundle bundle) {
@@ -125,7 +125,7 @@ public class AIMSICDDbAdapter {
         return mDb.insert(SILENT_SMS_TABLE, null, smsValues);
     }
 
-    
+
     public long insertCell( int lac,
                             int cellID,
                             int netType,
@@ -142,7 +142,7 @@ public class AIMSICDDbAdapter {
                             ) {
 
         if (cellID != -1 && (latitude != 0.0 && longitude != 0.0)) {
-            
+
             ContentValues cellValues = new ContentValues();
             cellValues.put("Lac",           lac);
             cellValues.put("CellID",        cellID);
@@ -169,15 +169,15 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
     public long insertCell(Cell cell) {
 
-        
-        
-        
-        
+
+
+
+
         if (cell.getCID() != Integer.MAX_VALUE && (cell.getLat() != 0.0 && cell.getLon() != 0.0)) {
-            
+
             ContentValues cellValues = new ContentValues();
             cellValues.put("Lac",       cell.getLAC());
             cellValues.put("CellID",    cell.getCID());
@@ -203,7 +203,7 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
 
     long insertOpenCell(double latitude,
                         double longitude,
@@ -216,7 +216,7 @@ public class AIMSICDDbAdapter {
                         int samples,
                         int isGPSexact, 
                         String RAT      
-                        
+
     ) {
         return insertOpenCell(
                 latitude,
@@ -233,7 +233,7 @@ public class AIMSICDDbAdapter {
                 true);
     }
 
-    
+
     long insertOpenCell(double latitude,
                         double longitude,
                         int mcc,
@@ -245,11 +245,11 @@ public class AIMSICDDbAdapter {
                         int samples,
                         int isGPSexact, 
                         String RAT,      
-                        
+
                         boolean isNeedCheckExists
                         ) {
 
-        
+
         ContentValues cellIDValues = new ContentValues();
         cellIDValues.put("Lat",         latitude);
         cellIDValues.put("Lng",         longitude);
@@ -262,21 +262,21 @@ public class AIMSICDDbAdapter {
         cellIDValues.put("Samples",     samples);
         cellIDValues.put("isGPSexact",  isGPSexact );  
         cellIDValues.put("Type",        RAT );         
-        
 
-        
+
+
         if (isNeedCheckExists && openCellExists(cellID)) {
-            
+
             Log.v(TAG,  mTAG + ": CID already found in DBe_import! Skipping: " + cellID );
             return 1;
-            
-            
+
+
         } else {
             return mDb.insert(OPENCELLID_TABLE, null, cellIDValues);
         }
     }
 
-    
+
     public long insertLocation( int lac,
                                 int cellID,
                                 int netType,
@@ -287,7 +287,7 @@ public class AIMSICDDbAdapter {
                                 ) {
 
         if (latitude != 0.0 && longitude != 0.0) {
-            
+
             ContentValues locationValues = new ContentValues();
             locationValues.put("Lac",       lac);
             locationValues.put("CellID",    cellID);
@@ -297,8 +297,8 @@ public class AIMSICDDbAdapter {
             locationValues.put("Signal",    signalInfo);
             locationValues.put("Connection", cellInfo); 
 
-            
-            
+
+
             if (locationExists(cellID, latitude, longitude, signalInfo)) {
                 return mDb.update(LOCATION_TABLE, locationValues, "CellID=?",
                         new String[]{Integer.toString(cellID)});
@@ -310,13 +310,13 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
     public int deleteCell(int cellId) {
         Log.i(TAG,  mTAG + ": Deleted CID: " + cellId);
         return mDb.delete(CELL_TABLE, "CellID = ?", new String[]{ String.valueOf(cellId) });
     }
 
-    
+
      public long insertDetection(
                                  int LAC,
                                  int CID,
@@ -327,9 +327,9 @@ public class AIMSICDDbAdapter {
                                  int DF_id,
                                  String DF_description) {
 
-        
+
         ContentValues detectionValues = new ContentValues();
-        
+
         detectionValues.put("LAC",          LAC);
         detectionValues.put("CID",          CID);
         detectionValues.put("PSC",          PSC);
@@ -344,11 +344,11 @@ public class AIMSICDDbAdapter {
      }
 
 
-    
 
-    
 
-    
+
+
+
     public Cursor getEventLogData() {
         return mDb.query(TABLE_EVENTLOG,
                 new String[]{"time", "LAC", "CID", "PSC", "gpsd_lat","gpsd_lon", "gpsd_accu", "DF_id", "DF_desc"},
@@ -357,8 +357,8 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
+
+
     public Cursor getSilentSmsData() {
         return mDb.query(SILENT_SMS_TABLE,
                 new String[]{"Address", "Display", "Class", "ServiceCtr", "Message", "Timestamp"},
@@ -366,7 +366,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getCellData() {
         return mDb.query( CELL_TABLE,
                 new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
@@ -375,7 +375,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getOPCIDSubmitData() {
         return mDb.query( CELL_TABLE,
                 new String[]{"Mcc", "Mnc", "Lac", "CellID", "Lng", "Lat", "Signal", "Timestamp",
@@ -384,7 +384,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getLocationData() {
         return mDb.query( LOCATION_TABLE,
                 new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal"},
@@ -392,27 +392,27 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getOpenCellIDData() {
         return mDb.query( OPENCELLID_TABLE,
                 new String[]{"CellID", "Lac", "Mcc", "Mnc", "Lat", "Lng", "AvgSigStr", "Samples"},
-                
+
                 null, null, null, null, null
         );
     }
 
-    
+
     public Cursor getDefaultMccLocationData() {
         return mDb.query( TABLE_DEFAULT_MCC,
                 new String[]{"Country", "Mcc", "Lat", "Lng"}, null, null, null, null, null);
     }
 
-    
-    
-    
 
 
-    
+
+
+
+
     boolean locationExists(int cellID, double lat, double lng, int signal) {
         Cursor cursor = mDb.rawQuery("SELECT * FROM " + LOCATION_TABLE +
                         " WHERE CellID = " + cellID +
@@ -422,47 +422,47 @@ public class AIMSICDDbAdapter {
         return exists;
     }
 
-    
+
     boolean cellExists(int cellID) {
         Cursor cursor = mDb.rawQuery("SELECT 1 FROM " + CELL_TABLE +
                         " WHERE CellID = " + cellID, null);
         boolean exists = cursor.getCount() > 0;
-        
+
         cursor.close();
         return exists;
     }
 
-    
+
     public boolean openCellExists(int cellID) {
         Cursor cursor = mDb.rawQuery("SELECT * FROM " + OPENCELLID_TABLE +
                         " WHERE CellID = " + cellID, null);
         boolean exists = cursor.getCount() > 0;
-        
+
         cursor.close();
         return exists;
     }
 
-    
+
     public boolean checkLAC(Cell cell) {
         Cursor cursor = mDb.query(CELL_TABLE,
-                        
+
                         new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
                         "Accuracy", "Speed", "Direction", "Timestamp"},
                         "CellID=" + cell.getCID(),
                         null, null, null, null);
 
         while (cursor.moveToNext()) {
-            
+
             if (cell.getLAC() != cursor.getInt(1)) {
-                
-                
-                
+
+
+
                 Log.i(TAG, "ALERT: Changing LAC on CID: " + cell.getCID()
                             + " LAC(API): " + cell.getLAC()
                             + " LAC(DBi): " + cursor.getInt(1) );
 
-                
-                
+
+
                 insertDetection(cell.getLAC(), cell.getCID(), cell.getPSC(),
                                 cursor.getDouble(3), cursor.getDouble(4), cursor.getInt(8),
                                 1, "Changing LAC");
@@ -479,7 +479,7 @@ public class AIMSICDDbAdapter {
         return true;
     }
 
-    
+
     public void ocidProcessed() {
         ContentValues ocidValues = new ContentValues();
         ocidValues.put("OCID_SUBMITTED", 1); 
@@ -501,15 +501,15 @@ public class AIMSICDDbAdapter {
         return loc;
     }
 
-    
+
     public void cleanseCellTable() {
-        
+
         mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE " + COLUMN_ID + " NOT IN (SELECT MAX(" + COLUMN_ID + ") FROM " + CELL_TABLE + " GROUP BY CellID)");
-        
+
         mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE CellID = " + Integer.MAX_VALUE + " OR CellID = -1");
     }
 
-    
+
     public boolean prepareOpenCellUploadData() {
         boolean result;
 
@@ -563,7 +563,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     private void populateDefaultMCC(SQLiteDatabase db) {
         AssetManager mngr = mContext.getAssets();
         InputStream csvDefaultMcc;
@@ -585,11 +585,11 @@ public class AIMSICDDbAdapter {
 
             CSVReader csvReader = new CSVReader(new FileReader(tempfile));
             List<String[]> csvMcc = csvReader.readAll();
-            
+
             ContentValues defaultMccValues = new ContentValues();
 
             for (int i = 1; i < csvMcc.size(); i++) {
-                
+
                 defaultMccValues.put("Country", csvMcc.get(i)[0]);
                 defaultMccValues.put("Mcc", csvMcc.get(i)[1]);
                 defaultMccValues.put("Lng", csvMcc.get(i)[2]);
@@ -602,7 +602,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     public boolean updateOpenCellID() {
         String fileName = Environment.getExternalStorageDirectory()
                                         + "/AIMSICD/OpenCellID/opencellid.csv";
@@ -612,15 +612,15 @@ public class AIMSICDDbAdapter {
                 CSVReader csvReader = new CSVReader(new FileReader(file));
                 List<String[]> csvCellID = new ArrayList<>();
                 String next[];
-                
-                
-                
 
-                
-                
+
+
+
+
+
                 while ((next = csvReader.readNext()) != null) {
                     csvCellID.add(next);
-                    
+
                 }
 
                 if (!csvCellID.isEmpty()) {
@@ -642,13 +642,13 @@ public class AIMSICDDbAdapter {
                     for (int i = 1; i < lines; i++) {
                         AIMSICD.mProgressBar.setProgress(i);
 
-                        
-                        
+
+
                         if(lPresentCellID.get(Integer.parseInt(csvCellID.get(i)[5]), false)) {
                             continue;
                         }
-                        
-                        
+
+
                         insertOpenCell( Double.parseDouble(csvCellID.get(i)[0]), 
                                         Double.parseDouble(csvCellID.get(i)[1]), 
                                         Integer.parseInt(csvCellID.get(i)[2]),   
@@ -661,14 +661,14 @@ public class AIMSICDDbAdapter {
                                         Integer.parseInt(csvCellID.get(i)[9]),   
                                         String.valueOf(csvCellID.get(i)[10]),     
                                         false
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
+
+
+
+
+
+
+
+
 
                         );
                     }
@@ -683,11 +683,11 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
-    
-    
 
-    
+
+
+
+
     public boolean restoreDB() {
         try {
             for (String table : mTables) {
@@ -710,7 +710,7 @@ public class AIMSICDDbAdapter {
 
                                 case CELL_TABLE:
                                     insertCell(
-                                            
+
                                             Integer.parseInt(records.get(i)[1]),    
                                             Integer.parseInt(records.get(i)[2]),    
                                             Integer.parseInt(records.get(i)[3]),    
@@ -724,8 +724,8 @@ public class AIMSICDDbAdapter {
                                             Double.valueOf(records.get(i)[11]),     
                                             String.valueOf(records.get(i)[12]),     
                                             Long.valueOf(records.get(i)[13])        
-                                            
-                                            
+
+
                                     );
                                     break;
 
@@ -743,7 +743,7 @@ public class AIMSICDDbAdapter {
 
                                 case OPENCELLID_TABLE:
                                     insertOpenCell(
-                                            
+
                                             Double.parseDouble(records.get(i)[1]),  
                                             Double.parseDouble(records.get(i)[2]),  
                                             Integer.parseInt(records.get(i)[3]),    
@@ -755,7 +755,7 @@ public class AIMSICDDbAdapter {
                                             Integer.parseInt(records.get(i)[9]),    
                                             Integer.parseInt(records.get(i)[10]),   
                                             String.valueOf(records.get(i)[11])      
-                                            
+
                                     );
                                     break;
 
@@ -784,22 +784,22 @@ public class AIMSICDDbAdapter {
 
     }
 
-    
+
     private void dumpDB()  {
         File dumpdir = new File(FOLDER);
-        
+
         File file = new File(dumpdir, "aimsicd_dump.db");
-        
+
         String aimdir = "/data/data/com.SecUpwN.AIMSICD/databases/";
-        
+
         String execString = "/system/xbin/sqlite3 " + aimdir + "aimsicd.db '.backup " + file + "'";
 
         try {
             Log.i(TAG, mTAG + ":dumpDB() Attempting to dump DB to: " + file + "\nUsing: \"" + execString + "\"\n");
-            
+
             CMDProcessor.runSuCommand(execString);
-            
-            
+
+
 
         } catch (Exception e) {
             Log.e(TAG, mTAG + ":dumpDB() Failed to export DB dump file: " + e);
@@ -809,7 +809,7 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
+
     public boolean backupDB() {
         try {
             for (String table : mTables) {
@@ -825,7 +825,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     private void backup(String tableName) {
         Log.i(TAG, mTAG + ": Database Backup: " + DB_NAME);
 
@@ -866,82 +866,82 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
 
-    
-    
+
+
+
+
+
     public void checkDBe() {
-        
+
         int tf_settings=30;         
         int min_gps_precision=50;   
 
         String sqlq;                
 
-        
-        
-        
+
+
+
 
         Log.d(TAG, mTAG + ":checkDBe() Attempting to delete bad import data from DBe_import table...");
 
-        
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Samples < 1";
         mDb.execSQL(sqlq);
 
-        
-        
-        
-        
 
-        
+
+
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac < 1";
         mDb.execSQL(sqlq);
 
-        
-        
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac > 65534";
         mDb.execSQL(sqlq);
-        
-        
-        
 
-        
+
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID < 1";
         mDb.execSQL(sqlq);
 
-        
-        
-        
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID > 268435455";
         mDb.execSQL(sqlq);
-        
-        
-        
+
+
+
 
         Log.i(TAG, mTAG + ":checkDBe() Deleted BTS entries from DBe_import table with bad LAC/CID...");
 
-        
-        
-        
 
-        
-        
-        
 
-        
-        
 
-        
-        
+
+
+
+
+
+
+
+
+
+
 
     }
 
 
 
-    
-    
-    
+
+
+
     public void cleanseCellStrengthTables(long maxTime) {
         Log.d(TAG, mTAG + ": Cleaning " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
         mDb.execSQL("DELETE FROM " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
@@ -976,74 +976,26 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
 
-    
+
+
+
+
     public class DbHelper extends SQLiteOpenHelper {
 
         DbHelper(Context context) {
             super(context, DB_NAME, null, DATABASE_VERSION);
         }
 
-        
+
+
         @Override
         public void onCreate(SQLiteDatabase database) {
 
-            
-            
-            
-            createCellSignalTable(database);
-            createSilentSmsTable(database);
-            createLocationTable(database);
-            createCellTable(database);
-            createOpenCellIDTable(database);
-            createDefaultMCCTable(database);
 
-            
-            
-            
-            createEventLogTable(database);
 
-            
-            populateDefaultMCC(database);
 
-        }
 
-        
-        
-        
-
-        
-        
-        @Override
-        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
-                        + ", and destroy all old data.");
-
-            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
-            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
-
-            
-            
-            
-            
-            
-            
-            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
-            
-            
-            
-
-            onCreate(db);
-        }
-        
-        private void createCellSignalTable(SQLiteDatabase database) {
 
             database.execSQL("CREATE TABLE " +
                     CELL_SIGNAL_TABLE + " (" + COLUMN_ID +
@@ -1052,10 +1004,8 @@ public class AIMSICDDbAdapter {
                     "timestamp INTEGER);");
             database.execSQL("CREATE INDEX cellID_index ON " + CELL_SIGNAL_TABLE + " (cellID);");
             database.execSQL("CREATE INDEX cellID_timestamp ON " + CELL_SIGNAL_TABLE + " (timestamp);");
-        }
 
-        
-        private void createSilentSmsTable(SQLiteDatabase database) {
+
             String SMS_DATABASE_CREATE = "CREATE TABLE " +
                     SILENT_SMS_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -1067,17 +1017,16 @@ public class AIMSICDDbAdapter {
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(SMS_DATABASE_CREATE);
 
-            
+
             String ZeroSMS = "INSERT INTO " + SILENT_SMS_TABLE +
                     " (Address,Display,Class,ServiceCtr,Message) " +
                     "VALUES ('"+
                     Examples.SILENT_SMS_CARD_DATA.ADDRESS +"','"+
                     Examples.SILENT_SMS_CARD_DATA.DISPLAY+"','CLAZZ','SMSC','DaTestMessage');";
             database.execSQL(ZeroSMS);
-        }
 
-        
-        private void createLocationTable(SQLiteDatabase database) {
+
+
             String LOC_DATABASE_CREATE = "CREATE TABLE " +
                     LOCATION_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -1089,10 +1038,8 @@ public class AIMSICDDbAdapter {
                     "Connection VARCHAR, " +
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(LOC_DATABASE_CREATE);
-        }
 
-        
-        private void createCellTable(SQLiteDatabase database) {
+
             String CELL_DATABASE_CREATE = "CREATE TABLE " +
                     CELL_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -1112,10 +1059,9 @@ public class AIMSICDDbAdapter {
                     "OCID_SUBMITTED INTEGER DEFAULT 0, " +
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(CELL_DATABASE_CREATE);
-        }
 
-        
-        private void createOpenCellIDTable(SQLiteDatabase database) {
+
+
             String OPENCELLID_DATABASE_CREATE = "CREATE TABLE " +
                     OPENCELLID_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -1130,15 +1076,13 @@ public class AIMSICDDbAdapter {
                     "Samples INTEGER, " +
                     "isGPSexact INTEGER, " +    
                     "Type TEXT, " +             
-                    
+
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" +
-                    
+
                     ");";
             database.execSQL(OPENCELLID_DATABASE_CREATE);
-        }
 
-        
-        private void createDefaultMCCTable(SQLiteDatabase database) {
+
             String DEFAULT_MCC_DATABASE_CREATE = "CREATE TABLE " +
                     TABLE_DEFAULT_MCC + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -1147,13 +1091,14 @@ public class AIMSICDDbAdapter {
                     "Lat VARCHAR, " +
                     "Lng VARCHAR);";
             database.execSQL(DEFAULT_MCC_DATABASE_CREATE);
-        }
 
-        
-        private void createEventLogTable(SQLiteDatabase database) {
 
-            
-            
+
+
+
+
+
+
             String TABLE_EVENTLOG_CREATE = "CREATE TABLE " +
                     TABLE_EVENTLOG + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT," +
@@ -1168,9 +1113,9 @@ public class AIMSICDDbAdapter {
                     "DF_desc    	TEXT" + ");";
             database.execSQL(TABLE_EVENTLOG_CREATE);
 
-            
-            
-            
+
+
+
 
             String ZeroEvent = "INSERT INTO " + TABLE_EVENTLOG +
                     " (LAC,CID,PSC, gpsd_lat,gpsd_lon,gpsd_accu, DF_id,DF_desc) " +
@@ -1183,8 +1128,47 @@ public class AIMSICDDbAdapter {
                     EVENT_LOG_DATA.GPSD_ACCU+","+
                     EVENT_LOG_DATA.DF_ID+",'CellID not found in OCID Database');";
             database.execSQL(ZeroEvent);
+
+
+            populateDefaultMCC(database);
+
         }
+
+
+
+
+
+
+
+
+        @Override
+        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
+                        + ", and destroy all old data.");
+
+            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
+
+
+
+
+
+
+
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
+
+
+
+
+            onCreate(db);
+        }
+
     }
+
 }
 
 <code block>
@@ -1229,7 +1213,7 @@ public class AIMSICDDbAdapter {
     public static String FOLDER;
     public static final int DATABASE_VERSION = 9; 
 
-    
+
     private final Boolean MONO_DB_DUMP = true; 
 
     private final String TAG = "AIMSICD";
@@ -1243,22 +1227,22 @@ public class AIMSICDDbAdapter {
     private final String TABLE_DEFAULT_MCC  = "defaultlocation"; 
     private final String SILENT_SMS_TABLE   = "silentsms";       
 
-    
-    
+
+
     private final String CELL_SIGNAL_TABLE  = "cellSignal";      
 
-    
 
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
     private final String TABLE_EVENTLOG    = "EventLog";          
-    
-    
-    
+
+
+
 
     private final String[] mTables;
     private final DbHelper mDbHelper;
@@ -1268,24 +1252,24 @@ public class AIMSICDDbAdapter {
     private Cursor signalStrengthMeasurementDatA; 
 
 
-    
+
     public AIMSICDDbAdapter(Context context) {
         mContext = context;
         FOLDER = mContext.getExternalFilesDir(null) + File.separator; 
         mDbHelper = new DbHelper(context);
         mTables = new String[]{
-                
+
                 LOCATION_TABLE,
                 CELL_TABLE,
                 OPENCELLID_TABLE,
                 SILENT_SMS_TABLE,
-                
-                
-                
-                
+
+
+
+
                 TABLE_EVENTLOG,
-                
-                
+
+
         };
     }
 
@@ -1299,9 +1283,9 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
+
+
+
 
 
     public long insertSilentSms(Bundle bundle) {
@@ -1315,7 +1299,7 @@ public class AIMSICDDbAdapter {
         return mDb.insert(SILENT_SMS_TABLE, null, smsValues);
     }
 
-    
+
     public long insertCell( int lac,
                             int cellID,
                             int netType,
@@ -1332,7 +1316,7 @@ public class AIMSICDDbAdapter {
                             ) {
 
         if (cellID != -1 && (latitude != 0.0 && longitude != 0.0)) {
-            
+
             ContentValues cellValues = new ContentValues();
             cellValues.put("Lac",           lac);
             cellValues.put("CellID",        cellID);
@@ -1359,15 +1343,15 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
     public long insertCell(Cell cell) {
 
-        
-        
-        
-        
+
+
+
+
         if (cell.getCID() != Integer.MAX_VALUE && (cell.getLat() != 0.0 && cell.getLon() != 0.0)) {
-            
+
             ContentValues cellValues = new ContentValues();
             cellValues.put("Lac",       cell.getLAC());
             cellValues.put("CellID",    cell.getCID());
@@ -1393,7 +1377,7 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
 
     long insertOpenCell(double latitude,
                         double longitude,
@@ -1406,7 +1390,7 @@ public class AIMSICDDbAdapter {
                         int samples,
                         int isGPSexact, 
                         String RAT      
-                        
+
     ) {
         return insertOpenCell(
                 latitude,
@@ -1423,7 +1407,7 @@ public class AIMSICDDbAdapter {
                 true);
     }
 
-    
+
     long insertOpenCell(double latitude,
                         double longitude,
                         int mcc,
@@ -1435,11 +1419,11 @@ public class AIMSICDDbAdapter {
                         int samples,
                         int isGPSexact, 
                         String RAT,      
-                        
+
                         boolean isNeedCheckExists
                         ) {
 
-        
+
         ContentValues cellIDValues = new ContentValues();
         cellIDValues.put("Lat",         latitude);
         cellIDValues.put("Lng",         longitude);
@@ -1452,21 +1436,21 @@ public class AIMSICDDbAdapter {
         cellIDValues.put("Samples",     samples);
         cellIDValues.put("isGPSexact",  isGPSexact );  
         cellIDValues.put("Type",        RAT );         
-        
 
-        
+
+
         if (isNeedCheckExists && openCellExists(cellID)) {
-            
+
             Log.v(TAG,  mTAG + ": CID already found in DBe_import! Skipping: " + cellID );
             return 1;
-            
-            
+
+
         } else {
             return mDb.insert(OPENCELLID_TABLE, null, cellIDValues);
         }
     }
 
-    
+
     public long insertLocation( int lac,
                                 int cellID,
                                 int netType,
@@ -1477,7 +1461,7 @@ public class AIMSICDDbAdapter {
                                 ) {
 
         if (latitude != 0.0 && longitude != 0.0) {
-            
+
             ContentValues locationValues = new ContentValues();
             locationValues.put("Lac",       lac);
             locationValues.put("CellID",    cellID);
@@ -1487,8 +1471,8 @@ public class AIMSICDDbAdapter {
             locationValues.put("Signal",    signalInfo);
             locationValues.put("Connection", cellInfo); 
 
-            
-            
+
+
             if (locationExists(cellID, latitude, longitude, signalInfo)) {
                 return mDb.update(LOCATION_TABLE, locationValues, "CellID=?",
                         new String[]{Integer.toString(cellID)});
@@ -1500,13 +1484,13 @@ public class AIMSICDDbAdapter {
         return 0;
     }
 
-    
+
     public int deleteCell(int cellId) {
         Log.i(TAG,  mTAG + ": Deleted CID: " + cellId);
         return mDb.delete(CELL_TABLE, "CellID = ?", new String[]{ String.valueOf(cellId) });
     }
 
-    
+
      public long insertDetection(
                                  int LAC,
                                  int CID,
@@ -1517,9 +1501,9 @@ public class AIMSICDDbAdapter {
                                  int DF_id,
                                  String DF_description) {
 
-        
+
         ContentValues detectionValues = new ContentValues();
-        
+
         detectionValues.put("LAC",          LAC);
         detectionValues.put("CID",          CID);
         detectionValues.put("PSC",          PSC);
@@ -1534,11 +1518,11 @@ public class AIMSICDDbAdapter {
      }
 
 
-    
 
-    
 
-    
+
+
+
     public Cursor getEventLogData() {
         return mDb.query(TABLE_EVENTLOG,
                 new String[]{"time", "LAC", "CID", "PSC", "gpsd_lat","gpsd_lon", "gpsd_accu", "DF_id", "DF_desc"},
@@ -1547,8 +1531,8 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
+
+
     public Cursor getSilentSmsData() {
         return mDb.query(SILENT_SMS_TABLE,
                 new String[]{"Address", "Display", "Class", "ServiceCtr", "Message", "Timestamp"},
@@ -1556,7 +1540,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getCellData() {
         return mDb.query( CELL_TABLE,
                 new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
@@ -1565,7 +1549,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getOPCIDSubmitData() {
         return mDb.query( CELL_TABLE,
                 new String[]{"Mcc", "Mnc", "Lac", "CellID", "Lng", "Lat", "Signal", "Timestamp",
@@ -1574,7 +1558,7 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getLocationData() {
         return mDb.query( LOCATION_TABLE,
                 new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal"},
@@ -1582,27 +1566,27 @@ public class AIMSICDDbAdapter {
         );
     }
 
-    
+
     public Cursor getOpenCellIDData() {
         return mDb.query( OPENCELLID_TABLE,
                 new String[]{"CellID", "Lac", "Mcc", "Mnc", "Lat", "Lng", "AvgSigStr", "Samples"},
-                
+
                 null, null, null, null, null
         );
     }
 
-    
+
     public Cursor getDefaultMccLocationData() {
         return mDb.query( TABLE_DEFAULT_MCC,
                 new String[]{"Country", "Mcc", "Lat", "Lng"}, null, null, null, null, null);
     }
 
-    
-    
-    
 
 
-    
+
+
+
+
     boolean locationExists(int cellID, double lat, double lng, int signal) {
         Cursor cursor = mDb.rawQuery("SELECT * FROM " + LOCATION_TABLE +
                         " WHERE CellID = " + cellID +
@@ -1612,47 +1596,47 @@ public class AIMSICDDbAdapter {
         return exists;
     }
 
-    
+
     boolean cellExists(int cellID) {
         Cursor cursor = mDb.rawQuery("SELECT 1 FROM " + CELL_TABLE +
                         " WHERE CellID = " + cellID, null);
         boolean exists = cursor.getCount() > 0;
-        
+
         cursor.close();
         return exists;
     }
 
-    
+
     public boolean openCellExists(int cellID) {
         Cursor cursor = mDb.rawQuery("SELECT * FROM " + OPENCELLID_TABLE +
                         " WHERE CellID = " + cellID, null);
         boolean exists = cursor.getCount() > 0;
-        
+
         cursor.close();
         return exists;
     }
 
-    
+
     public boolean checkLAC(Cell cell) {
         Cursor cursor = mDb.query(CELL_TABLE,
-                        
+
                         new String[]{"CellID", "Lac", "Net", "Lat", "Lng", "Signal", "Mcc", "Mnc",
                         "Accuracy", "Speed", "Direction", "Timestamp"},
                         "CellID=" + cell.getCID(),
                         null, null, null, null);
 
         while (cursor.moveToNext()) {
-            
+
             if (cell.getLAC() != cursor.getInt(1)) {
-                
-                
-                
+
+
+
                 Log.i(TAG, "ALERT: Changing LAC on CID: " + cell.getCID()
                             + " LAC(API): " + cell.getLAC()
                             + " LAC(DBi): " + cursor.getInt(1) );
 
-                
-                
+
+
                 insertDetection(cell.getLAC(), cell.getCID(), cell.getPSC(),
                                 cursor.getDouble(3), cursor.getDouble(4), cursor.getInt(8),
                                 1, "Changing LAC");
@@ -1669,7 +1653,7 @@ public class AIMSICDDbAdapter {
         return true;
     }
 
-    
+
     public void ocidProcessed() {
         ContentValues ocidValues = new ContentValues();
         ocidValues.put("OCID_SUBMITTED", 1); 
@@ -1691,15 +1675,15 @@ public class AIMSICDDbAdapter {
         return loc;
     }
 
-    
+
     public void cleanseCellTable() {
-        
+
         mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE " + COLUMN_ID + " NOT IN (SELECT MAX(" + COLUMN_ID + ") FROM " + CELL_TABLE + " GROUP BY CellID)");
-        
+
         mDb.execSQL("DELETE FROM " + CELL_TABLE + " WHERE CellID = " + Integer.MAX_VALUE + " OR CellID = -1");
     }
 
-    
+
     public boolean prepareOpenCellUploadData() {
         boolean result;
 
@@ -1753,7 +1737,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     private void populateDefaultMCC(SQLiteDatabase db) {
         AssetManager mngr = mContext.getAssets();
         InputStream csvDefaultMcc;
@@ -1775,11 +1759,11 @@ public class AIMSICDDbAdapter {
 
             CSVReader csvReader = new CSVReader(new FileReader(tempfile));
             List<String[]> csvMcc = csvReader.readAll();
-            
+
             ContentValues defaultMccValues = new ContentValues();
 
             for (int i = 1; i < csvMcc.size(); i++) {
-                
+
                 defaultMccValues.put("Country", csvMcc.get(i)[0]);
                 defaultMccValues.put("Mcc", csvMcc.get(i)[1]);
                 defaultMccValues.put("Lng", csvMcc.get(i)[2]);
@@ -1792,7 +1776,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     public boolean updateOpenCellID() {
         String fileName = Environment.getExternalStorageDirectory()
                                         + "/AIMSICD/OpenCellID/opencellid.csv";
@@ -1802,15 +1786,15 @@ public class AIMSICDDbAdapter {
                 CSVReader csvReader = new CSVReader(new FileReader(file));
                 List<String[]> csvCellID = new ArrayList<>();
                 String next[];
-                
-                
-                
 
-                
-                
+
+
+
+
+
                 while ((next = csvReader.readNext()) != null) {
                     csvCellID.add(next);
-                    
+
                 }
 
                 if (!csvCellID.isEmpty()) {
@@ -1832,13 +1816,13 @@ public class AIMSICDDbAdapter {
                     for (int i = 1; i < lines; i++) {
                         AIMSICD.mProgressBar.setProgress(i);
 
-                        
-                        
+
+
                         if(lPresentCellID.get(Integer.parseInt(csvCellID.get(i)[5]), false)) {
                             continue;
                         }
-                        
-                        
+
+
                         insertOpenCell( Double.parseDouble(csvCellID.get(i)[0]), 
                                         Double.parseDouble(csvCellID.get(i)[1]), 
                                         Integer.parseInt(csvCellID.get(i)[2]),   
@@ -1851,14 +1835,14 @@ public class AIMSICDDbAdapter {
                                         Integer.parseInt(csvCellID.get(i)[9]),   
                                         String.valueOf(csvCellID.get(i)[10]),     
                                         false
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
-                                        
+
+
+
+
+
+
+
+
 
                         );
                     }
@@ -1873,11 +1857,11 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
-    
-    
 
-    
+
+
+
+
     public boolean restoreDB() {
         try {
             for (String table : mTables) {
@@ -1900,7 +1884,7 @@ public class AIMSICDDbAdapter {
 
                                 case CELL_TABLE:
                                     insertCell(
-                                            
+
                                             Integer.parseInt(records.get(i)[1]),    
                                             Integer.parseInt(records.get(i)[2]),    
                                             Integer.parseInt(records.get(i)[3]),    
@@ -1914,8 +1898,8 @@ public class AIMSICDDbAdapter {
                                             Double.valueOf(records.get(i)[11]),     
                                             String.valueOf(records.get(i)[12]),     
                                             Long.valueOf(records.get(i)[13])        
-                                            
-                                            
+
+
                                     );
                                     break;
 
@@ -1933,7 +1917,7 @@ public class AIMSICDDbAdapter {
 
                                 case OPENCELLID_TABLE:
                                     insertOpenCell(
-                                            
+
                                             Double.parseDouble(records.get(i)[1]),  
                                             Double.parseDouble(records.get(i)[2]),  
                                             Integer.parseInt(records.get(i)[3]),    
@@ -1945,7 +1929,7 @@ public class AIMSICDDbAdapter {
                                             Integer.parseInt(records.get(i)[9]),    
                                             Integer.parseInt(records.get(i)[10]),   
                                             String.valueOf(records.get(i)[11])      
-                                            
+
                                     );
                                     break;
 
@@ -1974,22 +1958,22 @@ public class AIMSICDDbAdapter {
 
     }
 
-    
+
     private void dumpDB()  {
         File dumpdir = new File(FOLDER);
-        
+
         File file = new File(dumpdir, "aimsicd_dump.db");
-        
+
         String aimdir = "/data/data/com.SecUpwN.AIMSICD/databases/";
-        
+
         String execString = "/system/xbin/sqlite3 " + aimdir + "aimsicd.db '.backup " + file + "'";
 
         try {
             Log.i(TAG, mTAG + ":dumpDB() Attempting to dump DB to: " + file + "\nUsing: \"" + execString + "\"\n");
-            
+
             CMDProcessor.runSuCommand(execString);
-            
-            
+
+
 
         } catch (Exception e) {
             Log.e(TAG, mTAG + ":dumpDB() Failed to export DB dump file: " + e);
@@ -1999,7 +1983,7 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
+
     public boolean backupDB() {
         try {
             for (String table : mTables) {
@@ -2015,7 +1999,7 @@ public class AIMSICDDbAdapter {
         }
     }
 
-    
+
     private void backup(String tableName) {
         Log.i(TAG, mTAG + ": Database Backup: " + DB_NAME);
 
@@ -2056,82 +2040,82 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
 
-    
-    
+
+
+
+
+
     public void checkDBe() {
-        
+
         int tf_settings=30;         
         int min_gps_precision=50;   
 
         String sqlq;                
 
-        
-        
-        
+
+
+
 
         Log.d(TAG, mTAG + ":checkDBe() Attempting to delete bad import data from DBe_import table...");
 
-        
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Samples < 1";
         mDb.execSQL(sqlq);
 
-        
-        
-        
-        
 
-        
+
+
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac < 1";
         mDb.execSQL(sqlq);
 
-        
-        
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE Lac > 65534";
         mDb.execSQL(sqlq);
-        
-        
-        
 
-        
+
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID < 1";
         mDb.execSQL(sqlq);
 
-        
-        
-        
+
+
+
         sqlq = "DELETE FROM " + OPENCELLID_TABLE + " WHERE CellID > 268435455";
         mDb.execSQL(sqlq);
-        
-        
-        
+
+
+
 
         Log.i(TAG, mTAG + ":checkDBe() Deleted BTS entries from DBe_import table with bad LAC/CID...");
 
-        
-        
-        
 
-        
-        
-        
 
-        
-        
 
-        
-        
+
+
+
+
+
+
+
+
+
+
 
     }
 
 
 
-    
-    
-    
+
+
+
     public void cleanseCellStrengthTables(long maxTime) {
         Log.d(TAG, mTAG + ": Cleaning " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
         mDb.execSQL("DELETE FROM " + CELL_SIGNAL_TABLE + " WHERE timestamp < " + maxTime);
@@ -2166,11 +2150,11 @@ public class AIMSICDDbAdapter {
     }
 
 
-    
-    
-    
 
-    
+
+
+
+
     public class DbHelper extends SQLiteOpenHelper {
 
         DbHelper(Context context) {
@@ -2178,15 +2162,63 @@ public class AIMSICDDbAdapter {
         }
 
 
-        
         @Override
         public void onCreate(SQLiteDatabase database) {
 
-            
-            
-            
 
-            
+
+
+            createCellSignalTable(database);
+            createSilentSmsTable(database);
+            createLocationTable(database);
+            createCellTable(database);
+            createOpenCellIDTable(database);
+            createDefaultMCCTable(database);
+
+
+
+
+            createEventLogTable(database);
+
+
+            populateDefaultMCC(database);
+
+        }
+
+
+
+
+
+
+
+        @Override
+        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
+                        + ", and destroy all old data.");
+
+            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
+            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
+
+
+
+
+
+
+
+            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
+
+
+
+
+            onCreate(db);
+        }
+
+        private void createCellSignalTable(SQLiteDatabase database) {
+
             database.execSQL("CREATE TABLE " +
                     CELL_SIGNAL_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2194,8 +2226,10 @@ public class AIMSICDDbAdapter {
                     "timestamp INTEGER);");
             database.execSQL("CREATE INDEX cellID_index ON " + CELL_SIGNAL_TABLE + " (cellID);");
             database.execSQL("CREATE INDEX cellID_timestamp ON " + CELL_SIGNAL_TABLE + " (timestamp);");
+        }
 
-            
+
+        private void createSilentSmsTable(SQLiteDatabase database) {
             String SMS_DATABASE_CREATE = "CREATE TABLE " +
                     SILENT_SMS_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2207,16 +2241,17 @@ public class AIMSICDDbAdapter {
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(SMS_DATABASE_CREATE);
 
-            
+
             String ZeroSMS = "INSERT INTO " + SILENT_SMS_TABLE +
                     " (Address,Display,Class,ServiceCtr,Message) " +
                     "VALUES ('"+
                     Examples.SILENT_SMS_CARD_DATA.ADDRESS +"','"+
                     Examples.SILENT_SMS_CARD_DATA.DISPLAY+"','CLAZZ','SMSC','DaTestMessage');";
             database.execSQL(ZeroSMS);
+        }
 
 
-            
+        private void createLocationTable(SQLiteDatabase database) {
             String LOC_DATABASE_CREATE = "CREATE TABLE " +
                     LOCATION_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2228,8 +2263,10 @@ public class AIMSICDDbAdapter {
                     "Connection VARCHAR, " +
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(LOC_DATABASE_CREATE);
+        }
 
-            
+
+        private void createCellTable(SQLiteDatabase database) {
             String CELL_DATABASE_CREATE = "CREATE TABLE " +
                     CELL_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2249,9 +2286,10 @@ public class AIMSICDDbAdapter {
                     "OCID_SUBMITTED INTEGER DEFAULT 0, " +
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);";
             database.execSQL(CELL_DATABASE_CREATE);
+        }
 
 
-            
+        private void createOpenCellIDTable(SQLiteDatabase database) {
             String OPENCELLID_DATABASE_CREATE = "CREATE TABLE " +
                     OPENCELLID_TABLE + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2266,13 +2304,15 @@ public class AIMSICDDbAdapter {
                     "Samples INTEGER, " +
                     "isGPSexact INTEGER, " +    
                     "Type TEXT, " +             
-                    
+
                     "Timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" +
-                    
+
                     ");";
             database.execSQL(OPENCELLID_DATABASE_CREATE);
+        }
 
-            
+
+        private void createDefaultMCCTable(SQLiteDatabase database) {
             String DEFAULT_MCC_DATABASE_CREATE = "CREATE TABLE " +
                     TABLE_DEFAULT_MCC + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -2281,14 +2321,13 @@ public class AIMSICDDbAdapter {
                     "Lat VARCHAR, " +
                     "Lng VARCHAR);";
             database.execSQL(DEFAULT_MCC_DATABASE_CREATE);
+        }
 
-            
-            
-            
 
-            
-            
-            
+        private void createEventLogTable(SQLiteDatabase database) {
+
+
+
             String TABLE_EVENTLOG_CREATE = "CREATE TABLE " +
                     TABLE_EVENTLOG + " (" + COLUMN_ID +
                     " INTEGER PRIMARY KEY AUTOINCREMENT," +
@@ -2303,9 +2342,9 @@ public class AIMSICDDbAdapter {
                     "DF_desc    	TEXT" + ");";
             database.execSQL(TABLE_EVENTLOG_CREATE);
 
-            
-            
-            
+
+
+
 
             String ZeroEvent = "INSERT INTO " + TABLE_EVENTLOG +
                     " (LAC,CID,PSC, gpsd_lat,gpsd_lon,gpsd_accu, DF_id,DF_desc) " +
@@ -2318,45 +2357,6 @@ public class AIMSICDDbAdapter {
                     EVENT_LOG_DATA.GPSD_ACCU+","+
                     EVENT_LOG_DATA.DF_ID+",'CellID not found in OCID Database');";
             database.execSQL(ZeroEvent);
-
-            
-            populateDefaultMCC(database);
-
         }
-
-
-        
-        
-        
-
-        
-        
-        @Override
-        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            Log.w(TAG, mTAG + ": Upgrading database from version " + oldVersion + " to " + newVersion
-                        + ", and destroy all old data.");
-
-            db.execSQL("DROP TABLE IF EXISTS " + LOCATION_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + CELL_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + OPENCELLID_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + SILENT_SMS_TABLE);
-            db.execSQL("DROP TABLE IF EXISTS " + TABLE_DEFAULT_MCC);
-            db.execSQL("DROP TABLE IF EXISTS " + CELL_SIGNAL_TABLE);
-
-            
-            
-            
-            
-            
-            
-            db.execSQL("DROP TABLE IF EXISTS " + TABLE_EVENTLOG);
-            
-            
-            
-
-            onCreate(db);
-        }
-
     }
-
 }

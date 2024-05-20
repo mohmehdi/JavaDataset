@@ -1,2 +1,2 @@
-Java_Projects/selendroid/selendroid-e4a309c1/curr/selendroid-standalone/src/main/java/io/selendroid/standalone/android/impl/AbstractDevice.java
 Java_Projects/selendroid/selendroid-e4a309c1/prev/selendroid-standalone/src/main/java/io/selendroid/standalone/android/impl/AbstractDevice.java
+Java_Projects/selendroid/selendroid-e4a309c1/curr/selendroid-standalone/src/main/java/io/selendroid/standalone/android/impl/AbstractDevice.java

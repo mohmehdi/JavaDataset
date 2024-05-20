@@ -1,56 +1,79 @@
 
+package org.grails.compiler.injection.test;
 
-package grails.test.mixin.support;
+import grails.test.mixin.Mock;
 
-import grails.test.mixin.TestRuntimeAwareMixin;
-import grails.test.runtime.TestRuntime;
-import grails.test.runtime.TestRuntimeFactory;
-import groovy.lang.ExpandoMetaClass;
-import groovy.lang.GroovyObjectSupport;
+import grails.test.mixin.domain.DomainClassUnitTestMixin;
+import org.codehaus.groovy.ast.ASTNode;
+import org.codehaus.groovy.ast.AnnotatedNode;
+import org.codehaus.groovy.ast.AnnotationNode;
+import org.codehaus.groovy.ast.ClassNode;
+import org.codehaus.groovy.ast.expr.ClassExpression;
+import org.codehaus.groovy.ast.expr.Expression;
+import org.codehaus.groovy.ast.expr.ListExpression;
+import org.codehaus.groovy.control.CompilePhase;
+import org.codehaus.groovy.control.SourceUnit;
+import org.codehaus.groovy.transform.GroovyASTTransformation;
 
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 
 
-public abstract class TestMixinRuntimeSupport extends GroovyObjectSupport implements TestRuntimeAwareMixin {
+@GroovyASTTransformation(phase = CompilePhase.CANONICALIZATION)
+public class MockTransformation extends TestForTransformation {
 
-    private TestRuntime currentRuntime;
-    private Set<String> features;
-    private Class<?> testClass;
+    private static final ClassNode MY_TYPE = new ClassNode(Mock.class);
+    private static final String MY_TYPE_NAME = "@" + MY_TYPE.getNameWithoutPackage();
 
-    public TestMixinRuntimeSupport(Set<String> features) {
-        this.features = Collections.unmodifiableSet(new LinkedHashSet<String>(features));
-    }
-    
-    @SkipMethod
-    public Set<String> getFeatures() {
-        return features;
-    }
-
-    public TestRuntime getRuntime() {
-        if(currentRuntime == null && testClass != null) {
-            TestRuntimeFactory.getRuntimeForTestClass(testClass);
-        }
-        if(currentRuntime == null) {
-            throw new IllegalStateException("Current TestRuntime instance is null.");
-        } else if (currentRuntime.isClosed()) {
-            throw new IllegalStateException("Current TestRuntime instance is closed.");
-        }
-        return currentRuntime;
-    }
-    
-    @SkipMethod
-    public void setRuntime(TestRuntime runtime) {
-        this.currentRuntime = runtime;
-    }
-    
-    @SkipMethod
     @Override
-    public void setTestClass(Class<?> testClass) {
-        this.testClass = testClass;
+    public void visit(ASTNode[] astNodes, SourceUnit source) {
+        if (!(astNodes[0] instanceof AnnotationNode) || !(astNodes[1] instanceof AnnotatedNode)) {
+            throw new RuntimeException("Internal error: wrong types: " + astNodes[0].getClass() +
+                  " / " + astNodes[1].getClass());
+        }
+
+        AnnotatedNode parent = (AnnotatedNode) astNodes[1];
+        AnnotationNode node = (AnnotationNode) astNodes[0];
+        if (!MY_TYPE.equals(node.getClassNode()) || !(parent instanceof ClassNode)) {
+            return;
+        }
+
+        ClassNode classNode = (ClassNode) parent;
+        String cName = classNode.getName();
+        if (classNode.isInterface()) {
+            error(source, "Error processing interface '" + cName + "'. " + MY_TYPE_NAME +
+                    " not allowed for interfaces.");
+        }
+
+        ListExpression values = getListOfClasses(node);
+        if (values == null) {
+            error(source, "Error processing class '" + cName + "'. " + MY_TYPE_NAME +
+                    " annotation expects a class or a list of classes to mock");
+            return;
+        }
+
+        List<ClassExpression> domainClassNodes = new ArrayList<ClassExpression>();
+        for (Expression expression : values.getExpressions()) {
+            if (expression instanceof ClassExpression) {
+                ClassExpression classEx = (ClassExpression) expression;
+                ClassNode cn = classEx.getType();
+                Class<?> mixinClassForArtefactType = getMixinClassForArtefactType(cn);
+                if (mixinClassForArtefactType != null) {
+                    weaveMock(classNode, classEx, false);
+                }
+                else {
+                    domainClassNodes.add(classEx);
+                }
+            }
+        }
+        if (!domainClassNodes.isEmpty()) {
+            weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
+            addMockCollaborators(classNode, "Domain", domainClassNodes);
+            addEnableEMCStatement(classNode);
+        }
     }
 }
+
 <code block>
 
 package org.grails.compiler.injection.test;
@@ -58,7 +81,6 @@ package org.grails.compiler.injection.test;
 import grails.test.mixin.TestMixin;
 import grails.test.mixin.TestMixinTargetAware;
 import grails.test.mixin.TestRuntimeAwareMixin;
-import grails.test.mixin.integration.IntegrationTestMixin;
 import grails.test.mixin.support.MixinInstance;
 import grails.test.mixin.support.MixinMethod;
 import grails.test.mixin.support.SkipMethod;
@@ -102,7 +124,6 @@ import org.grails.compiler.injection.GrailsASTUtils;
 import grails.compiler.ast.GrailsArtefactClassInjector;
 import org.codehaus.groovy.transform.ASTTransformation;
 import org.codehaus.groovy.transform.GroovyASTTransformation;
-import org.grails.io.support.MainClassFinder;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -145,26 +166,27 @@ public class TestMixinTransformation implements ASTTransformation{
             return;
         }
 
-        String mainClass = MainClassFinder.searchMainClass(source.getSource().getURI());
-
-        System.out.println("mainClass = " + mainClass);
-        ClassNode applicationClassNode = null;
-        if(mainClass != null) {
-            applicationClassNode = ClassHelper.make(mainClass);
-        }
-
         ClassNode classNode = (ClassNode) parent;
         ListExpression values = getListOfClasses(annotationNode);
-        weaveTestMixins(classNode, values, applicationClassNode);
+        weaveTestMixins(classNode, values);
+        addEnableEMCStatement(classNode);
     }
 
-    
+    protected void addEnableEMCStatement(ClassNode classNode) {
+        if (classNode.redirect().getNodeMetaData(EMC_STATEMENT_ADDED_KEY) != Boolean.TRUE) {
+            List<Statement> statements = new ArrayList<Statement>();
+            ClassNode emcClassNode = ClassHelper.make(ExpandoMetaClass.class);
+
+            statements.add(new ExpressionStatement(GrailsASTUtils.applyDefaultMethodTarget(new MethodCallExpression(
+                    new ClassExpression(emcClassNode), "enableGlobally", MethodCallExpression.NO_ARGUMENTS),
+                    emcClassNode)));
+            classNode.addStaticInitializerStatements(statements, true);
+            classNode.redirect().setNodeMetaData(EMC_STATEMENT_ADDED_KEY, Boolean.TRUE);
+        }
+    }
+
+
     public void weaveTestMixins(ClassNode classNode, ListExpression values) {
-        weaveTestMixins(classNode, values, null);
-    }
-
-    
-    public void weaveTestMixins(ClassNode classNode, ListExpression values, ClassNode applicationClassNode) {
         String cName = classNode.getName();
         if (classNode.isInterface()) {
             throw new RuntimeException("Error processing interface '" + cName + "'. " +
@@ -174,7 +196,7 @@ public class TestMixinTransformation implements ASTTransformation{
         autoAnnotateSetupTeardown(classNode);
         autoAddTestAnnotation(classNode);
 
-        weaveMixinsIntoClass(classNode, values, applicationClassNode);
+        weaveMixinsIntoClass(classNode, values);
     }
 
     private void autoAddTestAnnotation(ClassNode classNode) {
@@ -211,10 +233,6 @@ public class TestMixinTransformation implements ASTTransformation{
     }
 
     public void weaveMixinsIntoClass(ClassNode classNode, ListExpression values) {
-        weaveMixinsIntoClass(classNode, values, null);
-    }
-
-    public void weaveMixinsIntoClass(ClassNode classNode, ListExpression values, ClassNode applicationClassNode) {
         if (values == null) {
             return;
         }
@@ -225,7 +243,7 @@ public class TestMixinTransformation implements ASTTransformation{
             if (current instanceof ClassExpression) {
                 ClassExpression ce = (ClassExpression) current;
                 ClassNode mixinClassNode = ce.getType();
-                weaveMixinIntoClass(classNode, mixinClassNode, junit3MethodHandler, applicationClassNode);
+                weaveMixinIntoClass(classNode, mixinClassNode, junit3MethodHandler);
             }
         }
 
@@ -235,15 +253,7 @@ public class TestMixinTransformation implements ASTTransformation{
     }
 
     protected void weaveMixinIntoClass(final ClassNode classNode, final ClassNode mixinClassNode,
-            final Junit3TestFixtureMethodHandler junit3MethodHandler, ClassNode applicationClassNode) {
-
-        System.out.println("mixinClassNode = " + mixinClassNode.getName());
-        System.out.println("applicationClassNode = " + applicationClassNode);
-        if(mixinClassNode.getName().equals(IntegrationTestMixin.class.getName())) {
-            new IntegrationTestMixinTransformation().weaveIntegrationTestMixin(classNode, applicationClassNode);
-            return;
-        }
-
+            final Junit3TestFixtureMethodHandler junit3MethodHandler) {
         final String fieldName = '$' + GrailsNameUtils.getPropertyName(mixinClassNode.getName());
         
         boolean implementsTestRuntimeAwareMixin = GrailsASTUtils.findInterface(mixinClassNode, ClassHelper.make(TestRuntimeAwareMixin.class)) != null;
@@ -318,7 +328,7 @@ public class TestMixinTransformation implements ASTTransformation{
         FieldNode staticRuleFieldNode = classNode.addField(RULE_FIELD_NAME_BASE + "StaticClassRule", Modifier.PRIVATE | Modifier.STATIC, ClassHelper.make(TestRule.class), new MethodCallExpression(new FieldExpression(junitAdapterFieldNode), "newClassRule", new ClassExpression(classNode)));
         AnnotationNode classRuleAnnotation = new AnnotationNode(ClassHelper.make(ClassRule.class));
         if(spockTest) {
-            
+
             FieldNode spockSharedRuleFieldNode = classNode.addField(RULE_FIELD_NAME_BASE + "SharedClassRule", Modifier.PUBLIC, ClassHelper.make(TestRule.class), new FieldExpression(staticRuleFieldNode));
             spockSharedRuleFieldNode.addAnnotation(classRuleAnnotation);
             spockSharedRuleFieldNode.addAnnotation(new AnnotationNode(ClassHelper.make(Shared.class)));
@@ -392,7 +402,7 @@ public class TestMixinTransformation implements ASTTransformation{
                 return;
             }
 
-            
+
             if(classNode.redirect().getNodeMetaData(JUNIT3_RULE_SETUP_TEARDOWN_APPLIED_KEY) != Boolean.TRUE) {
                 BlockStatement setUpMethodBody = getOrCreateNoArgsMethodBody(classNode, SET_UP_METHOD);
                 if(!hasExistingSetUp) {
@@ -524,82 +534,6 @@ public class TestMixinTransformation implements ASTTransformation{
 
 package org.grails.compiler.injection.test;
 
-import grails.test.mixin.Mock;
-
-import grails.test.mixin.domain.DomainClassUnitTestMixin;
-import org.codehaus.groovy.ast.ASTNode;
-import org.codehaus.groovy.ast.AnnotatedNode;
-import org.codehaus.groovy.ast.AnnotationNode;
-import org.codehaus.groovy.ast.ClassNode;
-import org.codehaus.groovy.ast.expr.ClassExpression;
-import org.codehaus.groovy.ast.expr.Expression;
-import org.codehaus.groovy.ast.expr.ListExpression;
-import org.codehaus.groovy.control.CompilePhase;
-import org.codehaus.groovy.control.SourceUnit;
-import org.codehaus.groovy.transform.GroovyASTTransformation;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-@GroovyASTTransformation(phase = CompilePhase.CANONICALIZATION)
-public class MockTransformation extends TestForTransformation {
-
-    private static final ClassNode MY_TYPE = new ClassNode(Mock.class);
-    private static final String MY_TYPE_NAME = "@" + MY_TYPE.getNameWithoutPackage();
-
-    @Override
-    public void visit(ASTNode[] astNodes, SourceUnit source) {
-        if (!(astNodes[0] instanceof AnnotationNode) || !(astNodes[1] instanceof AnnotatedNode)) {
-            throw new RuntimeException("Internal error: wrong types: " + astNodes[0].getClass() +
-                  " / " + astNodes[1].getClass());
-        }
-
-        AnnotatedNode parent = (AnnotatedNode) astNodes[1];
-        AnnotationNode node = (AnnotationNode) astNodes[0];
-        if (!MY_TYPE.equals(node.getClassNode()) || !(parent instanceof ClassNode)) {
-            return;
-        }
-
-        ClassNode classNode = (ClassNode) parent;
-        String cName = classNode.getName();
-        if (classNode.isInterface()) {
-            error(source, "Error processing interface '" + cName + "'. " + MY_TYPE_NAME +
-                    " not allowed for interfaces.");
-        }
-
-        ListExpression values = getListOfClasses(node);
-        if (values == null) {
-            error(source, "Error processing class '" + cName + "'. " + MY_TYPE_NAME +
-                    " annotation expects a class or a list of classes to mock");
-            return;
-        }
-
-        List<ClassExpression> domainClassNodes = new ArrayList<ClassExpression>();
-        for (Expression expression : values.getExpressions()) {
-            if (expression instanceof ClassExpression) {
-                ClassExpression classEx = (ClassExpression) expression;
-                ClassNode cn = classEx.getType();
-                Class<?> mixinClassForArtefactType = getMixinClassForArtefactType(cn);
-                if (mixinClassForArtefactType != null) {
-                    weaveMock(classNode, classEx, false);
-                }
-                else {
-                    domainClassNodes.add(classEx);
-                }
-            }
-        }
-        if (!domainClassNodes.isEmpty()) {
-            weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
-            addMockCollaborators(classNode, "Domain", domainClassNodes);
-        }
-    }
-}
-
-<code block>
-
-package org.grails.compiler.injection.test;
-
 import grails.compiler.ast.GrailsArtefactClassInjector;
 import grails.test.mixin.TestFor;
 import grails.test.mixin.domain.DomainClassUnitTestMixin;
@@ -700,6 +634,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
         if (!junit3Test && !spockTest && !isJunit) return;
 
         handleTestForAnnotation(classNode, source, node, junit3Test);
+        addEnableEMCStatement(classNode);
     }
 
     protected void handleTestForAnnotation(ClassNode classNode, SourceUnit source, AnnotationNode testForAnnotationNode, boolean junit3Test) {
@@ -721,7 +656,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
         annotations = classNode.getAnnotations(TestMixinTransformation.MY_TYPE);
         if (annotations.size()>0) return; 
 
-        
+
         String fileName = source.getName();
         String className = GrailsResourceUtils.getClassName(new FileSystemResource(fileName));
         if (className == null) {
@@ -762,17 +697,17 @@ public class TestForTransformation extends TestMixinTransformation implements Te
                 }
             }
         } catch (IOException e) {
-            
+
         }
     }
 
-    
+
     public void testFor(ClassNode classNode, ClassExpression ce) {
 
         autoAnnotateSetupTeardown(classNode);
         boolean isJunit3Test = isJunit3Test(classNode);
 
-        
+
         FieldNode log = classNode.getField("log");
         if (log == null || log.getDeclaringClass().getName().equals(GROOVY_TEST_CASE_CLASS_NAME)) {
             LoggingTransformer.addLogField(classNode, classNode.getName());
@@ -781,7 +716,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
 
         boolean isJunit4 = !isSpockTest && !isJunit3Test;
         if (isJunit4) {
-            
+
             Map<String, MethodNode> declaredMethodsMap = classNode.getDeclaredMethodsMap();
             boolean hasTestMethods = false;
             for (String methodName : declaredMethodsMap.keySet()) {
@@ -836,7 +771,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
             }
         }
 
-        
+
         weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
         if (isClassUnderTest) {
             testForMethod = addClassUnderTestMethod(classNode, value, DOMAIN_TYPE);
@@ -1117,9 +1052,86 @@ public abstract class TestMixinRuntimeSupport extends GroovyObjectSupport implem
 
 package org.grails.compiler.injection.test;
 
+import grails.test.mixin.Mock;
+
+import grails.test.mixin.domain.DomainClassUnitTestMixin;
+import org.codehaus.groovy.ast.ASTNode;
+import org.codehaus.groovy.ast.AnnotatedNode;
+import org.codehaus.groovy.ast.AnnotationNode;
+import org.codehaus.groovy.ast.ClassNode;
+import org.codehaus.groovy.ast.expr.ClassExpression;
+import org.codehaus.groovy.ast.expr.Expression;
+import org.codehaus.groovy.ast.expr.ListExpression;
+import org.codehaus.groovy.control.CompilePhase;
+import org.codehaus.groovy.control.SourceUnit;
+import org.codehaus.groovy.transform.GroovyASTTransformation;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+@GroovyASTTransformation(phase = CompilePhase.CANONICALIZATION)
+public class MockTransformation extends TestForTransformation {
+
+    private static final ClassNode MY_TYPE = new ClassNode(Mock.class);
+    private static final String MY_TYPE_NAME = "@" + MY_TYPE.getNameWithoutPackage();
+
+    @Override
+    public void visit(ASTNode[] astNodes, SourceUnit source) {
+        if (!(astNodes[0] instanceof AnnotationNode) || !(astNodes[1] instanceof AnnotatedNode)) {
+            throw new RuntimeException("Internal error: wrong types: " + astNodes[0].getClass() +
+                  " / " + astNodes[1].getClass());
+        }
+
+        AnnotatedNode parent = (AnnotatedNode) astNodes[1];
+        AnnotationNode node = (AnnotationNode) astNodes[0];
+        if (!MY_TYPE.equals(node.getClassNode()) || !(parent instanceof ClassNode)) {
+            return;
+        }
+
+        ClassNode classNode = (ClassNode) parent;
+        String cName = classNode.getName();
+        if (classNode.isInterface()) {
+            error(source, "Error processing interface '" + cName + "'. " + MY_TYPE_NAME +
+                    " not allowed for interfaces.");
+        }
+
+        ListExpression values = getListOfClasses(node);
+        if (values == null) {
+            error(source, "Error processing class '" + cName + "'. " + MY_TYPE_NAME +
+                    " annotation expects a class or a list of classes to mock");
+            return;
+        }
+
+        List<ClassExpression> domainClassNodes = new ArrayList<ClassExpression>();
+        for (Expression expression : values.getExpressions()) {
+            if (expression instanceof ClassExpression) {
+                ClassExpression classEx = (ClassExpression) expression;
+                ClassNode cn = classEx.getType();
+                Class<?> mixinClassForArtefactType = getMixinClassForArtefactType(cn);
+                if (mixinClassForArtefactType != null) {
+                    weaveMock(classNode, classEx, false);
+                }
+                else {
+                    domainClassNodes.add(classEx);
+                }
+            }
+        }
+        if (!domainClassNodes.isEmpty()) {
+            weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
+            addMockCollaborators(classNode, "Domain", domainClassNodes);
+        }
+    }
+}
+
+<code block>
+
+package org.grails.compiler.injection.test;
+
 import grails.test.mixin.TestMixin;
 import grails.test.mixin.TestMixinTargetAware;
 import grails.test.mixin.TestRuntimeAwareMixin;
+import grails.test.mixin.integration.IntegrationTestMixin;
 import grails.test.mixin.support.MixinInstance;
 import grails.test.mixin.support.MixinMethod;
 import grails.test.mixin.support.SkipMethod;
@@ -1163,6 +1175,7 @@ import org.grails.compiler.injection.GrailsASTUtils;
 import grails.compiler.ast.GrailsArtefactClassInjector;
 import org.codehaus.groovy.transform.ASTTransformation;
 import org.codehaus.groovy.transform.GroovyASTTransformation;
+import org.grails.io.support.MainClassFinder;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -1205,27 +1218,26 @@ public class TestMixinTransformation implements ASTTransformation{
             return;
         }
 
+        String mainClass = MainClassFinder.searchMainClass(source.getSource().getURI());
+
+        System.out.println("mainClass = " + mainClass);
+        ClassNode applicationClassNode = null;
+        if(mainClass != null) {
+            applicationClassNode = ClassHelper.make(mainClass);
+        }
+
         ClassNode classNode = (ClassNode) parent;
         ListExpression values = getListOfClasses(annotationNode);
-        weaveTestMixins(classNode, values);
-        addEnableEMCStatement(classNode);
+        weaveTestMixins(classNode, values, applicationClassNode);
     }
 
-    protected void addEnableEMCStatement(ClassNode classNode) {
-        if (classNode.redirect().getNodeMetaData(EMC_STATEMENT_ADDED_KEY) != Boolean.TRUE) {
-            List<Statement> statements = new ArrayList<Statement>();
-            ClassNode emcClassNode = ClassHelper.make(ExpandoMetaClass.class);
-            
-            statements.add(new ExpressionStatement(GrailsASTUtils.applyDefaultMethodTarget(new MethodCallExpression(
-                    new ClassExpression(emcClassNode), "enableGlobally", MethodCallExpression.NO_ARGUMENTS),
-                    emcClassNode)));
-            classNode.addStaticInitializerStatements(statements, true);
-            classNode.redirect().setNodeMetaData(EMC_STATEMENT_ADDED_KEY, Boolean.TRUE);
-        }
-    }
 
-    
     public void weaveTestMixins(ClassNode classNode, ListExpression values) {
+        weaveTestMixins(classNode, values, null);
+    }
+
+
+    public void weaveTestMixins(ClassNode classNode, ListExpression values, ClassNode applicationClassNode) {
         String cName = classNode.getName();
         if (classNode.isInterface()) {
             throw new RuntimeException("Error processing interface '" + cName + "'. " +
@@ -1235,7 +1247,7 @@ public class TestMixinTransformation implements ASTTransformation{
         autoAnnotateSetupTeardown(classNode);
         autoAddTestAnnotation(classNode);
 
-        weaveMixinsIntoClass(classNode, values);
+        weaveMixinsIntoClass(classNode, values, applicationClassNode);
     }
 
     private void autoAddTestAnnotation(ClassNode classNode) {
@@ -1272,6 +1284,10 @@ public class TestMixinTransformation implements ASTTransformation{
     }
 
     public void weaveMixinsIntoClass(ClassNode classNode, ListExpression values) {
+        weaveMixinsIntoClass(classNode, values, null);
+    }
+
+    public void weaveMixinsIntoClass(ClassNode classNode, ListExpression values, ClassNode applicationClassNode) {
         if (values == null) {
             return;
         }
@@ -1282,7 +1298,7 @@ public class TestMixinTransformation implements ASTTransformation{
             if (current instanceof ClassExpression) {
                 ClassExpression ce = (ClassExpression) current;
                 ClassNode mixinClassNode = ce.getType();
-                weaveMixinIntoClass(classNode, mixinClassNode, junit3MethodHandler);
+                weaveMixinIntoClass(classNode, mixinClassNode, junit3MethodHandler, applicationClassNode);
             }
         }
 
@@ -1292,7 +1308,15 @@ public class TestMixinTransformation implements ASTTransformation{
     }
 
     protected void weaveMixinIntoClass(final ClassNode classNode, final ClassNode mixinClassNode,
-            final Junit3TestFixtureMethodHandler junit3MethodHandler) {
+            final Junit3TestFixtureMethodHandler junit3MethodHandler, ClassNode applicationClassNode) {
+
+        System.out.println("mixinClassNode = " + mixinClassNode.getName());
+        System.out.println("applicationClassNode = " + applicationClassNode);
+        if(mixinClassNode.getName().equals(IntegrationTestMixin.class.getName())) {
+            new IntegrationTestMixinTransformation().weaveIntegrationTestMixin(classNode, applicationClassNode);
+            return;
+        }
+
         final String fieldName = '$' + GrailsNameUtils.getPropertyName(mixinClassNode.getName());
         
         boolean implementsTestRuntimeAwareMixin = GrailsASTUtils.findInterface(mixinClassNode, ClassHelper.make(TestRuntimeAwareMixin.class)) != null;
@@ -1367,7 +1391,7 @@ public class TestMixinTransformation implements ASTTransformation{
         FieldNode staticRuleFieldNode = classNode.addField(RULE_FIELD_NAME_BASE + "StaticClassRule", Modifier.PRIVATE | Modifier.STATIC, ClassHelper.make(TestRule.class), new MethodCallExpression(new FieldExpression(junitAdapterFieldNode), "newClassRule", new ClassExpression(classNode)));
         AnnotationNode classRuleAnnotation = new AnnotationNode(ClassHelper.make(ClassRule.class));
         if(spockTest) {
-            
+
             FieldNode spockSharedRuleFieldNode = classNode.addField(RULE_FIELD_NAME_BASE + "SharedClassRule", Modifier.PUBLIC, ClassHelper.make(TestRule.class), new FieldExpression(staticRuleFieldNode));
             spockSharedRuleFieldNode.addAnnotation(classRuleAnnotation);
             spockSharedRuleFieldNode.addAnnotation(new AnnotationNode(ClassHelper.make(Shared.class)));
@@ -1441,7 +1465,7 @@ public class TestMixinTransformation implements ASTTransformation{
                 return;
             }
 
-            
+
             if(classNode.redirect().getNodeMetaData(JUNIT3_RULE_SETUP_TEARDOWN_APPLIED_KEY) != Boolean.TRUE) {
                 BlockStatement setUpMethodBody = getOrCreateNoArgsMethodBody(classNode, SET_UP_METHOD);
                 if(!hasExistingSetUp) {
@@ -1573,83 +1597,6 @@ public class TestMixinTransformation implements ASTTransformation{
 
 package org.grails.compiler.injection.test;
 
-import grails.test.mixin.Mock;
-
-import grails.test.mixin.domain.DomainClassUnitTestMixin;
-import org.codehaus.groovy.ast.ASTNode;
-import org.codehaus.groovy.ast.AnnotatedNode;
-import org.codehaus.groovy.ast.AnnotationNode;
-import org.codehaus.groovy.ast.ClassNode;
-import org.codehaus.groovy.ast.expr.ClassExpression;
-import org.codehaus.groovy.ast.expr.Expression;
-import org.codehaus.groovy.ast.expr.ListExpression;
-import org.codehaus.groovy.control.CompilePhase;
-import org.codehaus.groovy.control.SourceUnit;
-import org.codehaus.groovy.transform.GroovyASTTransformation;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-@GroovyASTTransformation(phase = CompilePhase.CANONICALIZATION)
-public class MockTransformation extends TestForTransformation {
-
-    private static final ClassNode MY_TYPE = new ClassNode(Mock.class);
-    private static final String MY_TYPE_NAME = "@" + MY_TYPE.getNameWithoutPackage();
-
-    @Override
-    public void visit(ASTNode[] astNodes, SourceUnit source) {
-        if (!(astNodes[0] instanceof AnnotationNode) || !(astNodes[1] instanceof AnnotatedNode)) {
-            throw new RuntimeException("Internal error: wrong types: " + astNodes[0].getClass() +
-                  " / " + astNodes[1].getClass());
-        }
-
-        AnnotatedNode parent = (AnnotatedNode) astNodes[1];
-        AnnotationNode node = (AnnotationNode) astNodes[0];
-        if (!MY_TYPE.equals(node.getClassNode()) || !(parent instanceof ClassNode)) {
-            return;
-        }
-
-        ClassNode classNode = (ClassNode) parent;
-        String cName = classNode.getName();
-        if (classNode.isInterface()) {
-            error(source, "Error processing interface '" + cName + "'. " + MY_TYPE_NAME +
-                    " not allowed for interfaces.");
-        }
-
-        ListExpression values = getListOfClasses(node);
-        if (values == null) {
-            error(source, "Error processing class '" + cName + "'. " + MY_TYPE_NAME +
-                    " annotation expects a class or a list of classes to mock");
-            return;
-        }
-
-        List<ClassExpression> domainClassNodes = new ArrayList<ClassExpression>();
-        for (Expression expression : values.getExpressions()) {
-            if (expression instanceof ClassExpression) {
-                ClassExpression classEx = (ClassExpression) expression;
-                ClassNode cn = classEx.getType();
-                Class<?> mixinClassForArtefactType = getMixinClassForArtefactType(cn);
-                if (mixinClassForArtefactType != null) {
-                    weaveMock(classNode, classEx, false);
-                }
-                else {
-                    domainClassNodes.add(classEx);
-                }
-            }
-        }
-        if (!domainClassNodes.isEmpty()) {
-            weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
-            addMockCollaborators(classNode, "Domain", domainClassNodes);
-            addEnableEMCStatement(classNode);
-        }
-    }
-}
-
-<code block>
-
-package org.grails.compiler.injection.test;
-
 import grails.compiler.ast.GrailsArtefactClassInjector;
 import grails.test.mixin.TestFor;
 import grails.test.mixin.domain.DomainClassUnitTestMixin;
@@ -1750,7 +1697,6 @@ public class TestForTransformation extends TestMixinTransformation implements Te
         if (!junit3Test && !spockTest && !isJunit) return;
 
         handleTestForAnnotation(classNode, source, node, junit3Test);
-        addEnableEMCStatement(classNode);
     }
 
     protected void handleTestForAnnotation(ClassNode classNode, SourceUnit source, AnnotationNode testForAnnotationNode, boolean junit3Test) {
@@ -1772,7 +1718,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
         annotations = classNode.getAnnotations(TestMixinTransformation.MY_TYPE);
         if (annotations.size()>0) return; 
 
-        
+
         String fileName = source.getName();
         String className = GrailsResourceUtils.getClassName(new FileSystemResource(fileName));
         if (className == null) {
@@ -1813,17 +1759,17 @@ public class TestForTransformation extends TestMixinTransformation implements Te
                 }
             }
         } catch (IOException e) {
-            
+
         }
     }
 
-    
+
     public void testFor(ClassNode classNode, ClassExpression ce) {
 
         autoAnnotateSetupTeardown(classNode);
         boolean isJunit3Test = isJunit3Test(classNode);
 
-        
+
         FieldNode log = classNode.getField("log");
         if (log == null || log.getDeclaringClass().getName().equals(GROOVY_TEST_CASE_CLASS_NAME)) {
             LoggingTransformer.addLogField(classNode, classNode.getName());
@@ -1832,7 +1778,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
 
         boolean isJunit4 = !isSpockTest && !isJunit3Test;
         if (isJunit4) {
-            
+
             Map<String, MethodNode> declaredMethodsMap = classNode.getDeclaredMethodsMap();
             boolean hasTestMethods = false;
             for (String methodName : declaredMethodsMap.keySet()) {
@@ -1887,7 +1833,7 @@ public class TestForTransformation extends TestMixinTransformation implements Te
             }
         }
 
-        
+
         weaveMixinClass(classNode, DomainClassUnitTestMixin.class);
         if (isClassUnderTest) {
             testForMethod = addClassUnderTestMethod(classNode, value, DOMAIN_TYPE);
@@ -2104,5 +2050,60 @@ public class TestForTransformation extends TestMixinTransformation implements Te
     @Override
     public void registerMixin(String artefactType, Class mixin) {
         artefactTypeToTestMap.put(artefactType, mixin);
+    }
+}
+
+<code block>
+
+
+package grails.test.mixin.support;
+
+import grails.test.mixin.TestRuntimeAwareMixin;
+import grails.test.runtime.TestRuntime;
+import grails.test.runtime.TestRuntimeFactory;
+import groovy.lang.ExpandoMetaClass;
+import groovy.lang.GroovyObjectSupport;
+
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
+
+public abstract class TestMixinRuntimeSupport extends GroovyObjectSupport implements TestRuntimeAwareMixin {
+
+    private TestRuntime currentRuntime;
+    private Set<String> features;
+    private Class<?> testClass;
+
+    public TestMixinRuntimeSupport(Set<String> features) {
+        this.features = Collections.unmodifiableSet(new LinkedHashSet<String>(features));
+    }
+    
+    @SkipMethod
+    public Set<String> getFeatures() {
+        return features;
+    }
+
+    public TestRuntime getRuntime() {
+        if(currentRuntime == null && testClass != null) {
+            TestRuntimeFactory.getRuntimeForTestClass(testClass);
+        }
+        if(currentRuntime == null) {
+            throw new IllegalStateException("Current TestRuntime instance is null.");
+        } else if (currentRuntime.isClosed()) {
+            throw new IllegalStateException("Current TestRuntime instance is closed.");
+        }
+        return currentRuntime;
+    }
+    
+    @SkipMethod
+    public void setRuntime(TestRuntime runtime) {
+        this.currentRuntime = runtime;
+    }
+    
+    @SkipMethod
+    @Override
+    public void setTestClass(Class<?> testClass) {
+        this.testClass = testClass;
     }
 }

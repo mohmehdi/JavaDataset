@@ -1,5 +1,5 @@
-Java_Projects/xabber_android/xabber_android-faaf826e/curr/app/src/main/java/com/xabber/android/ui/ContactAdd.java
+Java_Projects/xabber_android/xabber_android-faaf826e/prev/app/src/main/java/com/xabber/android/ui/ContactAddFragment.java
+Java_Projects/xabber_android/xabber_android-faaf826e/prev/app/src/main/java/com/xabber/android/ui/ContactAdd.java
 Java_Projects/xabber_android/xabber_android-faaf826e/curr/app/src/main/java/com/xabber/android/ui/ContactAddFragment.java
 Java_Projects/xabber_android/xabber_android-faaf826e/curr/app/src/main/java/com/xabber/android/ui/ContactAdder.java
-Java_Projects/xabber_android/xabber_android-faaf826e/prev/app/src/main/java/com/xabber/android/ui/ContactAdd.java
-Java_Projects/xabber_android/xabber_android-faaf826e/prev/app/src/main/java/com/xabber/android/ui/ContactAddFragment.java
+Java_Projects/xabber_android/xabber_android-faaf826e/curr/app/src/main/java/com/xabber/android/ui/ContactAdd.java

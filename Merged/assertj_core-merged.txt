@@ -1,67 +1,6 @@
 
 package org.assertj.core.api;
 
-import java.nio.file.Path;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-
-
-public class Assertions extends StrictAssertions {
-
-  
-  public static <T> T assertThat(final AssertProvider<T> component) {
-    return component.assertThat();
-  }
-
-  
-  protected Assertions() {}
-
-  
-  public static AbstractCharSequenceAssert<?, ? extends CharSequence> assertThat(CharSequence actual) {
-    return new CharSequenceAssert(actual);
-  }
-
-  
-  public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterable<? extends T> actual) {
-    return new IterableAssert<>(actual);
-  }
-
-  
-  public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterator<? extends T> actual) {
-    return new IterableAssert<>(actual);
-  }
-
-  
-  public static <T> AbstractListAssert<?, ? extends List<? extends T>, T> assertThat(List<? extends T> actual) {
-    return new ListAssert<>(actual);
-  }
-
-  
-  public static AbstractPathAssert<?> assertThat(Path actual) {
-    return new PathAssert(actual);
-  }
-
-  
-  public static <K, V> MapAssert<K, V> assertThat(Map<K, V> actual) {
-    return new MapAssert<>(actual);
-  }
-
-  
-  public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> assertThat(T actual) {
-    return new GenericComparableAssert<>(actual);
-  }
-
-  
-  public static <T extends AssertDelegateTarget> T assertThat(T assertion) {
-    return assertion;
-  }
-}
-
-<code block>
-
-package org.assertj.core.api;
-
 import java.io.File;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -87,853 +26,268 @@ import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 
 public class BDDAssertions extends Assertions {
 
-  
+
   public static <T> OptionalAssert<T> then(Optional<T> optional) {
-    return assertThat(optional);
+	return assertThat(optional);
   }
 
-  
+
   public static OptionalIntAssert then(OptionalInt optional) {
-    return assertThat(optional);
+      return assertThat(optional);
   }
 
-  
-  public static OptionalLongAssert then(OptionalLong optional) {
-    return assertThat(optional);
-  }
 
-  
+   public static OptionalLongAssert then(OptionalLong optional) {
+      return assertThat(optional);
+   }
+
+
   public static OptionalDoubleAssert then(OptionalDouble optional) {
-    return assertThat(optional);
+      return assertThat(optional);
   }
 
-  
+
   public static AbstractBigDecimalAssert<?> then(BigDecimal actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> then(boolean actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> then(Boolean actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanArrayAssert<?> then(boolean[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> then(byte actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> then(Byte actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractByteArrayAssert<?> then(byte[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> then(char actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractCharArrayAssert<?> then(char[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> then(Character actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractClassAssert<?> then(Class<?> actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> then(T actual) {
     return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> then(Iterable<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> then(Iterator<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> then(double actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> then(Double actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractDoubleArrayAssert<?> then(double[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractFileAssert<?> then(File actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractInputStreamAssert<?, ? extends InputStream> then(InputStream actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> then(float actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> then(Float actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatArrayAssert<?> then(float[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> then(int actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractIntArrayAssert<?> then(int[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> then(Integer actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractListAssert<?, ? extends List<? extends T>, T> then(List<? extends T> actual) {
     return new ListAssert<>(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> then(long actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> then(Long actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractLongArrayAssert<?> then(long[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractObjectAssert<?, T> then(T actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractObjectArrayAssert<?, T> then(T[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static <K, V> AbstractMapAssert<?, ? extends Map<K, V>, K, V> then(Map<K, V> actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> then(short actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> then(Short actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractShortArrayAssert<?> then(short[] actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, ? extends CharSequence> then(CharSequence actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, String> then(String actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractDateAssert<?> then(Date actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractThrowableAssert<?, ? extends Throwable> then(Throwable actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
-
   
+
   public static AbstractThrowableAssert<?, ? extends Throwable> thenThrownBy(ThrowingCallable shouldRaiseThrowable) {
     return assertThatThrownBy(shouldRaiseThrowable);
   }
 
-  
+
   public static AbstractLocalDateAssert<?> then(LocalDate actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractLocalDateTimeAssert<?> then(LocalDateTime actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractZonedDateTimeAssert<?> then(ZonedDateTime actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractLocalTimeAssert<?> then(LocalTime actual) {
-    return assertThat(actual);
+	return assertThat(actual);
   }
 
-  
+
   public static AbstractOffsetTimeAssert<?> then(OffsetTime actual) {
-    return assertThat(actual);
-  }
+        return assertThat(actual);
+    }
+    
 
-  
   public static AbstractUriAssert<?> then(URI actual) {
     return assertThat(actual);
   }
 
-  
+
   public static AbstractUrlAssert<?> then(URL actual) {
     return assertThat(actual);
   }
 
-  
+
   public static AbstractOffsetDateTimeAssert<?> then(OffsetDateTime actual) {
-    return assertThat(actual);
-  }
-
-  
-  protected BDDAssertions() {}
-}
-
-<code block>
-
-package org.assertj.core.api;
-
-import static org.assertj.core.data.Percentage.withPercentage;
-
-import java.io.File;
-import java.io.InputStream;
-import java.math.BigDecimal;
-import java.net.URI;
-import java.net.URL;
-import java.nio.charset.Charset;
-import java.sql.Timestamp;
-import java.text.DateFormat;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.time.OffsetDateTime;
-import java.time.OffsetTime;
-import java.time.ZonedDateTime;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
-import java.util.OptionalDouble;
-import java.util.OptionalInt;
-import java.util.OptionalLong;
-
-import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
-import org.assertj.core.api.exception.RuntimeIOException;
-import org.assertj.core.api.filter.FilterOperator;
-import org.assertj.core.api.filter.Filters;
-import org.assertj.core.api.filter.InFilter;
-import org.assertj.core.api.filter.NotFilter;
-import org.assertj.core.api.filter.NotInFilter;
-import org.assertj.core.condition.AllOf;
-import org.assertj.core.condition.AnyOf;
-import org.assertj.core.condition.DoesNotHave;
-import org.assertj.core.condition.Not;
-import org.assertj.core.data.Index;
-import org.assertj.core.data.MapEntry;
-import org.assertj.core.data.Offset;
-import org.assertj.core.data.Percentage;
-import org.assertj.core.groups.Properties;
-import org.assertj.core.groups.Tuple;
-import org.assertj.core.util.Files;
-import org.assertj.core.util.GroupFormatUtil;
-import org.assertj.core.util.URLs;
-import org.assertj.core.util.introspection.FieldSupport;
-
-
-public class StrictAssertions {
-
-  
-  public static <T> OptionalAssert<T> assertThat(Optional<T> optional) {
-    return new OptionalAssert<>(optional);
-  }
-
-  
-  public static OptionalDoubleAssert assertThat(OptionalDouble optionalDouble) {
-    return new OptionalDoubleAssert(optionalDouble);
-  }
-
-  
-  public static OptionalIntAssert assertThat(OptionalInt optionalInt) {
-    return new OptionalIntAssert(optionalInt);
-  }
-
-  
-  public static OptionalLongAssert assertThat(OptionalLong optionalLong) {
-    return new OptionalLongAssert(optionalLong);
-  }
-
-  
-  public static AbstractBigDecimalAssert<?> assertThat(BigDecimal actual) {
-    return new BigDecimalAssert(actual);
-  }
-
-  
-  public static AbstractUriAssert<?> assertThat(URI actual) {
-    return new UriAssert(actual);
-  }
-
-  
-  public static AbstractUrlAssert<?> assertThat(URL actual) {
-    return new UrlAssert(actual);
-  }
-
-  
-  public static AbstractBooleanAssert<?> assertThat(boolean actual) {
-    return new BooleanAssert(actual);
-  }
-
-  
-  public static AbstractBooleanAssert<?> assertThat(Boolean actual) {
-    return new BooleanAssert(actual);
-  }
-
-  
-  public static AbstractBooleanArrayAssert<?> assertThat(boolean[] actual) {
-    return new BooleanArrayAssert(actual);
-  }
-
-  
-  public static AbstractByteAssert<?> assertThat(byte actual) {
-    return new ByteAssert(actual);
-  }
-
-  
-  public static AbstractByteAssert<?> assertThat(Byte actual) {
-    return new ByteAssert(actual);
-  }
-
-  
-  public static AbstractByteArrayAssert<?> assertThat(byte[] actual) {
-    return new ByteArrayAssert(actual);
-  }
-
-  
-  public static AbstractCharacterAssert<?> assertThat(char actual) {
-    return new CharacterAssert(actual);
-  }
-
-  
-  public static AbstractCharArrayAssert<?> assertThat(char[] actual) {
-    return new CharArrayAssert(actual);
-  }
-
-  
-  public static AbstractCharacterAssert<?> assertThat(Character actual) {
-    return new CharacterAssert(actual);
-  }
-
-  
-  public static AbstractClassAssert<?> assertThat(Class<?> actual) {
-    return new ClassAssert(actual);
-  }
-
-  
-  public static AbstractDoubleAssert<?> assertThat(double actual) {
-    return new DoubleAssert(actual);
-  }
-
-  
-  public static AbstractDoubleAssert<?> assertThat(Double actual) {
-    return new DoubleAssert(actual);
-  }
-
-  
-  public static AbstractDoubleArrayAssert<?> assertThat(double[] actual) {
-    return new DoubleArrayAssert(actual);
-  }
-
-  
-  public static AbstractFileAssert<?> assertThat(File actual) {
-    return new FileAssert(actual);
-  }
-
-  
-  public static AbstractInputStreamAssert<?, ? extends InputStream> assertThat(InputStream actual) {
-    return new InputStreamAssert(actual);
-  }
-
-  
-  public static AbstractFloatAssert<?> assertThat(float actual) {
-    return new FloatAssert(actual);
-  }
-
-  
-  public static AbstractFloatAssert<?> assertThat(Float actual) {
-    return new FloatAssert(actual);
-  }
-
-  
-  public static AbstractFloatArrayAssert<?> assertThat(float[] actual) {
-    return new FloatArrayAssert(actual);
-  }
-
-  
-  public static AbstractIntegerAssert<?> assertThat(int actual) {
-    return new IntegerAssert(actual);
-  }
-
-  
-  public static AbstractIntArrayAssert<?> assertThat(int[] actual) {
-    return new IntArrayAssert(actual);
-  }
-
-  
-  public static AbstractIntegerAssert<?> assertThat(Integer actual) {
-    return new IntegerAssert(actual);
-  }
-
-  
-  public static AbstractLongAssert<?> assertThat(long actual) {
-    return new LongAssert(actual);
-  }
-
-  
-  public static AbstractLongAssert<?> assertThat(Long actual) {
-    return new LongAssert(actual);
-  }
-
-  
-  public static AbstractLongArrayAssert<?> assertThat(long[] actual) {
-    return new LongArrayAssert(actual);
-  }
-
-  
-  public static <T> AbstractObjectAssert<?, T> assertThat(T actual) {
-    return new ObjectAssert<>(actual);
-  }
-
-  
-  public static <T> AbstractObjectArrayAssert<?, T> assertThat(T[] actual) {
-    return new ObjectArrayAssert<>(actual);
-  }
-
-  
-  public static AbstractShortAssert<?> assertThat(short actual) {
-    return new ShortAssert(actual);
-  }
-
-  
-  public static AbstractShortAssert<?> assertThat(Short actual) {
-    return new ShortAssert(actual);
-  }
-
-  
-  public static AbstractShortArrayAssert<?> assertThat(short[] actual) {
-    return new ShortArrayAssert(actual);
-  }
-
-  
-  public static AbstractCharSequenceAssert<?, String> assertThat(String actual) {
-    return new StringAssert(actual);
-  }
-
-  
-  public static AbstractDateAssert<?> assertThat(Date actual) {
-    return new DateAssert(actual);
-  }
-
-  
-  public static AbstractZonedDateTimeAssert<?> assertThat(ZonedDateTime date) {
-    return new ZonedDateTimeAssert(date);
-  }
-
-  
-  public static AbstractLocalDateTimeAssert<?> assertThat(LocalDateTime localDateTime) {
-    return new LocalDateTimeAssert(localDateTime);
-  }
-
-  
-  public static AbstractOffsetDateTimeAssert<?> assertThat(OffsetDateTime actual) {
-    return new OffsetDateTimeAssert(actual);
-  }
-
-  
-  public static AbstractOffsetTimeAssert<?> assertThat(OffsetTime offsetTime) {
-    return new OffsetTimeAssert(offsetTime);
-  }
-
-  
-  public static AbstractLocalTimeAssert<?> assertThat(LocalTime actual) {
-    return new LocalTimeAssert(actual);
-  }
-
-  
-  public static AbstractLocalDateAssert<?> assertThat(LocalDate localDate) {
-    return new LocalDateAssert(localDate);
-  }
-
-  
-  public static AbstractThrowableAssert<?, ? extends Throwable> assertThat(Throwable actual) {
-    return new ThrowableAssert(actual);
-  }
-
-  
-  public static AbstractThrowableAssert<?, ? extends Throwable> assertThatThrownBy(ThrowingCallable shouldRaiseThrowable) {
-    return new ThrowableAssert(catchThrowable(shouldRaiseThrowable)).hasBeenThrown();
-  }
-
-  
-  public static Throwable catchThrowable(ThrowingCallable shouldRaiseThrowable) {
-    return ThrowableAssert.catchThrowable(shouldRaiseThrowable);
-  }
-
-  
-  
-  
-
-  
-  public static void setRemoveAssertJRelatedElementsFromStackTrace(boolean removeAssertJRelatedElementsFromStackTrace) {
-    Fail.setRemoveAssertJRelatedElementsFromStackTrace(removeAssertJRelatedElementsFromStackTrace);
-  }
-
-  
-  public static void fail(String failureMessage) {
-    Fail.fail(failureMessage);
-  }
-
-  
-  public static void fail(String failureMessage, Throwable realCause) {
-    Fail.fail(failureMessage, realCause);
-  }
-
-  
-  public static void failBecauseExceptionWasNotThrown(Class<? extends Throwable> exceptionClass) {
-    Fail.shouldHaveThrown(exceptionClass);
-  }
-
-  
-  public static void shouldHaveThrown(Class<? extends Throwable> exceptionClass) {
-    Fail.shouldHaveThrown(exceptionClass);
-  }
-
-  
-  public static void setMaxLengthForSingleLineDescription(int maxLengthForSingleLineDescription) {
-    GroupFormatUtil.setMaxLengthForSingleLineDescription(maxLengthForSingleLineDescription);
-  }
-
-  
-  
-  
-
-  
-  public static <T> Properties<T> extractProperty(String propertyName, Class<T> propertyType) {
-    return Properties.extractProperty(propertyName, propertyType);
-  }
-
-  
-  public static Properties<Object> extractProperty(String propertyName) {
-    return Properties.extractProperty(propertyName);
-  }
-
-  
-  public static Tuple tuple(Object... values) {
-    return Tuple.tuple(values);
-  }
-
-  
-  public static void setAllowExtractingPrivateFields(boolean allowExtractingPrivateFields) {
-    FieldSupport.extraction().setAllowUsingPrivateFields(allowExtractingPrivateFields);
-  }
-
-  
-  public static void setAllowComparingPrivateFields(boolean allowComparingPrivateFields) {
-    FieldSupport.comparison().setAllowUsingPrivateFields(allowComparingPrivateFields);
-  }
-
-  
-  
-  
-
-  
-  public static <K, V> MapEntry<K, V> entry(K key, V value) {
-    return MapEntry.entry(key, value);
-  }
-
-  
-  public static Index atIndex(int index) {
-    return Index.atIndex(index);
-  }
-
-  
-  public static Offset<Double> offset(Double value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Float> offset(Float value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Double> within(Double value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Float> within(Float value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<BigDecimal> within(BigDecimal value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Byte> within(Byte value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Integer> within(Integer value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Short> within(Short value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Offset<Long> within(Long value) {
-    return Offset.offset(value);
-  }
-
-  
-  public static Percentage withinPercentage(Double value) {
-    return withPercentage(value);
-  }
-
-  
-  public static Percentage withinPercentage(Integer value) {
-    return withPercentage(value);
-  }
-
-  
-  public static Percentage withinPercentage(Long value) {
-    return withPercentage(value);
-  }
-
-  
-  
-  
-
-  
-  @SafeVarargs
-  public static <T> Condition<T> allOf(Condition<? super T>... conditions) {
-    return AllOf.allOf(conditions);
-  }
-
-  
-  public static <T> Condition<T> allOf(Iterable<? extends Condition<? super T>> conditions) {
-    return AllOf.allOf(conditions);
-  }
-
-  
-  @SafeVarargs
-  public static <T> Condition<T> anyOf(Condition<? super T>... conditions) {
-    return AnyOf.anyOf(conditions);
-  }
-
-  
-  public static <T> Condition<T> anyOf(Iterable<? extends Condition<? super T>> conditions) {
-    return AnyOf.anyOf(conditions);
-  }
-
-  
-  public static <T> DoesNotHave<T> doesNotHave(Condition<? super T> condition) {
-    return DoesNotHave.doesNotHave(condition);
-  }
-
-  
-  public static <T> Not<T> not(Condition<? super T> condition) {
-    return Not.not(condition);
-  }
-
-  
-  
-  
-
-  
-  public static <E> Filters<E> filter(E[] array) {
-    return Filters.filter(array);
-  }
-
-  
-  public static <E> Filters<E> filter(Iterable<E> iterableToFilter) {
-    return Filters.filter(iterableToFilter);
-  }
-
-  
-  public static InFilter in(Object... values) {
-    return InFilter.in(values);
-  }
-
-  
-  public static NotInFilter notIn(Object... valuesNotToMatch) {
-    return NotInFilter.notIn(valuesNotToMatch);
-  }
-
-  
-  public static NotFilter not(Object valueNotToMatch) {
-    return NotFilter.not(valueNotToMatch);
-  }
-
-  
-  
-  
-
-  
-  public static String contentOf(File file, Charset charset) {
-    return Files.contentOf(file, charset);
-  }
-
-  
-  public static String contentOf(File file, String charsetName) {
-    return Files.contentOf(file, charsetName);
-  }
-
-  
-  public static String contentOf(File file) {
-    return Files.contentOf(file, Charset.defaultCharset());
-  }
-
-  
-  public static List<String> linesOf(File file) {
-    return Files.linesOf(file, Charset.defaultCharset());
-  }
-
-  
-  public static List<String> linesOf(File file, Charset charset) {
-    return Files.linesOf(file, charset);
-  }
-
-  
-  public static List<String> linesOf(File file, String charsetName) {
-    return Files.linesOf(file, charsetName);
-  }
-
-  
-  
-  
-
-  
-  public static String contentOf(URL url, Charset charset) {
-    return URLs.contentOf(url, charset);
-  }
-
-  
-  public static String contentOf(URL url, String charsetName) {
-    return URLs.contentOf(url, charsetName);
-  }
-
-  
-  public static String contentOf(URL url) {
-    return URLs.contentOf(url, Charset.defaultCharset());
-  }
-
-  
-  public static List<String> linesOf(URL url) {
-    return URLs.linesOf(url, Charset.defaultCharset());
-  }
-
+        return assertThat(actual);
+    }
   
-  public static List<String> linesOf(URL url, Charset charset) {
-    return URLs.linesOf(url, charset);
-  }
 
-  
-  public static List<String> linesOf(URL url, String charsetName) {
-    return URLs.linesOf(url, charsetName);
-  }
-
-  
-  
-  
-
-  
-  public static void setLenientDateParsing(boolean value) {
-    AbstractDateAssert.setLenientDateParsing(value);
-  }
-
-  
-  public static void registerCustomDateFormat(DateFormat userCustomDateFormat) {
-    AbstractDateAssert.registerCustomDateFormat(userCustomDateFormat);
-  }
-
-  
-  public static void registerCustomDateFormat(String userCustomDateFormatPattern) {
-    AbstractDateAssert.registerCustomDateFormat(userCustomDateFormatPattern);
-  }
-
-  
-  public static void useDefaultDateFormatsOnly() {
-    AbstractDateAssert.useDefaultDateFormatsOnly();
-  }
-
-  
-  protected StrictAssertions() {
+  protected BDDAssertions() {
   }
 }
 
@@ -992,581 +346,581 @@ import org.assertj.core.util.introspection.FieldSupport;
 
 public class Assertions {
 
-  
+
   public static <T> OptionalAssert<T> assertThat(Optional<T> optional) {
     return new OptionalAssert<>(optional);
   }
 
-  
+
   public static OptionalDoubleAssert assertThat(OptionalDouble optionalDouble) {
     return new OptionalDoubleAssert(optionalDouble);
   }
 
-  
+
   public static OptionalIntAssert assertThat(OptionalInt optionalInt) {
     return new OptionalIntAssert(optionalInt);
   }
 
-  
+
   public static OptionalLongAssert assertThat(OptionalLong optionalLong) {
     return new OptionalLongAssert(optionalLong);
   }
 
-  
+
   public static AbstractBigDecimalAssert<?> assertThat(BigDecimal actual) {
     return new BigDecimalAssert(actual);
   }
 
-  
+
   public static AbstractUriAssert<?> assertThat(URI actual) {
     return new UriAssert(actual);
   }
 
-  
+
   public static AbstractUrlAssert<?> assertThat(URL actual) {
     return new UrlAssert(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> assertThat(boolean actual) {
     return new BooleanAssert(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> assertThat(Boolean actual) {
     return new BooleanAssert(actual);
   }
 
-  
+
   public static AbstractBooleanArrayAssert<?> assertThat(boolean[] actual) {
     return new BooleanArrayAssert(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> assertThat(byte actual) {
     return new ByteAssert(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> assertThat(Byte actual) {
     return new ByteAssert(actual);
   }
 
-  
+
   public static AbstractByteArrayAssert<?> assertThat(byte[] actual) {
     return new ByteArrayAssert(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> assertThat(char actual) {
     return new CharacterAssert(actual);
   }
 
-  
+
   public static AbstractCharArrayAssert<?> assertThat(char[] actual) {
     return new CharArrayAssert(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> assertThat(Character actual) {
     return new CharacterAssert(actual);
   }
 
-  
+
   public static AbstractClassAssert<?> assertThat(Class<?> actual) {
     return new ClassAssert(actual);
   }
 
-  
+
   public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> assertThat(T actual) {
     return new GenericComparableAssert<>(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterable<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterator<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> assertThat(double actual) {
     return new DoubleAssert(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> assertThat(Double actual) {
     return new DoubleAssert(actual);
   }
 
-  
+
   public static AbstractDoubleArrayAssert<?> assertThat(double[] actual) {
     return new DoubleArrayAssert(actual);
   }
 
-  
+
   public static AbstractFileAssert<?> assertThat(File actual) {
     return new FileAssert(actual);
   }
 
-  
+
   public static AbstractPathAssert<?> assertThat(Path actual) {
     return new PathAssert(actual);
   }
 
-  
+
   public static AbstractInputStreamAssert<?, ? extends InputStream> assertThat(InputStream actual) {
     return new InputStreamAssert(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> assertThat(float actual) {
     return new FloatAssert(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> assertThat(Float actual) {
     return new FloatAssert(actual);
   }
 
-  
+
   public static AbstractFloatArrayAssert<?> assertThat(float[] actual) {
     return new FloatArrayAssert(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> assertThat(int actual) {
     return new IntegerAssert(actual);
   }
 
-  
+
   public static AbstractIntArrayAssert<?> assertThat(int[] actual) {
     return new IntArrayAssert(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> assertThat(Integer actual) {
     return new IntegerAssert(actual);
   }
 
-  
+
   public static <T> AbstractListAssert<?, ? extends List<? extends T>, T> assertThat(List<? extends T> actual) {
     return new ListAssert<>(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> assertThat(long actual) {
     return new LongAssert(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> assertThat(Long actual) {
     return new LongAssert(actual);
   }
 
-  
+
   public static AbstractLongArrayAssert<?> assertThat(long[] actual) {
     return new LongArrayAssert(actual);
   }
 
-  
+
   public static <T> AbstractObjectAssert<?, T> assertThat(T actual) {
     return new ObjectAssert<>(actual);
   }
 
-  
+
   public static <T extends AssertDelegateTarget> T assertThat(T assertion) {
     return assertion;
   }
 
-  
+
   public static <T> T assertThat(final AssertProvider<T> component) {
     return component.assertThat();
   }
 
-  
+
   public static <T> AbstractObjectArrayAssert<?, T> assertThat(T[] actual) {
     return new ObjectArrayAssert<>(actual);
   }
 
-  
+
   public static <K, V> MapAssert<K, V> assertThat(Map<K, V> actual) {
     return new MapAssert<>(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> assertThat(short actual) {
     return new ShortAssert(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> assertThat(Short actual) {
     return new ShortAssert(actual);
   }
 
-  
+
   public static AbstractShortArrayAssert<?> assertThat(short[] actual) {
     return new ShortArrayAssert(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, ? extends CharSequence> assertThat(CharSequence actual) {
     return new CharSequenceAssert(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, String> assertThat(String actual) {
     return new StringAssert(actual);
   }
 
-  
+
   public static AbstractDateAssert<?> assertThat(Date actual) {
     return new DateAssert(actual);
   }
 
-  
+
   public static AbstractZonedDateTimeAssert<?> assertThat(ZonedDateTime date) {
     return new ZonedDateTimeAssert(date);
   }
 
-  
+
   public static AbstractLocalDateTimeAssert<?> assertThat(LocalDateTime localDateTime) {
     return new LocalDateTimeAssert(localDateTime);
   }
 
-  
+
   public static AbstractOffsetDateTimeAssert<?> assertThat(OffsetDateTime actual) {
     return new OffsetDateTimeAssert(actual);
   }
 
-  
+
   public static AbstractOffsetTimeAssert<?> assertThat(OffsetTime offsetTime) {
     return new OffsetTimeAssert(offsetTime);
   }
 
-  
+
   public static AbstractLocalTimeAssert<?> assertThat(LocalTime actual) {
     return new LocalTimeAssert(actual);
   }
 
-  
+
   public static AbstractLocalDateAssert<?> assertThat(LocalDate localDate) {
     return new LocalDateAssert(localDate);
   }
 
-  
+
   public static AbstractThrowableAssert<?, ? extends Throwable> assertThat(Throwable actual) {
     return new ThrowableAssert(actual);
   }
 
-  
+
   public static AbstractThrowableAssert<?, ? extends Throwable> assertThatThrownBy(ThrowingCallable shouldRaiseThrowable) {
     return new ThrowableAssert(catchThrowable(shouldRaiseThrowable)).hasBeenThrown();
   }
 
-  
+
   public static Throwable catchThrowable(ThrowingCallable shouldRaiseThrowable) {
     return ThrowableAssert.catchThrowable(shouldRaiseThrowable);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static void setRemoveAssertJRelatedElementsFromStackTrace(boolean removeAssertJRelatedElementsFromStackTrace) {
     Fail.setRemoveAssertJRelatedElementsFromStackTrace(removeAssertJRelatedElementsFromStackTrace);
   }
 
-  
+
   public static void fail(String failureMessage) {
     Fail.fail(failureMessage);
   }
 
-  
+
   public static void fail(String failureMessage, Throwable realCause) {
     Fail.fail(failureMessage, realCause);
   }
 
-  
+
   public static void failBecauseExceptionWasNotThrown(Class<? extends Throwable> exceptionClass) {
     Fail.shouldHaveThrown(exceptionClass);
   }
 
-  
+
   public static void shouldHaveThrown(Class<? extends Throwable> exceptionClass) {
     Fail.shouldHaveThrown(exceptionClass);
   }
 
-  
+
   public static void setMaxLengthForSingleLineDescription(int maxLengthForSingleLineDescription) {
     GroupFormatUtil.setMaxLengthForSingleLineDescription(maxLengthForSingleLineDescription);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static <T> Properties<T> extractProperty(String propertyName, Class<T> propertyType) {
     return Properties.extractProperty(propertyName, propertyType);
   }
 
-  
+
   public static Properties<Object> extractProperty(String propertyName) {
     return Properties.extractProperty(propertyName);
   }
 
-  
+
   public static Tuple tuple(Object... values) {
     return Tuple.tuple(values);
   }
 
-  
+
   public static void setAllowExtractingPrivateFields(boolean allowExtractingPrivateFields) {
     FieldSupport.extraction().setAllowUsingPrivateFields(allowExtractingPrivateFields);
   }
 
-  
+
   public static void setAllowComparingPrivateFields(boolean allowComparingPrivateFields) {
     FieldSupport.comparison().setAllowUsingPrivateFields(allowComparingPrivateFields);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static <K, V> MapEntry<K, V> entry(K key, V value) {
     return MapEntry.entry(key, value);
   }
 
-  
+
   public static Index atIndex(int index) {
     return Index.atIndex(index);
   }
 
-  
+
   public static Offset<Double> offset(Double value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Float> offset(Float value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Double> within(Double value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Float> within(Float value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<BigDecimal> within(BigDecimal value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Byte> within(Byte value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Integer> within(Integer value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Short> within(Short value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Offset<Long> within(Long value) {
     return Offset.offset(value);
   }
 
-  
+
   public static Percentage withinPercentage(Double value) {
     return withPercentage(value);
   }
 
-  
+
   public static Percentage withinPercentage(Integer value) {
     return withPercentage(value);
   }
 
-  
+
   public static Percentage withinPercentage(Long value) {
     return withPercentage(value);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   @SafeVarargs
   public static <T> Condition<T> allOf(Condition<? super T>... conditions) {
     return AllOf.allOf(conditions);
   }
 
-  
+
   public static <T> Condition<T> allOf(Iterable<? extends Condition<? super T>> conditions) {
     return AllOf.allOf(conditions);
   }
 
-  
+
   @SafeVarargs
   public static <T> Condition<T> anyOf(Condition<? super T>... conditions) {
     return AnyOf.anyOf(conditions);
   }
 
-  
+
   public static <T> Condition<T> anyOf(Iterable<? extends Condition<? super T>> conditions) {
     return AnyOf.anyOf(conditions);
   }
 
-  
+
   public static <T> DoesNotHave<T> doesNotHave(Condition<? super T> condition) {
     return DoesNotHave.doesNotHave(condition);
   }
 
-  
+
   public static <T> Not<T> not(Condition<? super T> condition) {
     return Not.not(condition);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static <E> Filters<E> filter(E[] array) {
     return Filters.filter(array);
   }
 
-  
+
   public static <E> Filters<E> filter(Iterable<E> iterableToFilter) {
     return Filters.filter(iterableToFilter);
   }
 
-  
+
   public static InFilter in(Object... values) {
     return InFilter.in(values);
   }
 
-  
+
   public static NotInFilter notIn(Object... valuesNotToMatch) {
     return NotInFilter.notIn(valuesNotToMatch);
   }
 
-  
+
   public static NotFilter not(Object valueNotToMatch) {
     return NotFilter.not(valueNotToMatch);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static String contentOf(File file, Charset charset) {
     return Files.contentOf(file, charset);
   }
 
-  
+
   public static String contentOf(File file, String charsetName) {
     return Files.contentOf(file, charsetName);
   }
 
-  
+
   public static String contentOf(File file) {
     return Files.contentOf(file, Charset.defaultCharset());
   }
 
-  
+
   public static List<String> linesOf(File file) {
     return Files.linesOf(file, Charset.defaultCharset());
   }
 
-  
+
   public static List<String> linesOf(File file, Charset charset) {
     return Files.linesOf(file, charset);
   }
 
-  
+
   public static List<String> linesOf(File file, String charsetName) {
     return Files.linesOf(file, charsetName);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static String contentOf(URL url, Charset charset) {
     return URLs.contentOf(url, charset);
   }
 
-  
+
   public static String contentOf(URL url, String charsetName) {
     return URLs.contentOf(url, charsetName);
   }
 
-  
+
   public static String contentOf(URL url) {
     return URLs.contentOf(url, Charset.defaultCharset());
   }
 
-  
+
   public static List<String> linesOf(URL url) {
     return URLs.linesOf(url, Charset.defaultCharset());
   }
 
-  
+
   public static List<String> linesOf(URL url, Charset charset) {
     return URLs.linesOf(url, charset);
   }
 
-  
+
   public static List<String> linesOf(URL url, String charsetName) {
     return URLs.linesOf(url, charsetName);
   }
 
-  
-  
-  
 
-  
+
+
+
+
   public static void setLenientDateParsing(boolean value) {
     AbstractDateAssert.setLenientDateParsing(value);
   }
 
-  
+
   public static void registerCustomDateFormat(DateFormat userCustomDateFormat) {
     AbstractDateAssert.registerCustomDateFormat(userCustomDateFormat);
   }
 
-  
+
   public static void registerCustomDateFormat(String userCustomDateFormatPattern) {
     AbstractDateAssert.registerCustomDateFormat(userCustomDateFormatPattern);
   }
 
-  
+
   public static void useDefaultDateFormatsOnly() {
     AbstractDateAssert.useDefaultDateFormatsOnly();
   }
 
-  
+
   protected Assertions() {}
 }
 
@@ -1599,267 +953,913 @@ import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 
 public class BDDAssertions extends Assertions {
 
-  
+
   public static <T> OptionalAssert<T> then(Optional<T> optional) {
-	return assertThat(optional);
+    return assertThat(optional);
   }
 
-  
+
   public static OptionalIntAssert then(OptionalInt optional) {
-      return assertThat(optional);
+    return assertThat(optional);
   }
 
-  
-   public static OptionalLongAssert then(OptionalLong optional) {
-      return assertThat(optional);
-   }
 
-  
+  public static OptionalLongAssert then(OptionalLong optional) {
+    return assertThat(optional);
+  }
+
+
   public static OptionalDoubleAssert then(OptionalDouble optional) {
-      return assertThat(optional);
+    return assertThat(optional);
   }
 
-  
+
   public static AbstractBigDecimalAssert<?> then(BigDecimal actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> then(boolean actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanAssert<?> then(Boolean actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractBooleanArrayAssert<?> then(boolean[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> then(byte actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractByteAssert<?> then(Byte actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractByteArrayAssert<?> then(byte[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> then(char actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractCharArrayAssert<?> then(char[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractCharacterAssert<?> then(Character actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractClassAssert<?> then(Class<?> actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> then(T actual) {
     return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> then(Iterable<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> then(Iterator<? extends T> actual) {
     return new IterableAssert<>(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> then(double actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractDoubleAssert<?> then(Double actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractDoubleArrayAssert<?> then(double[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractFileAssert<?> then(File actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractInputStreamAssert<?, ? extends InputStream> then(InputStream actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> then(float actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatAssert<?> then(Float actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractFloatArrayAssert<?> then(float[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> then(int actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractIntArrayAssert<?> then(int[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractIntegerAssert<?> then(Integer actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractListAssert<?, ? extends List<? extends T>, T> then(List<? extends T> actual) {
     return new ListAssert<>(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> then(long actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractLongAssert<?> then(Long actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractLongArrayAssert<?> then(long[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractObjectAssert<?, T> then(T actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static <T> AbstractObjectArrayAssert<?, T> then(T[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static <K, V> AbstractMapAssert<?, ? extends Map<K, V>, K, V> then(Map<K, V> actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> then(short actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractShortAssert<?> then(Short actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractShortArrayAssert<?> then(short[] actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, ? extends CharSequence> then(CharSequence actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractCharSequenceAssert<?, String> then(String actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractDateAssert<?> then(Date actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractThrowableAssert<?, ? extends Throwable> then(Throwable actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
-  
-  
+
+
   public static AbstractThrowableAssert<?, ? extends Throwable> thenThrownBy(ThrowingCallable shouldRaiseThrowable) {
     return assertThatThrownBy(shouldRaiseThrowable);
   }
 
-  
+
   public static AbstractLocalDateAssert<?> then(LocalDate actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractLocalDateTimeAssert<?> then(LocalDateTime actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractZonedDateTimeAssert<?> then(ZonedDateTime actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractLocalTimeAssert<?> then(LocalTime actual) {
-	return assertThat(actual);
+    return assertThat(actual);
   }
 
-  
+
   public static AbstractOffsetTimeAssert<?> then(OffsetTime actual) {
-        return assertThat(actual);
-    }
-    
-    
+    return assertThat(actual);
+  }
+
+
   public static AbstractUriAssert<?> then(URI actual) {
     return assertThat(actual);
   }
 
-  
+
   public static AbstractUrlAssert<?> then(URL actual) {
     return assertThat(actual);
   }
 
-  
+
   public static AbstractOffsetDateTimeAssert<?> then(OffsetDateTime actual) {
-        return assertThat(actual);
-    }
-  
-  
-  protected BDDAssertions() {
+    return assertThat(actual);
+  }
+
+
+  protected BDDAssertions() {}
+}
+
+<code block>
+
+package org.assertj.core.api;
+
+import java.nio.file.Path;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+
+public class Assertions extends StrictAssertions {
+
+
+  public static <T> T assertThat(final AssertProvider<T> component) {
+    return component.assertThat();
+  }
+
+
+  protected Assertions() {}
+
+
+  public static AbstractCharSequenceAssert<?, ? extends CharSequence> assertThat(CharSequence actual) {
+    return new CharSequenceAssert(actual);
+  }
+
+
+  public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterable<? extends T> actual) {
+    return new IterableAssert<>(actual);
+  }
+
+
+  public static <T> AbstractIterableAssert<?, ? extends Iterable<? extends T>, T> assertThat(Iterator<? extends T> actual) {
+    return new IterableAssert<>(actual);
+  }
+
+
+  public static <T> AbstractListAssert<?, ? extends List<? extends T>, T> assertThat(List<? extends T> actual) {
+    return new ListAssert<>(actual);
+  }
+
+
+  public static AbstractPathAssert<?> assertThat(Path actual) {
+    return new PathAssert(actual);
+  }
+
+
+  public static <K, V> MapAssert<K, V> assertThat(Map<K, V> actual) {
+    return new MapAssert<>(actual);
+  }
+
+
+  public static <T extends Comparable<? super T>> AbstractComparableAssert<?, T> assertThat(T actual) {
+    return new GenericComparableAssert<>(actual);
+  }
+
+
+  public static <T extends AssertDelegateTarget> T assertThat(T assertion) {
+    return assertion;
+  }
+}
+
+<code block>
+
+package org.assertj.core.api;
+
+import static org.assertj.core.data.Percentage.withPercentage;
+
+import java.io.File;
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.sql.Timestamp;
+import java.text.DateFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZonedDateTime;
+import java.util.Date;
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalDouble;
+import java.util.OptionalInt;
+import java.util.OptionalLong;
+
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+import org.assertj.core.api.exception.RuntimeIOException;
+import org.assertj.core.api.filter.FilterOperator;
+import org.assertj.core.api.filter.Filters;
+import org.assertj.core.api.filter.InFilter;
+import org.assertj.core.api.filter.NotFilter;
+import org.assertj.core.api.filter.NotInFilter;
+import org.assertj.core.condition.AllOf;
+import org.assertj.core.condition.AnyOf;
+import org.assertj.core.condition.DoesNotHave;
+import org.assertj.core.condition.Not;
+import org.assertj.core.data.Index;
+import org.assertj.core.data.MapEntry;
+import org.assertj.core.data.Offset;
+import org.assertj.core.data.Percentage;
+import org.assertj.core.groups.Properties;
+import org.assertj.core.groups.Tuple;
+import org.assertj.core.util.Files;
+import org.assertj.core.util.GroupFormatUtil;
+import org.assertj.core.util.URLs;
+import org.assertj.core.util.introspection.FieldSupport;
+
+
+public class StrictAssertions {
+
+
+  public static <T> OptionalAssert<T> assertThat(Optional<T> optional) {
+    return new OptionalAssert<>(optional);
+  }
+
+
+  public static OptionalDoubleAssert assertThat(OptionalDouble optionalDouble) {
+    return new OptionalDoubleAssert(optionalDouble);
+  }
+
+
+  public static OptionalIntAssert assertThat(OptionalInt optionalInt) {
+    return new OptionalIntAssert(optionalInt);
+  }
+
+
+  public static OptionalLongAssert assertThat(OptionalLong optionalLong) {
+    return new OptionalLongAssert(optionalLong);
+  }
+
+
+  public static AbstractBigDecimalAssert<?> assertThat(BigDecimal actual) {
+    return new BigDecimalAssert(actual);
+  }
+
+
+  public static AbstractUriAssert<?> assertThat(URI actual) {
+    return new UriAssert(actual);
+  }
+
+
+  public static AbstractUrlAssert<?> assertThat(URL actual) {
+    return new UrlAssert(actual);
+  }
+
+
+  public static AbstractBooleanAssert<?> assertThat(boolean actual) {
+    return new BooleanAssert(actual);
+  }
+
+
+  public static AbstractBooleanAssert<?> assertThat(Boolean actual) {
+    return new BooleanAssert(actual);
+  }
+
+
+  public static AbstractBooleanArrayAssert<?> assertThat(boolean[] actual) {
+    return new BooleanArrayAssert(actual);
+  }
+
+
+  public static AbstractByteAssert<?> assertThat(byte actual) {
+    return new ByteAssert(actual);
+  }
+
+
+  public static AbstractByteAssert<?> assertThat(Byte actual) {
+    return new ByteAssert(actual);
+  }
+
+
+  public static AbstractByteArrayAssert<?> assertThat(byte[] actual) {
+    return new ByteArrayAssert(actual);
+  }
+
+
+  public static AbstractCharacterAssert<?> assertThat(char actual) {
+    return new CharacterAssert(actual);
+  }
+
+
+  public static AbstractCharArrayAssert<?> assertThat(char[] actual) {
+    return new CharArrayAssert(actual);
+  }
+
+
+  public static AbstractCharacterAssert<?> assertThat(Character actual) {
+    return new CharacterAssert(actual);
+  }
+
+
+  public static AbstractClassAssert<?> assertThat(Class<?> actual) {
+    return new ClassAssert(actual);
+  }
+
+
+  public static AbstractDoubleAssert<?> assertThat(double actual) {
+    return new DoubleAssert(actual);
+  }
+
+
+  public static AbstractDoubleAssert<?> assertThat(Double actual) {
+    return new DoubleAssert(actual);
+  }
+
+
+  public static AbstractDoubleArrayAssert<?> assertThat(double[] actual) {
+    return new DoubleArrayAssert(actual);
+  }
+
+
+  public static AbstractFileAssert<?> assertThat(File actual) {
+    return new FileAssert(actual);
+  }
+
+
+  public static AbstractInputStreamAssert<?, ? extends InputStream> assertThat(InputStream actual) {
+    return new InputStreamAssert(actual);
+  }
+
+
+  public static AbstractFloatAssert<?> assertThat(float actual) {
+    return new FloatAssert(actual);
+  }
+
+
+  public static AbstractFloatAssert<?> assertThat(Float actual) {
+    return new FloatAssert(actual);
+  }
+
+
+  public static AbstractFloatArrayAssert<?> assertThat(float[] actual) {
+    return new FloatArrayAssert(actual);
+  }
+
+
+  public static AbstractIntegerAssert<?> assertThat(int actual) {
+    return new IntegerAssert(actual);
+  }
+
+
+  public static AbstractIntArrayAssert<?> assertThat(int[] actual) {
+    return new IntArrayAssert(actual);
+  }
+
+
+  public static AbstractIntegerAssert<?> assertThat(Integer actual) {
+    return new IntegerAssert(actual);
+  }
+
+
+  public static AbstractLongAssert<?> assertThat(long actual) {
+    return new LongAssert(actual);
+  }
+
+
+  public static AbstractLongAssert<?> assertThat(Long actual) {
+    return new LongAssert(actual);
+  }
+
+
+  public static AbstractLongArrayAssert<?> assertThat(long[] actual) {
+    return new LongArrayAssert(actual);
+  }
+
+
+  public static <T> AbstractObjectAssert<?, T> assertThat(T actual) {
+    return new ObjectAssert<>(actual);
+  }
+
+
+  public static <T> AbstractObjectArrayAssert<?, T> assertThat(T[] actual) {
+    return new ObjectArrayAssert<>(actual);
+  }
+
+
+  public static AbstractShortAssert<?> assertThat(short actual) {
+    return new ShortAssert(actual);
+  }
+
+
+  public static AbstractShortAssert<?> assertThat(Short actual) {
+    return new ShortAssert(actual);
+  }
+
+
+  public static AbstractShortArrayAssert<?> assertThat(short[] actual) {
+    return new ShortArrayAssert(actual);
+  }
+
+
+  public static AbstractCharSequenceAssert<?, String> assertThat(String actual) {
+    return new StringAssert(actual);
+  }
+
+
+  public static AbstractDateAssert<?> assertThat(Date actual) {
+    return new DateAssert(actual);
+  }
+
+
+  public static AbstractZonedDateTimeAssert<?> assertThat(ZonedDateTime date) {
+    return new ZonedDateTimeAssert(date);
+  }
+
+
+  public static AbstractLocalDateTimeAssert<?> assertThat(LocalDateTime localDateTime) {
+    return new LocalDateTimeAssert(localDateTime);
+  }
+
+
+  public static AbstractOffsetDateTimeAssert<?> assertThat(OffsetDateTime actual) {
+    return new OffsetDateTimeAssert(actual);
+  }
+
+
+  public static AbstractOffsetTimeAssert<?> assertThat(OffsetTime offsetTime) {
+    return new OffsetTimeAssert(offsetTime);
+  }
+
+
+  public static AbstractLocalTimeAssert<?> assertThat(LocalTime actual) {
+    return new LocalTimeAssert(actual);
+  }
+
+
+  public static AbstractLocalDateAssert<?> assertThat(LocalDate localDate) {
+    return new LocalDateAssert(localDate);
+  }
+
+
+  public static AbstractThrowableAssert<?, ? extends Throwable> assertThat(Throwable actual) {
+    return new ThrowableAssert(actual);
+  }
+
+
+  public static AbstractThrowableAssert<?, ? extends Throwable> assertThatThrownBy(ThrowingCallable shouldRaiseThrowable) {
+    return new ThrowableAssert(catchThrowable(shouldRaiseThrowable)).hasBeenThrown();
+  }
+
+
+  public static Throwable catchThrowable(ThrowingCallable shouldRaiseThrowable) {
+    return ThrowableAssert.catchThrowable(shouldRaiseThrowable);
+  }
+
+
+
+
+
+
+  public static void setRemoveAssertJRelatedElementsFromStackTrace(boolean removeAssertJRelatedElementsFromStackTrace) {
+    Fail.setRemoveAssertJRelatedElementsFromStackTrace(removeAssertJRelatedElementsFromStackTrace);
+  }
+
+
+  public static void fail(String failureMessage) {
+    Fail.fail(failureMessage);
+  }
+
+
+  public static void fail(String failureMessage, Throwable realCause) {
+    Fail.fail(failureMessage, realCause);
+  }
+
+
+  public static void failBecauseExceptionWasNotThrown(Class<? extends Throwable> exceptionClass) {
+    Fail.shouldHaveThrown(exceptionClass);
+  }
+
+
+  public static void shouldHaveThrown(Class<? extends Throwable> exceptionClass) {
+    Fail.shouldHaveThrown(exceptionClass);
+  }
+
+
+  public static void setMaxLengthForSingleLineDescription(int maxLengthForSingleLineDescription) {
+    GroupFormatUtil.setMaxLengthForSingleLineDescription(maxLengthForSingleLineDescription);
+  }
+
+
+
+
+
+
+  public static <T> Properties<T> extractProperty(String propertyName, Class<T> propertyType) {
+    return Properties.extractProperty(propertyName, propertyType);
+  }
+
+
+  public static Properties<Object> extractProperty(String propertyName) {
+    return Properties.extractProperty(propertyName);
+  }
+
+
+  public static Tuple tuple(Object... values) {
+    return Tuple.tuple(values);
+  }
+
+
+  public static void setAllowExtractingPrivateFields(boolean allowExtractingPrivateFields) {
+    FieldSupport.extraction().setAllowUsingPrivateFields(allowExtractingPrivateFields);
+  }
+
+
+  public static void setAllowComparingPrivateFields(boolean allowComparingPrivateFields) {
+    FieldSupport.comparison().setAllowUsingPrivateFields(allowComparingPrivateFields);
+  }
+
+
+
+
+
+
+  public static <K, V> MapEntry<K, V> entry(K key, V value) {
+    return MapEntry.entry(key, value);
+  }
+
+
+  public static Index atIndex(int index) {
+    return Index.atIndex(index);
+  }
+
+
+  public static Offset<Double> offset(Double value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Float> offset(Float value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Double> within(Double value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Float> within(Float value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<BigDecimal> within(BigDecimal value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Byte> within(Byte value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Integer> within(Integer value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Short> within(Short value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Offset<Long> within(Long value) {
+    return Offset.offset(value);
+  }
+
+
+  public static Percentage withinPercentage(Double value) {
+    return withPercentage(value);
+  }
+
+
+  public static Percentage withinPercentage(Integer value) {
+    return withPercentage(value);
+  }
+
+
+  public static Percentage withinPercentage(Long value) {
+    return withPercentage(value);
+  }
+
+
+
+
+
+
+  @SafeVarargs
+  public static <T> Condition<T> allOf(Condition<? super T>... conditions) {
+    return AllOf.allOf(conditions);
+  }
+
+
+  public static <T> Condition<T> allOf(Iterable<? extends Condition<? super T>> conditions) {
+    return AllOf.allOf(conditions);
+  }
+
+
+  @SafeVarargs
+  public static <T> Condition<T> anyOf(Condition<? super T>... conditions) {
+    return AnyOf.anyOf(conditions);
+  }
+
+
+  public static <T> Condition<T> anyOf(Iterable<? extends Condition<? super T>> conditions) {
+    return AnyOf.anyOf(conditions);
+  }
+
+
+  public static <T> DoesNotHave<T> doesNotHave(Condition<? super T> condition) {
+    return DoesNotHave.doesNotHave(condition);
+  }
+
+
+  public static <T> Not<T> not(Condition<? super T> condition) {
+    return Not.not(condition);
+  }
+
+
+
+
+
+
+  public static <E> Filters<E> filter(E[] array) {
+    return Filters.filter(array);
+  }
+
+
+  public static <E> Filters<E> filter(Iterable<E> iterableToFilter) {
+    return Filters.filter(iterableToFilter);
+  }
+
+
+  public static InFilter in(Object... values) {
+    return InFilter.in(values);
+  }
+
+
+  public static NotInFilter notIn(Object... valuesNotToMatch) {
+    return NotInFilter.notIn(valuesNotToMatch);
+  }
+
+
+  public static NotFilter not(Object valueNotToMatch) {
+    return NotFilter.not(valueNotToMatch);
+  }
+
+
+
+
+
+
+  public static String contentOf(File file, Charset charset) {
+    return Files.contentOf(file, charset);
+  }
+
+
+  public static String contentOf(File file, String charsetName) {
+    return Files.contentOf(file, charsetName);
+  }
+
+
+  public static String contentOf(File file) {
+    return Files.contentOf(file, Charset.defaultCharset());
+  }
+
+
+  public static List<String> linesOf(File file) {
+    return Files.linesOf(file, Charset.defaultCharset());
+  }
+
+
+  public static List<String> linesOf(File file, Charset charset) {
+    return Files.linesOf(file, charset);
+  }
+
+
+  public static List<String> linesOf(File file, String charsetName) {
+    return Files.linesOf(file, charsetName);
+  }
+
+
+
+
+
+
+  public static String contentOf(URL url, Charset charset) {
+    return URLs.contentOf(url, charset);
+  }
+
+
+  public static String contentOf(URL url, String charsetName) {
+    return URLs.contentOf(url, charsetName);
+  }
+
+
+  public static String contentOf(URL url) {
+    return URLs.contentOf(url, Charset.defaultCharset());
+  }
+
+
+  public static List<String> linesOf(URL url) {
+    return URLs.linesOf(url, Charset.defaultCharset());
+  }
+
+
+  public static List<String> linesOf(URL url, Charset charset) {
+    return URLs.linesOf(url, charset);
+  }
+
+
+  public static List<String> linesOf(URL url, String charsetName) {
+    return URLs.linesOf(url, charsetName);
+  }
+
+
+
+
+
+
+  public static void setLenientDateParsing(boolean value) {
+    AbstractDateAssert.setLenientDateParsing(value);
+  }
+
+
+  public static void registerCustomDateFormat(DateFormat userCustomDateFormat) {
+    AbstractDateAssert.registerCustomDateFormat(userCustomDateFormat);
+  }
+
+
+  public static void registerCustomDateFormat(String userCustomDateFormatPattern) {
+    AbstractDateAssert.registerCustomDateFormat(userCustomDateFormatPattern);
+  }
+
+
+  public static void useDefaultDateFormatsOnly() {
+    AbstractDateAssert.useDefaultDateFormatsOnly();
+  }
+
+
+  protected StrictAssertions() {
   }
 }

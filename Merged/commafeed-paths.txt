@@ -1,2 +1,2 @@
-Java_Projects/commafeed/commafeed-18a7bd1f/curr/src/main/java/com/commafeed/backend/favicon/DefaultFaviconFetcher.java
 Java_Projects/commafeed/commafeed-18a7bd1f/prev/src/main/java/com/commafeed/backend/favicon/DefaultFaviconFetcher.java
+Java_Projects/commafeed/commafeed-18a7bd1f/curr/src/main/java/com/commafeed/backend/favicon/DefaultFaviconFetcher.java

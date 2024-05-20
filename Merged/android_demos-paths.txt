@@ -1,6 +1,6 @@
-Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/EncryptionActivity.java
-Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/Base64DecoderException.java
-Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/Base64.java
-Java_Projects/android_demos/android_demos-5cdabae3/prev/encryption/src/main/java/com/novoda/Base64DecoderException.java
-Java_Projects/android_demos/android_demos-5cdabae3/prev/encryption/src/main/java/com/novoda/Base64.java
 Java_Projects/android_demos/android_demos-5cdabae3/prev/encryption/src/main/java/com/novoda/Encrypt.java
+Java_Projects/android_demos/android_demos-5cdabae3/prev/encryption/src/main/java/com/novoda/Base64.java
+Java_Projects/android_demos/android_demos-5cdabae3/prev/encryption/src/main/java/com/novoda/Base64DecoderException.java
+Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/EncryptionActivity.java
+Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/Base64.java
+Java_Projects/android_demos/android_demos-5cdabae3/curr/encryption/src/main/java/com/novoda/demo/encryption/Base64DecoderException.java

@@ -1,24 +1,218 @@
 
 
-package tachyon.worker.block.meta;
+package tachyon.worker.block.allocator;
 
-import tachyon.util.CommonUtils;
+import java.io.IOException;
+
+import com.google.common.base.Preconditions;
+
+import tachyon.worker.block.BlockStoreLocation;
+import tachyon.worker.block.BlockMetadataManager;
+import tachyon.worker.block.meta.StorageDir;
+import tachyon.worker.block.meta.StorageTier;
+import tachyon.worker.block.meta.TempBlockMeta;
 
 
-public class BlockMeta extends BlockMetaBase {
+public class MaxFreeAllocator implements Allocator {
+  private final BlockMetadataManager mMetaManager;
 
-  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
-    super(blockId, blockSize, dir);
-  }
-
-  public BlockMeta(TempBlockMeta tempBlock) {
-    super(tempBlock.getBlockId(), tempBlock.getBlockSize(), tempBlock.getParentDir();
+  public MaxFreeAllocator(BlockMetadataManager metadata) {
+    mMetaManager = Preconditions.checkNotNull(metadata);
   }
 
   @Override
-  public String getPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
+  public TempBlockMeta allocateBlock(long userId, long blockId, long blockSize,
+      BlockStoreLocation location) throws IOException {
+
+    StorageDir candidateDir = null;
+    long maxFreeBytes = blockSize;
+
+    if (location.equals(BlockStoreLocation.anyTier())) {
+      for (StorageTier tier : mMetaManager.getTiers()) {
+        for (StorageDir dir : tier.getStorageDirs()) {
+          if (dir.getAvailableBytes() >= maxFreeBytes) {
+            maxFreeBytes = dir.getAvailableBytes();
+            candidateDir = dir;
+          }
+        }
+      }
+    } else if (location.equals(BlockStoreLocation.anyDirInTier(location.tierAlias()))) {
+      StorageTier tier = mMetaManager.getTier(location.tierAlias());
+      for (StorageDir dir : tier.getStorageDirs()) {
+        if (dir.getAvailableBytes() >= maxFreeBytes) {
+          maxFreeBytes = dir.getAvailableBytes();
+          candidateDir = dir;
+        }
+      }
+    } else {
+      StorageTier tier = mMetaManager.getTier(location.tierAlias());
+      StorageDir dir = tier.getDir(location.dir());
+      if (dir.getAvailableBytes() >= blockSize) {
+        candidateDir = dir;
+      }
+    }
+
+    return candidateDir != null ? new TempBlockMeta(userId, blockId, blockSize, candidateDir)
+        : null;
   }
+}
+
+<code block>
+
+
+package tachyon.worker.block.allocator;
+
+import java.io.IOException;
+
+import com.google.common.base.Preconditions;
+
+import tachyon.worker.block.BlockStoreLocation;
+import tachyon.worker.block.BlockMetadataManager;
+import tachyon.worker.block.meta.StorageDir;
+import tachyon.worker.block.meta.StorageTier;
+import tachyon.worker.block.meta.TempBlockMeta;
+
+
+public class MaxFreeAllocator implements Allocator {
+  private final BlockMetadataManager mMetaManager;
+
+  public MaxFreeAllocator(BlockMetadataManager metadata) {
+    mMetaManager = Preconditions.checkNotNull(metadata);
+  }
+
+  @Override
+  public TempBlockMeta allocateBlock(long userId, long blockId, long blockSize,
+      BlockStoreLocation location) throws IOException {
+    StorageDir candidateDir = null;
+
+    if (location.equals(BlockStoreLocation.anyTier())) {
+      for (StorageTier tier : mMetaManager.getTiers()) {
+        candidateDir = getCandidateDirInTier(tier, blockSize);
+        if (candidateDir != null) {
+          return new TempBlockMeta(userId, blockId, blockSize, candidateDir);
+        }
+      }
+    } else if (location.equals(BlockStoreLocation.anyDirInTier(location.tierAlias()))) {
+      StorageTier tier = mMetaManager.getTier(location.tierAlias());
+      candidateDir = getCandidateDirInTier(tier, blockSize);
+    } else {
+      StorageTier tier = mMetaManager.getTier(location.tierAlias());
+      StorageDir dir = tier.getDir(location.dir());
+      if (dir.getAvailableBytes() >= blockSize) {
+        candidateDir = dir;
+      }
+    }
+
+    return candidateDir != null ? new TempBlockMeta(userId, blockId, blockSize, candidateDir)
+        : null;
+  }
+
+
+  private StorageDir getCandidateDirInTier(StorageTier tier, long blockSize) {
+    StorageDir candidateDir = null;
+    long maxFreeBytes = blockSize - 1;
+    for (StorageDir dir : tier.getStorageDirs()) {
+      if (dir.getAvailableBytes() > maxFreeBytes) {
+        maxFreeBytes = dir.getAvailableBytes();
+        candidateDir = dir;
+      }
+    }
+    return candidateDir;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+
+import com.google.common.base.Optional;
+
+import tachyon.Constants;
+import tachyon.conf.TachyonConf;
+import tachyon.util.CommonUtils;
+
+
+public class StorageTier {
+  private HashMap<Integer, StorageDir> mIdToStorageDirMap;
+  private final int mTierId;
+
+  public StorageTier(TachyonConf tachyonConf, int tier) {
+    mTierId = tier;
+    String tierDirPathConf =
+        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_PATH_FORMAT, tier);
+    String[] dirPaths = tachyonConf.get(tierDirPathConf, "/mnt/ramdisk").split(",");
+
+    String tierDirCapacityConf =
+        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_QUOTA_FORMAT, tier);
+    String[] dirQuotas = tachyonConf.get(tierDirCapacityConf, "0").split(",");
+
+    mIdToStorageDirMap = new HashMap<Integer, StorageDir>(dirPaths.length);
+
+    for (int i = 0; i < dirPaths.length; i ++) {
+      int index = i >= dirQuotas.length ? dirQuotas.length - 1 : i;
+      long capacity = CommonUtils.parseSpaceSize(dirQuotas[index]);
+      mIdToStorageDirMap.put(i, new StorageDir(i, capacity, dirPaths[i]));
+    }
+  }
+
+  public int getTierId() {
+    return mTierId;
+  }
+
+  public long getCapacityBytes() {
+    long capacityBytes = 0;
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      capacityBytes += dir.getCapacityBytes();
+    }
+    return capacityBytes;
+  }
+
+  public long getAvailableBytes() {
+    long availableBytes = 0;
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      availableBytes += dir.getAvailableBytes();
+    }
+    return availableBytes;
+  }
+
+  public Set<StorageDir> getStorageDirs() {
+    return new HashSet<StorageDir>(mIdToStorageDirMap.values());
+  }
+
+  public Optional<BlockMeta> getBlockMeta(long blockId) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      Optional<BlockMeta> optionalBlock = dir.getBlockMeta(blockId);
+      if (optionalBlock.isPresent()) {
+        return optionalBlock;
+      }
+    }
+    return Optional.absent();
+  }
+
+  public Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      Optional<BlockMeta> optionalBlock = dir.addBlockMeta(userId, blockId, blockSize);
+      if (optionalBlock.isPresent()) {
+        return optionalBlock;
+      }
+    }
+    return Optional.absent();
+  }
+
+  public boolean removeBlockMeta(long blockId) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      if (dir.hasBlockMeta(blockId)) {
+        return dir.removeBlockMeta(blockId);
+      }
+    }
+    return false;
+  }
+
 }
 
 <code block>
@@ -42,8 +236,160 @@ public class TempBlockMeta extends BlockMetaBase {
     return CommonUtils.concatPath(mDir.getDirPath(), mUserId, mBlockId);
   }
 
+  public String getCommitPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
+  }
+
   public void setBlockSize(long newSize) {
     mBlockSize = newSize;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
+
+import tachyon.Constants;
+
+
+public class StorageDir {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+  private Map<Long, BlockMeta> mBlockIdToBlockMap;
+  private Map<Long, Set<Long>> mUserIdToBlocksMap;
+  private long mCapacityBytes;
+  private long mAvailableBytes;
+  private String mDirPath;
+  private int mDirId;
+  private StorageTier mTier;
+
+  public StorageDir(StorageTier tier, int dirId, long capacityBytes, String dirPath) {
+    mTier = Preconditions.checkNotNull(tier);
+    mDirId = dirId;
+    mCapacityBytes = capacityBytes;
+    mAvailableBytes = capacityBytes;
+    mDirPath = dirPath;
+    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
+    mUserIdToBlocksMap = new HashMap<Long, Set<Long>>(20);
+  }
+
+  public long getCapacityBytes() {
+    return mCapacityBytes;
+  }
+
+  public long getAvailableBytes() {
+    return mAvailableBytes;
+  }
+
+  public String getDirPath() {
+    return mDirPath;
+  }
+
+  public StorageTier getParentTier() {
+    return mTier;
+  }
+
+  public int getDirId() {
+    return mDirId;
+  }
+
+
+  boolean hasBlockMeta(long blockId) {
+    return mBlockIdToBlockMap.containsKey(blockId)
+  }
+
+
+  Optional<BlockMeta> getBlockMeta(long blockId) {
+    if (!hasBlockMeta(blockId)) {
+      return Optional.absent();
+    }
+    return Optional.of(mBlockIdToBlockMap.get(blockId));
+  }
+
+
+  Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
+    if (getAvailableBytes() < blockSize) {
+      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
+          blockId, toString(), blockSize, getAvailableBytes());
+      return Optional.absent();
+    }
+    if (hasBlockMeta(blockId)) {
+      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
+      return Optional.absent();
+    }
+    Set<Long> userBlocks = mUserIdToBlocksMap.get(userId);
+    if (null == userBlocks) {
+      mUserIdToBlocksMap.put(userId, Sets.newHashSet(blockId));
+    } else {
+      userBlocks.add(blockId);
+    }
+    BlockMeta block = new BlockMeta(blockId, blockSize, getDirPath());
+    mBlockIdToBlockMap.put(userId, block);
+    mCapacityBytes += blockSize;
+    mAvailableBytes -= blockSize;
+    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
+    return Optional.of(block);
+  }
+
+
+  boolean removeBlockMeta(long blockId) {
+    if (!hasBlockMeta(blockId)) {
+      return false;
+    }
+    BlockMeta block = mBlockIdToBlockMap.remove(blockId);
+    Preconditions.checkNotNull(block);
+    for (Map.Entry<Long, Set<Long>> entry : mUserIdToBlocksMap.entrySet()) {
+      Long userId = entry.getKey();
+      Set<Long> userBlocks = entry.getValue();
+      if (userBlocks.contains(blockId)) {
+        Preconditions.checkState(userBlocks.remove(blockId));
+        if (userBlocks.isEmpty()) {
+          mUserIdToBlocksMap.remove(userId);
+        }
+        mCapacityBytes -= block.getBlockSize();
+        mAvailableBytes += block.getBlockSize();
+        Preconditions.checkState(mCapacityBytes >= 0, "Capacity bytes should always be "
+            + "non-negative");
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import tachyon.util.CommonUtils;
+
+
+public class BlockMeta extends BlockMetaBase {
+
+  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
+    super(blockId, blockSize, dir);
+  }
+
+  public BlockMeta(TempBlockMeta tempBlock) {
+    super(tempBlock.getBlockId(), tempBlock.getBlockSize(), tempBlock.getParentDir();
+  }
+
+  @Override
+  public String getPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
   }
 }
 
@@ -75,7 +421,7 @@ public abstract class BlockMetaBase {
     return mBlockSize;
   }
 
-  
+
   public BlockStoreLocation getBlockLocation() {
     StorageTier tier = mDir.getParentTier();
     return new BlockStoreLocation(tier.getTierId(), mDir.getDirId());
@@ -86,6 +432,341 @@ public abstract class BlockMetaBase {
   }
 
   public abstract String getPath();
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+
+import com.google.common.base.Optional;
+
+import tachyon.Constants;
+import tachyon.conf.TachyonConf;
+import tachyon.util.CommonUtils;
+
+
+public class StorageTier {
+  private HashMap<Integer, StorageDir> mIdToStorageDirMap;
+  private final int mTierId;
+
+  public StorageTier(TachyonConf tachyonConf, int tier) {
+    mTierId = tier;
+    String tierDirPathConf =
+        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_PATH_FORMAT, tier);
+    String[] dirPaths = tachyonConf.get(tierDirPathConf, "/mnt/ramdisk").split(",");
+
+    String tierDirCapacityConf =
+        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_QUOTA_FORMAT, tier);
+    String[] dirQuotas = tachyonConf.get(tierDirCapacityConf, "0").split(",");
+
+    mIdToStorageDirMap = new HashMap<Integer, StorageDir>(dirPaths.length);
+
+    for (int i = 0; i < dirPaths.length; i ++) {
+      int index = i >= dirQuotas.length ? dirQuotas.length - 1 : i;
+      long capacity = CommonUtils.parseSpaceSize(dirQuotas[index]);
+      mIdToStorageDirMap.put(i, new StorageDir(i, capacity, dirPaths[i]));
+    }
+  }
+
+  public int getTierId() {
+    return mTierId;
+  }
+
+  public long getCapacityBytes() {
+    long capacityBytes = 0;
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      capacityBytes += dir.getCapacityBytes();
+    }
+    return capacityBytes;
+  }
+
+  public long getAvailableBytes() {
+    long availableBytes = 0;
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      availableBytes += dir.getAvailableBytes();
+    }
+    return availableBytes;
+  }
+
+  public Set<StorageDir> getStorageDirs() {
+    return new HashSet<StorageDir>(mIdToStorageDirMap.values());
+  }
+
+  public Optional<BlockMeta> getBlockMeta(long blockId) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      Optional<BlockMeta> optionalBlock = dir.getBlockMeta(blockId);
+      if (optionalBlock.isPresent()) {
+        return optionalBlock;
+      }
+    }
+    return Optional.absent();
+  }
+
+  public Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      Optional<BlockMeta> optionalBlock = dir.addBlockMeta(userId, blockId, blockSize);
+      if (optionalBlock.isPresent()) {
+        return optionalBlock;
+      }
+    }
+    return Optional.absent();
+  }
+
+  public boolean removeBlockMeta(long blockId) {
+    for (StorageDir dir : mIdToStorageDirMap.values()) {
+      if (dir.hasBlockMeta(blockId)) {
+        return dir.removeBlockMeta(blockId);
+      }
+    }
+    return false;
+  }
+
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import tachyon.util.CommonUtils;
+
+
+public class TempBlockMeta extends BlockMetaBase {
+  private final long mUserId;
+  private long mTempBlockSize;
+
+  public TempBlockMeta(long userId, long blockId, long initialBlockSize, StorageDir dir) {
+    super(blockId, dir);
+    mUserId = userId;
+    mTempBlockSize = initialBlockSize;
+  }
+
+  @Override
+  public long getBlockSize() {
+    return mTempBlockSize;
+  }
+
+  @Override
+  public String getPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mUserId, mBlockId);
+  }
+
+  public String getCommitPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
+  }
+
+  public long getUserId() {
+    return mUserId;
+  }
+
+  public void setBlockSize(long newSize) {
+    mTempBlockSize = newSize;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
+
+import tachyon.Constants;
+
+
+public class StorageDir {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+  private Map<Long, BlockMeta> mBlockIdToBlockMap;
+  private Map<Long, Set<Long>> mUserIdToBlocksMap;
+  private long mCapacityBytes;
+  private long mAvailableBytes;
+  private String mDirPath;
+  private int mDirId;
+  private StorageTier mTier;
+
+  public StorageDir(StorageTier tier, int dirId, long capacityBytes, String dirPath) {
+    mTier = Preconditions.checkNotNull(tier);
+    mDirId = dirId;
+    mCapacityBytes = capacityBytes;
+    mAvailableBytes = capacityBytes;
+    mDirPath = dirPath;
+    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
+    mUserIdToBlocksMap = new HashMap<Long, Set<Long>>(20);
+  }
+
+  public long getCapacityBytes() {
+    return mCapacityBytes;
+  }
+
+  public long getAvailableBytes() {
+    return mAvailableBytes;
+  }
+
+  public String getDirPath() {
+    return mDirPath;
+  }
+
+  public StorageTier getParentTier() {
+    return mTier;
+  }
+
+  public int getDirId() {
+    return mDirId;
+  }
+
+
+  boolean hasBlockMeta(long blockId) {
+    return mBlockIdToBlockMap.containsKey(blockId)
+  }
+
+
+  Optional<BlockMeta> getBlockMeta(long blockId) {
+    if (!hasBlockMeta(blockId)) {
+      return Optional.absent();
+    }
+    return Optional.of(mBlockIdToBlockMap.get(blockId));
+  }
+
+
+  Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
+    if (getAvailableBytes() < blockSize) {
+      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
+          blockId, toString(), blockSize, getAvailableBytes());
+      return Optional.absent();
+    }
+    if (hasBlockMeta(blockId)) {
+      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
+      return Optional.absent();
+    }
+    Set<Long> userBlocks = mUserIdToBlocksMap.get(userId);
+    if (null == userBlocks) {
+      mUserIdToBlocksMap.put(userId, Sets.newHashSet(blockId));
+    } else {
+      userBlocks.add(blockId);
+    }
+    BlockMeta block = new BlockMeta(blockId, blockSize, getDirPath());
+    mBlockIdToBlockMap.put(userId, block);
+    mCapacityBytes += blockSize;
+    mAvailableBytes -= blockSize;
+    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
+    return Optional.of(block);
+  }
+
+
+  boolean removeBlockMeta(long blockId) {
+    if (!hasBlockMeta(blockId)) {
+      return false;
+    }
+    BlockMeta block = mBlockIdToBlockMap.remove(blockId);
+    Preconditions.checkNotNull(block);
+    for (Map.Entry<Long, Set<Long>> entry : mUserIdToBlocksMap.entrySet()) {
+      Long userId = entry.getKey();
+      Set<Long> userBlocks = entry.getValue();
+      if (userBlocks.contains(blockId)) {
+        Preconditions.checkState(userBlocks.remove(blockId));
+        if (userBlocks.isEmpty()) {
+          mUserIdToBlocksMap.remove(userId);
+        }
+        mCapacityBytes -= block.getBlockSize();
+        mAvailableBytes += block.getBlockSize();
+        Preconditions.checkState(mCapacityBytes >= 0, "Capacity bytes should always be "
+            + "non-negative");
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import tachyon.util.CommonUtils;
+
+
+public class BlockMeta extends BlockMetaBase {
+  private final long mBlockSize;
+
+  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
+    super(blockId, dir);
+    mBlockSize = blockSize;
+  }
+
+  public BlockMeta(TempBlockMeta tempBlock) {
+    super(tempBlock.getBlockId(), tempBlock.getParentDir();
+    mBlockSize = tempBlock.getBlockSize();
+  }
+
+  @Override
+  public long getBlockSize() {
+    return mBlockSize;
+  }
+
+  @Override
+  public String getPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import com.google.common.base.Preconditions;
+import tachyon.worker.BlockStoreLocation;
+
+
+public abstract class BlockMetaBase {
+  protected final long mBlockId;
+  protected final StorageDir mDir;
+
+  public BlockMetaBase(long blockId, StorageDir dir) {
+    mBlockId = blockId;
+    mDir = Preconditions.checkNotNull(dir);
+  }
+
+  public long getBlockId() {
+    return mBlockId;
+  }
+
+
+  public BlockStoreLocation getBlockLocation() {
+    StorageTier tier = mDir.getParentTier();
+    return new BlockStoreLocation(tier.getTierId(), mDir.getDirId());
+  }
+
+  public StorageDir getParentDir() {
+    return mDir;
+  }
+
+  public abstract String getPath();
+
+  public abstract long getBlockSize();
+}
+
+<code block>
+package tachyon.worker.block.meta;
+
+
+public class TempBlockMeta {
 }
 
 <code block>
@@ -144,10 +825,606 @@ public class BlockMeta {
 }
 
 <code block>
+
+
 package tachyon.worker.block.meta;
 
+import tachyon.util.CommonUtils;
 
-public class TempBlockMeta {
+
+public class TempBlockMeta extends BlockMetaBase {
+  private final long mUserId;
+
+  public TempBlockMeta(long userId, long blockId, long blockSize, StorageDir dir) {
+    super(blockId, blockSize, dir);
+    mUserId = userId;
+  }
+
+  @Override
+  public String getPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mUserId, mBlockId);
+  }
+
+  public void setBlockSize(long newSize) {
+    mBlockSize = newSize;
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import tachyon.util.CommonUtils;
+
+
+public class BlockMeta extends BlockMetaBase {
+
+  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
+    super(blockId, blockSize, dir);
+  }
+
+  public BlockMeta(TempBlockMeta tempBlock) {
+    super(tempBlock.getBlockId(), tempBlock.getBlockSize(), tempBlock.getParentDir();
+  }
+
+  @Override
+  public String getPath() {
+    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import com.google.common.base.Preconditions;
+import tachyon.worker.BlockStoreLocation;
+
+
+public abstract class BlockMetaBase {
+  protected final long mBlockId;
+  protected long mBlockSize;
+  protected StorageDir mDir;
+
+  public BlockMetaBase(long blockId, long blockSize, StorageDir dir) {
+    mBlockId = blockId;
+    mBlockSize = blockSize;
+    mDir = Preconditions.checkNotNull(dir);
+  }
+
+  public long getBlockId() {
+    return mBlockId;
+  }
+
+  public long getBlockSize() {
+    return mBlockSize;
+  }
+
+
+  public BlockStoreLocation getBlockLocation() {
+    StorageTier tier = mDir.getParentTier();
+    return new BlockStoreLocation(tier.getTierId(), mDir.getDirId());
+  }
+
+  public StorageDir getParentDir() {
+    return mDir;
+  }
+
+  public abstract String getPath();
+}
+
+<code block>
+
+
+package tachyon.client;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.io.Closer;
+import com.google.common.primitives.Ints;
+
+import tachyon.Constants;
+import tachyon.conf.TachyonConf;
+import tachyon.util.CommonUtils;
+
+
+public class RemoteBlockOutStream extends BlockOutStream {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+  private final int mBlockIndex;
+  private final long mBlockId;
+  private final long mBlockCapacityBytes;
+  private final Closer mCloser;
+  private final RemoteBlockWriter mRemoteWriter;
+
+
+  private final ByteBuffer mBuffer;
+
+  private final long mBufferBytes;
+
+  private long mWrittenBytes = 0;
+
+  private boolean mOpen = false;
+
+
+  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, TachyonConf tachyonConf)
+      throws IOException {
+    this(file, opType, blockIndex, tachyonConf.getBytes(Constants.USER_QUOTA_UNIT_BYTES,
+        8 * Constants.MB), tachyonConf);
+  }
+
+
+  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, long initialBytes,
+      TachyonConf tachyonConf) throws IOException {
+    super(file, opType, tachyonConf);
+
+    if (!opType.isCache()) {
+      throw new IOException("RemoteBlockOutStream only support WriteType.CACHE");
+    }
+
+    mBlockIndex = blockIndex;
+    mBlockCapacityBytes = mFile.getBlockSizeByte();
+    mBlockId = mFile.getBlockId(mBlockIndex);
+    mCloser = Closer.create();
+
+
+    mBufferBytes = mTachyonConf.getBytes(Constants.USER_FILE_BUFFER_BYTES, Constants.MB);
+    long allocateBytes = mBufferBytes;
+    mBuffer = ByteBuffer.allocate(Ints.checkedCast(allocateBytes));
+
+
+    mRemoteWriter =
+        mCloser.register(RemoteBlockWriter.Factory.createRemoteBlockWriter(tachyonConf));
+    mRemoteWriter.open(mTachyonFS.getWorkerDataServerAddress(), mBlockId, mTachyonFS.getUserId());
+    mOpen = true;
+  }
+
+
+  private synchronized void writeToRemoteBlock(byte[] bytes, int offset, int length)
+      throws IOException {
+    mRemoteWriter.write(bytes, offset, length);
+  }
+
+
+  private void flushBuffer() throws IOException {
+    writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
+    mBuffer.clear();
+  }
+
+  @Override
+  public void cancel() throws IOException {
+    if (mOpen) {
+      mCloser.close();
+      mOpen = false;
+      if (mWrittenBytes > 0) {
+        mTachyonFS.cancelBlock(mBlockId);
+      }
+      LOG.info(String.format("Canceled output of block. blockId(%d)", mBlockId));
+    }
+  }
+
+  @Override
+  public void close() throws IOException {
+    if (mOpen) {
+      if (mBuffer.position() > 0) {
+        writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
+      }
+      mCloser.close();
+      if (mWrittenBytes > 0) {
+        mTachyonFS.cacheBlock(mBlockId);
+      }
+      mOpen = false;
+    }
+  }
+
+  @Override
+  public void flush() throws IOException {
+    if (mBuffer.position() > 0) {
+      flushBuffer();
+    }
+  }
+
+
+  public long getBlockId() {
+    return mBlockId;
+  }
+
+
+  @Override
+  public long getRemainingSpaceBytes() {
+    return mBlockCapacityBytes - mWrittenBytes;
+  }
+
+  @Override
+  public void write(byte[] b) throws IOException {
+    write(b, 0, b.length);
+  }
+
+  @Override
+  public void write(byte[] b, int off, int len) throws IOException {
+    if (b == null) {
+      throw new NullPointerException();
+    } else if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
+        || ((off + len) < 0)) {
+      throw new IndexOutOfBoundsException(String.format("Buffer length (%d), offset(%d), len(%d)",
+          b.length, off, len));
+    }
+    if (!mOpen) {
+      throw new IOException("Can not write cache.");
+    }
+    if (mWrittenBytes + len > mBlockCapacityBytes) {
+      throw new IOException("Out of capacity.");
+    }
+    if (len == 0) {
+      return;
+    }
+
+    if (mBuffer.position() > 0 && mBuffer.position() + len > mBufferBytes) {
+
+      flushBuffer();
+    }
+
+    if (len > mBufferBytes / 2) {
+
+
+      if (mBuffer.position() > 0) {
+
+        flushBuffer();
+      }
+      writeToRemoteBlock(b, off, len);
+    } else {
+
+      mBuffer.put(b, off, len);
+    }
+
+    mWrittenBytes += len;
+  }
+
+  @Override
+  public void write(int b) throws IOException {
+    if (!mOpen) {
+      throw new IOException("Can not write cache.");
+    }
+    if (mWrittenBytes + 1 > mBlockCapacityBytes) {
+      throw new IOException("Out of capacity.");
+    }
+    if (mBuffer.position() >= mBufferBytes) {
+      flushBuffer();
+    }
+    CommonUtils.putIntByteBuffer(mBuffer, b);
+    mWrittenBytes ++;
+  }
+}
+
+<code block>
+
+
+package tachyon.client;
+
+import java.io.IOException;
+
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import tachyon.Constants;
+import tachyon.TachyonURI;
+import tachyon.conf.TachyonConf;
+import tachyon.master.LocalTachyonCluster;
+
+
+public class BlockOutStreamIntegrationTest {
+  private static LocalTachyonCluster sLocalTachyonCluster = null;
+
+  @AfterClass
+  public static final void afterClass() throws Exception {
+    sLocalTachyonCluster.stop();
+  }
+
+  @BeforeClass
+  public static final void beforeClass() throws IOException {
+    sLocalTachyonCluster = new LocalTachyonCluster(10000, 1000, Constants.GB);
+    sLocalTachyonCluster.start();
+  }
+
+
+  @Test
+  public void disableLocalWriteTest() throws IOException {
+    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
+    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, "false");
+    TachyonFS fs = TachyonFS.get(conf);
+
+    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI("/file_no_local_write")));
+    BlockOutStream os = BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
+    Assert.assertTrue(os instanceof RemoteBlockOutStream);
+    os.close();
+  }
+
+
+  @Test
+  public void enableLocalWriteTest() throws IOException {
+    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
+    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, "true");
+    TachyonFS fs = TachyonFS.get(conf);
+
+    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI("/file_local_write")));
+    BlockOutStream os = BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
+    Assert.assertTrue(os instanceof LocalBlockOutStream);
+    os.close();
+  }
+}
+
+<code block>
+
+
+package tachyon.client;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.io.Closer;
+import com.google.common.primitives.Ints;
+
+import tachyon.Constants;
+import tachyon.conf.TachyonConf;
+import tachyon.util.CommonUtils;
+
+
+public class RemoteBlockOutStream extends BlockOutStream {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+  private final int mBlockIndex;
+  private final long mBlockId;
+  private final long mBlockCapacityBytes;
+  private final Closer mCloser;
+  private final RemoteBlockWriter mRemoteWriter;
+
+
+  private final ByteBuffer mBuffer;
+
+  private final long mBufferBytes;
+
+  private long mWrittenBytes = 0;
+
+  private long mFlushedBytes = 0;
+
+  private boolean mClosed = true;
+
+
+  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, TachyonConf tachyonConf)
+      throws IOException {
+    this(file, opType, blockIndex, tachyonConf.getBytes(Constants.USER_QUOTA_UNIT_BYTES,
+        8 * Constants.MB), tachyonConf);
+  }
+
+
+  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, long initialBytes,
+      TachyonConf tachyonConf) throws IOException {
+    super(file, opType, tachyonConf);
+
+    if (!opType.isCache()) {
+      throw new IOException("RemoteBlockOutStream only support WriteType.CACHE");
+    }
+
+    mBlockIndex = blockIndex;
+    mBlockCapacityBytes = mFile.getBlockSizeByte();
+    mBlockId = mFile.getBlockId(mBlockIndex);
+    mCloser = Closer.create();
+
+
+    mBufferBytes = mTachyonConf.getBytes(Constants.USER_FILE_BUFFER_BYTES, Constants.MB);
+    mBuffer = ByteBuffer.allocate(Ints.checkedCast(mBufferBytes));
+
+
+    mRemoteWriter =
+        mCloser.register(RemoteBlockWriter.Factory.createRemoteBlockWriter(tachyonConf));
+    mRemoteWriter.open(mTachyonFS.getWorkerDataServerAddress(), mBlockId, mTachyonFS.getUserId());
+    mClosed = false;
+  }
+
+
+  private synchronized void writeToRemoteBlock(byte[] bytes, int offset, int length)
+      throws IOException {
+    mRemoteWriter.write(bytes, offset, length);
+    mFlushedBytes += length;
+  }
+
+
+  private void flushBuffer() throws IOException {
+    writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
+    mBuffer.clear();
+  }
+
+  @Override
+  public void cancel() throws IOException {
+    if (!mClosed) {
+      mCloser.close();
+      mClosed = true;
+      if (mFlushedBytes > 0) {
+        mTachyonFS.cancelBlock(mBlockId);
+      }
+      LOG.info(String.format("Canceled output of block. blockId(%d)", mBlockId));
+    }
+  }
+
+  @Override
+  public void close() throws IOException {
+    if (!mClosed) {
+      if (mBuffer.position() > 0) {
+        writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
+      }
+      mCloser.close();
+      if (mWrittenBytes > 0) {
+        mTachyonFS.cacheBlock(mBlockId);
+      }
+      mClosed = true;
+    }
+  }
+
+  @Override
+  public void flush() throws IOException {
+    if (mBuffer.position() > 0) {
+      flushBuffer();
+    }
+  }
+
+
+  public long getBlockId() {
+    return mBlockId;
+  }
+
+
+  @Override
+  public long getRemainingSpaceBytes() {
+    return mBlockCapacityBytes - mWrittenBytes;
+  }
+
+  @Override
+  public void write(byte[] b) throws IOException {
+    write(b, 0, b.length);
+  }
+
+  @Override
+  public void write(byte[] b, int off, int len) throws IOException {
+    if (b == null) {
+      throw new NullPointerException();
+    } else if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
+        || ((off + len) < 0)) {
+      throw new IndexOutOfBoundsException(String.format("Buffer length (%d), offset(%d), len(%d)",
+          b.length, off, len));
+    }
+    if (mClosed) {
+      throw new IOException("Cannot write because block is already closed. blockId: " + mBlockId);
+    }
+    if (mWrittenBytes + len > mBlockCapacityBytes) {
+      throw new IOException("Out of capacity.");
+    }
+    if (len == 0) {
+      return;
+    }
+
+    if (mBuffer.position() > 0 && mBuffer.position() + len > mBufferBytes) {
+
+      flushBuffer();
+    }
+
+    if (len > mBufferBytes / 2) {
+
+
+      if (mBuffer.position() > 0) {
+
+        flushBuffer();
+      }
+      writeToRemoteBlock(b, off, len);
+    } else {
+
+      mBuffer.put(b, off, len);
+    }
+
+    mWrittenBytes += len;
+  }
+
+  @Override
+  public void write(int b) throws IOException {
+    if (mClosed) {
+      throw new IOException("Cannot write because block is already closed. blockId: " + mBlockId);
+    }
+    if (mWrittenBytes + 1 > mBlockCapacityBytes) {
+      throw new IOException("Out of capacity.");
+    }
+    if (mBuffer.position() >= mBufferBytes) {
+      flushBuffer();
+    }
+    CommonUtils.putIntByteBuffer(mBuffer, b);
+    mWrittenBytes ++;
+  }
+}
+
+<code block>
+
+
+package tachyon.client;
+
+import java.io.IOException;
+
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import tachyon.Constants;
+import tachyon.TachyonURI;
+import tachyon.conf.TachyonConf;
+import tachyon.master.LocalTachyonCluster;
+
+
+public class BlockOutStreamIntegrationTest {
+  private static LocalTachyonCluster sLocalTachyonCluster = null;
+
+  @AfterClass
+  public static final void afterClass() throws Exception {
+    sLocalTachyonCluster.stop();
+  }
+
+  @BeforeClass
+  public static final void beforeClass() throws IOException {
+    sLocalTachyonCluster = new LocalTachyonCluster(10000, 1000, Constants.GB);
+    sLocalTachyonCluster.start();
+  }
+
+
+  private BlockOutStream getBlockOutStream(String filename, boolean isLocalWrite)
+      throws IOException {
+    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
+    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, Boolean.toString(isLocalWrite));
+    TachyonFS fs = TachyonFS.get(conf);
+
+    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI(filename)));
+    return BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
+  }
+
+
+  @Test
+  public void disableLocalWriteTest() throws IOException {
+    BlockOutStream os = getBlockOutStream("/file_no_local_write", false);
+    Assert.assertTrue(os instanceof RemoteBlockOutStream);
+    os.close();
+  }
+
+
+  @Test
+  public void enableLocalWriteTest() throws IOException {
+    BlockOutStream os = getBlockOutStream("/file_local_write", true);
+    Assert.assertTrue(os instanceof LocalBlockOutStream);
+    os.close();
+  }
+
+
+  @Test
+  public void cancelRemoteWriteTest() throws IOException {
+    BlockOutStream os = getBlockOutStream("/file_cancel_remote_write", false);
+    Assert.assertTrue(os instanceof RemoteBlockOutStream);
+    os.cancel();
+  }
+
+
+  @Test
+  public void cancelLocalWriteTest() throws IOException {
+    BlockOutStream os = getBlockOutStream("/file_cancel_local_write", true);
+    Assert.assertTrue(os instanceof LocalBlockOutStream);
+    os.cancel();
+  }
+
 }
 
 <code block>
@@ -198,7 +1475,7 @@ public class TieredBlockStore implements BlockStore {
   private List<BlockMetaEventListener> mMetaEventListeners = new
       ArrayList<BlockMetaEventListener>();
 
-  
+
   private final ReentrantReadWriteLock mEvictionLock = new ReentrantReadWriteLock();
 
   public TieredBlockStore(TachyonConf tachyonConf) {
@@ -206,9 +1483,9 @@ public class TieredBlockStore implements BlockStore {
     mMetaManager = new BlockMetadataManager(mTachyonConf);
     mLockManager = new BlockLockManager(mMetaManager);
 
-    
+
     mAllocator = new NaiveAllocator(mMetaManager);
-    
+
     mEvictor = new NaiveEvictor(mMetaManager);
   }
 
@@ -295,7 +1572,6 @@ public class TieredBlockStore implements BlockStore {
 
   @Override
   public boolean requestSpace(long userId, long blockId, long moreBytes) throws IOException {
-    
     mEvictionLock.writeLock().lock();
     boolean result = requestSpaceNoLock(userId, blockId, moreBytes);
     mEvictionLock.writeLock().unlock();
@@ -310,7 +1586,7 @@ public class TieredBlockStore implements BlockStore {
     }
 
     mEvictionLock.readLock().lock();
-    
+
     long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
     boolean result = moveBlockNoLock(userId, blockId, newLocation);
     mLockManager.unlockBlock(lockId);
@@ -331,7 +1607,7 @@ public class TieredBlockStore implements BlockStore {
     }
 
     mEvictionLock.readLock().lock();
-    
+
     long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
     boolean result = removeBlockNoLock(userId, blockId);
     mLockManager.unlockBlock(lockId);
@@ -390,19 +1666,19 @@ public class TieredBlockStore implements BlockStore {
     Optional<TempBlockMeta> optTempBlock =
         mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
     if (!optTempBlock.isPresent()) {
-      
 
-      
+
+
       mEvictionLock.readLock().unlock();
       mEvictionLock.writeLock().lock();
 
       boolean result = freeSpaceNoEvictionLock(userId, initialBlockSize, location);
 
-      
+
       mEvictionLock.readLock().lock();
       mEvictionLock.writeLock().unlock();
 
-      
+
       if (!result) {
         LOG.error("Cannot free {} bytes space in {}", initialBlockSize, location);
         return Optional.absent();
@@ -410,7 +1686,7 @@ public class TieredBlockStore implements BlockStore {
       optTempBlock = mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
       Preconditions.checkState(optTempBlock.isPresent(), "Cannot allocate block {}:", blockId);
     }
-    
+
     mMetaManager.addTempBlockMeta(optTempBlock.get());
     return optTempBlock;
   }
@@ -421,7 +1697,7 @@ public class TieredBlockStore implements BlockStore {
       return false;
     }
     TempBlockMeta tempBlock = optTempBlock.get();
-    
+
     if (tempBlock.getUserId() != userId) {
       return false;
     }
@@ -440,7 +1716,7 @@ public class TieredBlockStore implements BlockStore {
       return false;
     }
     TempBlockMeta tempBlock = optTempBlock.get();
-    
+
     if (tempBlock.getUserId() != userId) {
       return false;
     }
@@ -463,8 +1739,8 @@ public class TieredBlockStore implements BlockStore {
       return false;
     }
 
-    
-    mMetaManager.resizeTempBlockMeta(tempBlock, tempBlock.getBlockSize() + moreBytes);
+
+    tempBlock.setBlockSize(tempBlock.getBlockSize() + moreBytes);
     return true;
   }
 
@@ -491,27 +1767,27 @@ public class TieredBlockStore implements BlockStore {
       return false;
     }
     BlockMeta block = optBlock.get();
-    
+
     if (!mMetaManager.removeBlockMeta(block)) {
       LOG.error("Unable to remove metadata");
       return false;
     }
-    
+
     return new File(block.getPath()).delete();
   }
 
   private boolean freeSpaceNoEvictionLock(long userId, long availableBytes,
       BlockStoreLocation location) throws IOException {
     Optional<EvictionPlan> optPlan = mEvictor.freeSpace(availableBytes, location);
-    
+
     if (!optPlan.isPresent()) {
       LOG.error("Failed to free space: no eviction plan by evictor");
       return false;
     }
     EvictionPlan plan = optPlan.get();
-    
+
     for (long blockId : plan.toEvict()) {
-      
+
       long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
       boolean result = removeBlockNoLock(userId, blockId);
       mLockManager.unlockBlock(lockId);
@@ -520,11 +1796,11 @@ public class TieredBlockStore implements BlockStore {
         return false;
       }
     }
-    
+
     for (Pair<Long, BlockStoreLocation> entry : plan.toMove()) {
       long blockId = entry.getFirst();
       BlockStoreLocation newLocation = entry.getSecond();
-      
+
       long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
       boolean result = moveBlockNoLock(userId, blockId, newLocation);
       mLockManager.unlockBlock(lockId);
@@ -565,11 +1841,11 @@ import tachyon.worker.block.meta.TempBlockMeta;
 public class BlockMetadataManager {
   private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
 
-  
+
   private Map<Integer, StorageTier> mTiers;
 
   public BlockMetadataManager(TachyonConf tachyonConf) {
-    
+
     int totalTiers = tachyonConf.getInt(Constants.WORKER_MAX_TIERED_STORAGE_LEVEL, 1);
     mTiers = new HashMap<Integer, StorageTier>(totalTiers);
     for (int i = 0; i < totalTiers; i ++) {
@@ -578,17 +1854,17 @@ public class BlockMetadataManager {
     }
   }
 
-  
+
   public synchronized StorageTier getTier(int tierAlias) {
     return mTiers.get(tierAlias);
   }
 
-  
+
   public synchronized List<StorageTier> getTiers() {
     return new ArrayList<StorageTier>(mTiers.values());
   }
 
-  
+
   public synchronized long getAvailableBytes(BlockStoreLocation location) {
     long spaceAvailable = 0;
 
@@ -610,7 +1886,7 @@ public class BlockMetadataManager {
     return dir.getAvailableBytes();
   }
 
-  
+
   public synchronized boolean hasBlockMeta(long blockId) {
     for (StorageTier tier : mTiers.values()) {
       for (StorageDir dir : tier.getStorageDirs()) {
@@ -622,7 +1898,7 @@ public class BlockMetadataManager {
     return false;
   }
 
-  
+
   public synchronized Optional<BlockMeta> getBlockMeta(long blockId) {
     for (StorageTier tier : mTiers.values()) {
       for (StorageDir dir : tier.getStorageDirs()) {
@@ -634,17 +1910,17 @@ public class BlockMetadataManager {
     return Optional.absent();
   }
 
-  
+
   public synchronized Optional<BlockMeta> moveBlockMeta(long userId, long blockId,
       BlockStoreLocation newLocation) {
-    
+
     BlockMeta block = getBlockMeta(blockId).orNull();
     if (block == null) {
       LOG.error("No block found for block ID {}", blockId);
       return Optional.absent();
     }
 
-    
+
     if (newLocation.equals(BlockStoreLocation.anyTier())) {
       return Optional.of(block);
     }
@@ -672,13 +1948,13 @@ public class BlockMetadataManager {
     return newDir.addBlockMeta(block);
   }
 
-  
+
   public synchronized boolean removeBlockMeta(BlockMeta block) {
     StorageDir dir = block.getParentDir();
     return dir.removeBlockMeta(block);
   }
 
-  
+
   public synchronized Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
     for (StorageTier tier : mTiers.values()) {
       for (StorageDir dir : tier.getStorageDirs()) {
@@ -690,13 +1966,13 @@ public class BlockMetadataManager {
     return Optional.absent();
   }
 
-  
+
   public synchronized boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
     StorageDir dir = tempBlockMeta.getParentDir();
     return dir.addTempBlockMeta(tempBlockMeta);
   }
 
-  
+
   public synchronized boolean commitTempBlockMeta(TempBlockMeta tempBlockMeta) {
     BlockMeta block = new BlockMeta(tempBlockMeta);
     StorageDir dir = tempBlockMeta.getParentDir();
@@ -704,19 +1980,13 @@ public class BlockMetadataManager {
 
   }
 
-  
+
   public synchronized boolean abortTempBlockMeta(TempBlockMeta tempBlockMeta) {
     StorageDir dir = tempBlockMeta.getParentDir();
     return dir.removeTempBlockMeta(tempBlockMeta);
   }
 
-  
-  public synchronized void resizeTempBlockMeta(TempBlockMeta tempBlockMeta, long newSize) {
-    StorageDir dir = tempBlockMeta.getParentDir();
-    dir.resizeTempBlockMeta(tempBlockMeta, newSize);
-  }
 
-    
   public synchronized void cleanupUser(long userId) {
     for (StorageTier tier : mTiers.values()) {
       for (StorageDir dir : tier.getStorageDirs()) {
@@ -725,7 +1995,7 @@ public class BlockMetadataManager {
     }
   }
 
-  
+
   public synchronized BlockStoreMeta getBlockStoreMeta() {
     return new BlockStoreMeta(this);
   }
@@ -757,11 +2027,11 @@ import tachyon.StorageDirId;
 public class StorageDir {
   private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
 
-  
+
   private Map<Long, BlockMeta> mBlockIdToBlockMap;
-  
+
   private Map<Long, TempBlockMeta> mBlockIdToTempBlockMap;
-  
+
   private Map<Long, Set<Long>> mUserIdToTempBlockIdsMap;
 
   private final long mCapacityBytes;
@@ -801,14 +2071,14 @@ public class StorageDir {
     return mDirIndex;
   }
 
-  
+
   public long getStorageDirId() {
     int level = mTier.getTierAlias() - 1;
     int storageLevelAliasValue = mTier.getTierAlias();
     return StorageDirId.getStorageDirId(level, storageLevelAliasValue, mDirIndex);
   }
 
-  
+
   public List<Long> getBlockIds() {
     return new ArrayList<Long>(mBlockIdToBlockMap.keySet());
   }
@@ -817,27 +2087,795 @@ public class StorageDir {
     return mBlockIdToBlockMap.values();
   }
 
-  
+
   public boolean hasBlockMeta(long blockId) {
     return mBlockIdToBlockMap.containsKey(blockId);
   }
 
-  
+
   public boolean hasTempBlockMeta(long blockId) {
     return mBlockIdToTempBlockMap.containsKey(blockId);
   }
 
-  
+
   public Optional<BlockMeta> getBlockMeta(long blockId) {
     return Optional.fromNullable(mBlockIdToBlockMap.get(blockId));
   }
 
-  
+
   public Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
     return Optional.fromNullable(mBlockIdToTempBlockMap.get(blockId));
   }
 
-  
+
+  public Optional<BlockMeta> addBlockMeta(BlockMeta block) {
+    long blockId = block.getBlockId();
+    long blockSize = block.getBlockSize();
+
+    if (getAvailableBytes() < blockSize) {
+      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
+          blockId, toString(), blockSize, getAvailableBytes());
+      return Optional.absent();
+    }
+    if (hasBlockMeta(blockId)) {
+      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
+      return Optional.absent();
+    }
+    mBlockIdToBlockMap.put(blockId, block);
+    mAvailableBytes -= blockSize;
+    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
+    return Optional.of(block);
+  }
+
+
+
+  public boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
+    long userId = tempBlockMeta.getUserId();
+    long blockId = tempBlockMeta.getBlockId();
+    long blockSize = tempBlockMeta.getBlockSize();
+    mBlockIdToTempBlockMap.put(blockId, tempBlockMeta);
+    Set<Long> userTempBlocks = mUserIdToTempBlockIdsMap.get(userId);
+    if (null == userTempBlocks) {
+      mUserIdToTempBlockIdsMap.put(userId, Sets.newHashSet(blockId));
+    } else {
+      userTempBlocks.add(blockId);
+    }
+    mAvailableBytes -= blockSize;
+    return true;
+  }
+
+
+  public boolean removeBlockMeta(BlockMeta block) {
+    Preconditions.checkNotNull(block);
+    mBlockIdToBlockMap.remove(block.getBlockId());
+    mAvailableBytes += block.getBlockSize();
+    return true;
+  }
+
+
+  public boolean removeTempBlockMeta(TempBlockMeta tempBlockMeta) {
+    Preconditions.checkNotNull(tempBlockMeta);
+    long blockId = tempBlockMeta.getBlockId();
+    mBlockIdToTempBlockMap.remove(blockId);
+    Preconditions.checkNotNull(tempBlockMeta);
+    for (Map.Entry<Long, Set<Long>> entry : mUserIdToTempBlockIdsMap.entrySet()) {
+      Long userId = entry.getKey();
+      Set<Long> userBlocks = entry.getValue();
+      if (userBlocks.contains(blockId)) {
+        Preconditions.checkState(userBlocks.remove(blockId));
+        if (userBlocks.isEmpty()) {
+          mUserIdToTempBlockIdsMap.remove(userId);
+        }
+        mAvailableBytes += tempBlockMeta.getBlockSize();
+        Preconditions.checkState(mCapacityBytes >= mAvailableBytes,
+            "Available bytes should always be less than total capacity bytes");
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  public void cleanupUser(long userId) {
+    Set<Long> userTempBlocks = mUserIdToTempBlockIdsMap.get(userId);
+    if (null == userTempBlocks) {
+      return;
+    }
+    for (long blockId : userTempBlocks) {
+      mBlockIdToTempBlockMap.remove(blockId);
+    }
+    mUserIdToTempBlockIdsMap.remove(userId);
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
+
+import tachyon.Constants;
+import tachyon.Pair;
+import tachyon.conf.TachyonConf;
+import tachyon.worker.BlockStoreLocation;
+import tachyon.worker.block.allocator.Allocator;
+import tachyon.worker.block.allocator.NaiveAllocator;
+import tachyon.worker.block.evictor.EvictionPlan;
+import tachyon.worker.block.evictor.Evictor;
+import tachyon.worker.block.evictor.NaiveEvictor;
+import tachyon.worker.block.io.BlockReader;
+import tachyon.worker.block.io.BlockWriter;
+import tachyon.worker.block.io.LocalFileBlockReader;
+import tachyon.worker.block.io.LocalFileBlockWriter;
+import tachyon.worker.block.meta.BlockMeta;
+import tachyon.worker.block.meta.TempBlockMeta;
+
+
+public class TieredBlockStore implements BlockStore {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+  private final TachyonConf mTachyonConf;
+  private final BlockMetadataManager mMetaManager;
+  private final BlockLockManager mLockManager;
+  private final Allocator mAllocator;
+  private final Evictor mEvictor;
+
+  private List<BlockAccessEventListener> mAccessEventListeners = new
+      ArrayList<BlockAccessEventListener>();
+  private List<BlockMetaEventListener> mMetaEventListeners = new
+      ArrayList<BlockMetaEventListener>();
+
+
+  private final ReentrantReadWriteLock mEvictionLock = new ReentrantReadWriteLock();
+
+  public TieredBlockStore(TachyonConf tachyonConf) {
+    mTachyonConf = Preconditions.checkNotNull(tachyonConf);
+    mMetaManager = new BlockMetadataManager(mTachyonConf);
+    mLockManager = new BlockLockManager(mMetaManager);
+
+
+    mAllocator = new NaiveAllocator(mMetaManager);
+
+    mEvictor = new NaiveEvictor(mMetaManager);
+  }
+
+  @Override
+  public Optional<Long> lockBlock(long userId, long blockId) {
+    return mLockManager.lockBlock(userId, blockId, BlockLockType.READ);
+  }
+
+  @Override
+  public boolean unlockBlock(long lockId) {
+    return mLockManager.unlockBlock(lockId);
+  }
+
+  @Override
+  public boolean unlockBlock(long userId, long blockId) {
+    return mLockManager.unlockBlock(userId, blockId);
+  }
+
+  @Override
+  public Optional<BlockWriter> getBlockWriter(long userId, long blockId) throws IOException {
+    Optional<TempBlockMeta> optBlock = mMetaManager.getTempBlockMeta(blockId);
+    if (!optBlock.isPresent()) {
+      return Optional.absent();
+    }
+    BlockWriter writer = new LocalFileBlockWriter(optBlock.get());
+    return Optional.of(writer);
+  }
+
+  @Override
+  public Optional<BlockReader> getBlockReader(long userId, long blockId, long lockId)
+      throws IOException {
+    Preconditions.checkState(mLockManager.validateLockId(userId, blockId, lockId));
+
+    Optional<BlockMeta> optBlock = mMetaManager.getBlockMeta(blockId);
+    if (!optBlock.isPresent()) {
+      return Optional.absent();
+    }
+    BlockReader reader = new LocalFileBlockReader(optBlock.get());
+    return Optional.of(reader);
+  }
+
+  @Override
+  public Optional<TempBlockMeta> createBlockMeta(long userId, long blockId,
+      BlockStoreLocation location, long initialBlockSize) throws IOException {
+    mEvictionLock.readLock().lock();
+    Optional<TempBlockMeta> optTempBlock =
+        createBlockMetaNoLock(userId, blockId, location, initialBlockSize);
+    mEvictionLock.readLock().unlock();
+    return optTempBlock;
+  }
+
+  @Override
+  public Optional<BlockMeta> getBlockMeta(long userId, long blockId, long lockId) {
+    Preconditions.checkState(mLockManager.validateLockId(userId, blockId, lockId));
+    return mMetaManager.getBlockMeta(blockId);
+  }
+
+  @Override
+  public boolean commitBlock(long userId, long blockId) {
+    TempBlockMeta tempBlock = mMetaManager.getTempBlockMeta(blockId).orNull();
+    for (BlockMetaEventListener listener: mMetaEventListeners) {
+      listener.preCommitBlock(userId, blockId, tempBlock.getBlockLocation());
+    }
+
+    mEvictionLock.readLock().lock();
+    boolean result = commitBlockNoLock(userId, blockId);
+    mEvictionLock.readLock().unlock();
+
+    if (result) {
+      for (BlockMetaEventListener listener : mMetaEventListeners) {
+        listener.postCommitBlock(userId, blockId, tempBlock.getBlockLocation());
+      }
+    }
+    return true;
+  }
+
+  @Override
+  public boolean abortBlock(long userId, long blockId) {
+    mEvictionLock.readLock().lock();
+    boolean result = abortBlockNoLock(userId, blockId);
+    mEvictionLock.readLock().unlock();
+    return result;
+  }
+
+  @Override
+  public boolean requestSpace(long userId, long blockId, long moreBytes) throws IOException {
+
+    mEvictionLock.writeLock().lock();
+    boolean result = requestSpaceNoLock(userId, blockId, moreBytes);
+    mEvictionLock.writeLock().unlock();
+    return result;
+  }
+
+  @Override
+  public boolean moveBlock(long userId, long blockId, BlockStoreLocation newLocation)
+      throws IOException {
+    for (BlockMetaEventListener listener: mMetaEventListeners) {
+      listener.preMoveBlock(userId, blockId, newLocation);
+    }
+
+    mEvictionLock.readLock().lock();
+
+    long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
+    boolean result = moveBlockNoLock(userId, blockId, newLocation);
+    mLockManager.unlockBlock(lockId);
+    mEvictionLock.readLock().unlock();
+
+    if (result) {
+      for (BlockMetaEventListener listener: mMetaEventListeners) {
+        listener.postMoveBlock(userId, blockId, newLocation);
+      }
+    }
+    return result;
+  }
+
+  @Override
+  public boolean removeBlock(long userId, long blockId) throws IOException {
+    for (BlockMetaEventListener listener: mMetaEventListeners) {
+      listener.preRemoveBlock(userId, blockId);
+    }
+
+    mEvictionLock.readLock().lock();
+
+    long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
+    boolean result = removeBlockNoLock(userId, blockId);
+    mLockManager.unlockBlock(lockId);
+    mEvictionLock.readLock().unlock();
+
+    if (result) {
+      for (BlockMetaEventListener listener: mMetaEventListeners) {
+        listener.postRemoveBlock(userId, blockId);
+      }
+    }
+    return result;
+  }
+
+  @Override
+  public void accessBlock(long userId, long blockId) {
+    for (BlockAccessEventListener listener: mAccessEventListeners) {
+      listener.onAccessBlock(userId, blockId);
+    }
+  }
+
+  @Override
+  public boolean freeSpace(long userId, long availableBytes, BlockStoreLocation location)
+      throws IOException {
+    mEvictionLock.writeLock().lock();
+    boolean result = freeSpaceNoEvictionLock(userId, availableBytes, location);
+    mEvictionLock.writeLock().unlock();
+    return result;
+  }
+
+  @Override
+  public boolean cleanupUser(long userId) {
+    mEvictionLock.readLock().lock();
+    mMetaManager.cleanupUser(userId);
+    mLockManager.cleanupUser(userId);
+    mEvictionLock.readLock().unlock();
+    return true;
+  }
+
+  @Override
+  public BlockStoreMeta getBlockStoreMeta() {
+    return mMetaManager.getBlockStoreMeta();
+  }
+
+  @Override
+  public void registerMetaListener(BlockMetaEventListener listener) {
+    mMetaEventListeners.add(listener);
+  }
+
+  @Override
+  public void registerAccessListener(BlockAccessEventListener listener) {
+    mAccessEventListeners.add(listener);
+  }
+
+  private Optional<TempBlockMeta> createBlockMetaNoLock(long userId, long blockId,
+      BlockStoreLocation location, long initialBlockSize) throws IOException {
+    Optional<TempBlockMeta> optTempBlock =
+        mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
+    if (!optTempBlock.isPresent()) {
+
+
+
+      mEvictionLock.readLock().unlock();
+      mEvictionLock.writeLock().lock();
+
+      boolean result = freeSpaceNoEvictionLock(userId, initialBlockSize, location);
+
+
+      mEvictionLock.readLock().lock();
+      mEvictionLock.writeLock().unlock();
+
+
+      if (!result) {
+        LOG.error("Cannot free {} bytes space in {}", initialBlockSize, location);
+        return Optional.absent();
+      }
+      optTempBlock = mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
+      Preconditions.checkState(optTempBlock.isPresent(), "Cannot allocate block {}:", blockId);
+    }
+
+    mMetaManager.addTempBlockMeta(optTempBlock.get());
+    return optTempBlock;
+  }
+
+  private boolean commitBlockNoLock(long userId, long blockId) {
+    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
+    if (!optTempBlock.isPresent()) {
+      return false;
+    }
+    TempBlockMeta tempBlock = optTempBlock.get();
+
+    if (tempBlock.getUserId() != userId) {
+      return false;
+    }
+    String sourcePath = tempBlock.getPath();
+    String destPath = tempBlock.getCommitPath();
+    boolean renamed = new File(sourcePath).renameTo(new File(destPath));
+    if (!renamed) {
+      return false;
+    }
+    return mMetaManager.commitTempBlockMeta(tempBlock);
+  }
+
+  private boolean abortBlockNoLock(long userId, long blockId) {
+    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
+    if (!optTempBlock.isPresent()) {
+      return false;
+    }
+    TempBlockMeta tempBlock = optTempBlock.get();
+
+    if (tempBlock.getUserId() != userId) {
+      return false;
+    }
+    String path = tempBlock.getPath();
+    boolean deleted = new File(path).delete();
+    if (!deleted) {
+      return false;
+    }
+    return mMetaManager.abortTempBlockMeta(tempBlock);
+  }
+
+  private boolean requestSpaceNoLock(long userId, long blockId, long moreBytes) throws IOException {
+    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
+    if (!optTempBlock.isPresent()) {
+      return false;
+    }
+    TempBlockMeta tempBlock = optTempBlock.get();
+    BlockStoreLocation location = tempBlock.getBlockLocation();
+    if (!freeSpaceNoEvictionLock(userId, moreBytes, location)) {
+      return false;
+    }
+
+
+    mMetaManager.resizeTempBlockMeta(tempBlock, tempBlock.getBlockSize() + moreBytes);
+    return true;
+  }
+
+  private boolean moveBlockNoLock(long userId, long blockId, BlockStoreLocation newLocation)
+      throws IOException {
+    Optional<BlockMeta> optSrcBlock = mMetaManager.getBlockMeta(blockId);
+    if (!optSrcBlock.isPresent()) {
+      return false;
+    }
+    String srcPath = optSrcBlock.get().getPath();
+    Optional<BlockMeta> optDestBlock = mMetaManager.moveBlockMeta(userId, blockId, newLocation);
+    if (!optDestBlock.isPresent()) {
+      return false;
+    }
+    String destPath = optDestBlock.get().getPath();
+
+    return new File(srcPath).renameTo(new File(destPath));
+  }
+
+  private boolean removeBlockNoLock(long userId, long blockId) throws IOException {
+    Optional<BlockMeta> optBlock = mMetaManager.getBlockMeta(blockId);
+    if (!optBlock.isPresent()) {
+      LOG.error("Block is not present");
+      return false;
+    }
+    BlockMeta block = optBlock.get();
+
+    if (!mMetaManager.removeBlockMeta(block)) {
+      LOG.error("Unable to remove metadata");
+      return false;
+    }
+
+    return new File(block.getPath()).delete();
+  }
+
+  private boolean freeSpaceNoEvictionLock(long userId, long availableBytes,
+      BlockStoreLocation location) throws IOException {
+    Optional<EvictionPlan> optPlan = mEvictor.freeSpace(availableBytes, location);
+
+    if (!optPlan.isPresent()) {
+      LOG.error("Failed to free space: no eviction plan by evictor");
+      return false;
+    }
+    EvictionPlan plan = optPlan.get();
+
+    for (long blockId : plan.toEvict()) {
+
+      long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
+      boolean result = removeBlockNoLock(userId, blockId);
+      mLockManager.unlockBlock(lockId);
+      if (!result) {
+        LOG.error("Failed to free space: cannot evict block {}", blockId);
+        return false;
+      }
+    }
+
+    for (Pair<Long, BlockStoreLocation> entry : plan.toMove()) {
+      long blockId = entry.getFirst();
+      BlockStoreLocation newLocation = entry.getSecond();
+
+      long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
+      boolean result = moveBlockNoLock(userId, blockId, newLocation);
+      mLockManager.unlockBlock(lockId);
+      if (!result) {
+        LOG.error("Failed to free space: cannot move block {} to {}", blockId, newLocation);
+        return false;
+      }
+    }
+    return true;
+  }
+
+}
+
+<code block>
+
+
+package tachyon.worker.block;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
+
+import tachyon.Constants;
+import tachyon.conf.TachyonConf;
+import tachyon.worker.BlockStoreLocation;
+import tachyon.worker.block.meta.BlockMeta;
+import tachyon.worker.block.meta.StorageDir;
+import tachyon.worker.block.meta.StorageTier;
+import tachyon.worker.block.meta.TempBlockMeta;
+
+
+public class BlockMetadataManager {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+
+  private Map<Integer, StorageTier> mTiers;
+
+  public BlockMetadataManager(TachyonConf tachyonConf) {
+
+    int totalTiers = tachyonConf.getInt(Constants.WORKER_MAX_TIERED_STORAGE_LEVEL, 1);
+    mTiers = new HashMap<Integer, StorageTier>(totalTiers);
+    for (int i = 0; i < totalTiers; i ++) {
+      int tierAlias = i + 1;
+      mTiers.put(tierAlias, new StorageTier(tachyonConf, tierAlias));
+    }
+  }
+
+
+  public synchronized StorageTier getTier(int tierAlias) {
+    return mTiers.get(tierAlias);
+  }
+
+
+  public synchronized List<StorageTier> getTiers() {
+    return new ArrayList<StorageTier>(mTiers.values());
+  }
+
+
+  public synchronized long getAvailableBytes(BlockStoreLocation location) {
+    long spaceAvailable = 0;
+
+    if (location.equals(BlockStoreLocation.anyTier())) {
+      for (StorageTier tier : getTiers()) {
+        spaceAvailable += tier.getAvailableBytes();
+      }
+      return spaceAvailable;
+    }
+
+    int tierAlias = location.tierAlias();
+    StorageTier tier = getTier(tierAlias);
+    if (location.equals(BlockStoreLocation.anyDirInTier(tierAlias))) {
+      return tier.getAvailableBytes();
+    }
+
+    int dirIndex = location.dir();
+    StorageDir dir = tier.getDir(dirIndex);
+    return dir.getAvailableBytes();
+  }
+
+
+  public synchronized boolean hasBlockMeta(long blockId) {
+    for (StorageTier tier : mTiers.values()) {
+      for (StorageDir dir : tier.getStorageDirs()) {
+        if (dir.hasBlockMeta(blockId)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+
+  public synchronized Optional<BlockMeta> getBlockMeta(long blockId) {
+    for (StorageTier tier : mTiers.values()) {
+      for (StorageDir dir : tier.getStorageDirs()) {
+        if (dir.hasBlockMeta(blockId)) {
+          return tier.getBlockMeta(blockId);
+        }
+      }
+    }
+    return Optional.absent();
+  }
+
+
+  public synchronized Optional<BlockMeta> moveBlockMeta(long userId, long blockId,
+      BlockStoreLocation newLocation) {
+
+    BlockMeta block = getBlockMeta(blockId).orNull();
+    if (block == null) {
+      LOG.error("No block found for block ID {}", blockId);
+      return Optional.absent();
+    }
+
+
+    if (newLocation.equals(BlockStoreLocation.anyTier())) {
+      return Optional.of(block);
+    }
+
+    int newTierAlias = newLocation.tierAlias();
+    StorageTier newTier = getTier(newTierAlias);
+    StorageDir newDir = null;
+    if (newLocation.equals(BlockStoreLocation.anyDirInTier(newTierAlias))) {
+      for (StorageDir dir : newTier.getStorageDirs()) {
+        if (dir.getAvailableBytes() > block.getBlockSize()) {
+          newDir = dir;
+        }
+      }
+    } else {
+      newDir = newTier.getDir(newLocation.dir());
+    }
+
+    if (newDir == null) {
+      return Optional.absent();
+    }
+    StorageDir oldDir = block.getParentDir();
+    if (!oldDir.removeBlockMeta(block)) {
+      return Optional.absent();
+    }
+    return newDir.addBlockMeta(block);
+  }
+
+
+  public synchronized boolean removeBlockMeta(BlockMeta block) {
+    StorageDir dir = block.getParentDir();
+    return dir.removeBlockMeta(block);
+  }
+
+
+  public synchronized Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
+    for (StorageTier tier : mTiers.values()) {
+      for (StorageDir dir : tier.getStorageDirs()) {
+        if (dir.hasTempBlockMeta(blockId)) {
+          return dir.getTempBlockMeta(blockId);
+        }
+      }
+    }
+    return Optional.absent();
+  }
+
+
+  public synchronized boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
+    StorageDir dir = tempBlockMeta.getParentDir();
+    return dir.addTempBlockMeta(tempBlockMeta);
+  }
+
+
+  public synchronized boolean commitTempBlockMeta(TempBlockMeta tempBlockMeta) {
+    BlockMeta block = new BlockMeta(tempBlockMeta);
+    StorageDir dir = tempBlockMeta.getParentDir();
+    return dir.removeTempBlockMeta(tempBlockMeta) && dir.addBlockMeta(block).isPresent();
+
+  }
+
+
+  public synchronized boolean abortTempBlockMeta(TempBlockMeta tempBlockMeta) {
+    StorageDir dir = tempBlockMeta.getParentDir();
+    return dir.removeTempBlockMeta(tempBlockMeta);
+  }
+
+
+  public synchronized void resizeTempBlockMeta(TempBlockMeta tempBlockMeta, long newSize) {
+    StorageDir dir = tempBlockMeta.getParentDir();
+    dir.resizeTempBlockMeta(tempBlockMeta, newSize);
+  }
+
+
+  public synchronized void cleanupUser(long userId) {
+    for (StorageTier tier : mTiers.values()) {
+      for (StorageDir dir : tier.getStorageDirs()) {
+        dir.cleanupUser(userId);
+      }
+    }
+  }
+
+
+  public synchronized BlockStoreMeta getBlockStoreMeta() {
+    return new BlockStoreMeta(this);
+  }
+}
+
+<code block>
+
+
+package tachyon.worker.block.meta;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
+
+import tachyon.Constants;
+import tachyon.StorageDirId;
+
+
+public class StorageDir {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+
+
+  private Map<Long, BlockMeta> mBlockIdToBlockMap;
+
+  private Map<Long, TempBlockMeta> mBlockIdToTempBlockMap;
+
+  private Map<Long, Set<Long>> mUserIdToTempBlockIdsMap;
+
+  private final long mCapacityBytes;
+  private long mAvailableBytes;
+  private String mDirPath;
+  private int mDirIndex;
+  private StorageTier mTier;
+
+  public StorageDir(StorageTier tier, int dirIndex, long capacityBytes, String dirPath) {
+    mTier = Preconditions.checkNotNull(tier);
+    mDirIndex = dirIndex;
+    mCapacityBytes = capacityBytes;
+    mAvailableBytes = capacityBytes;
+    mDirPath = dirPath;
+    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
+    mBlockIdToTempBlockMap = new HashMap<Long, TempBlockMeta>(200);
+    mUserIdToTempBlockIdsMap = new HashMap<Long, Set<Long>>(200);
+  }
+
+  public long getCapacityBytes() {
+    return mCapacityBytes;
+  }
+
+  public long getAvailableBytes() {
+    return mAvailableBytes;
+  }
+
+  public String getDirPath() {
+    return mDirPath;
+  }
+
+  public StorageTier getParentTier() {
+    return mTier;
+  }
+
+  public int getDirIndex() {
+    return mDirIndex;
+  }
+
+
+  public long getStorageDirId() {
+    int level = mTier.getTierAlias() - 1;
+    int storageLevelAliasValue = mTier.getTierAlias();
+    return StorageDirId.getStorageDirId(level, storageLevelAliasValue, mDirIndex);
+  }
+
+
+  public List<Long> getBlockIds() {
+    return new ArrayList<Long>(mBlockIdToBlockMap.keySet());
+  }
+
+  public Collection<BlockMeta> getBlocks() {
+    return mBlockIdToBlockMap.values();
+  }
+
+
+  public boolean hasBlockMeta(long blockId) {
+    return mBlockIdToBlockMap.containsKey(blockId);
+  }
+
+
+  public boolean hasTempBlockMeta(long blockId) {
+    return mBlockIdToTempBlockMap.containsKey(blockId);
+  }
+
+
+  public Optional<BlockMeta> getBlockMeta(long blockId) {
+    return Optional.fromNullable(mBlockIdToBlockMap.get(blockId));
+  }
+
+
+  public Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
+    return Optional.fromNullable(mBlockIdToTempBlockMap.get(blockId));
+  }
+
+
   public Optional<BlockMeta> addBlockMeta(BlockMeta block) {
     long blockId = block.getBlockId();
     long blockSize = block.getBlockSize();
@@ -857,7 +2895,7 @@ public class StorageDir {
   }
 
 
-  
+
   public boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
     long userId = tempBlockMeta.getUserId();
     long blockId = tempBlockMeta.getBlockId();
@@ -873,7 +2911,7 @@ public class StorageDir {
     return true;
   }
 
-  
+
   public boolean removeBlockMeta(BlockMeta block) {
     Preconditions.checkNotNull(block);
     mBlockIdToBlockMap.remove(block.getBlockId());
@@ -881,7 +2919,7 @@ public class StorageDir {
     return true;
   }
 
-  
+
   public boolean removeTempBlockMeta(TempBlockMeta tempBlockMeta) {
     Preconditions.checkNotNull(tempBlockMeta);
     long blockId = tempBlockMeta.getBlockId();
@@ -923,7 +2961,7 @@ public class StorageDir {
         "Available bytes should always be less than total capacity bytes");
     mAvailableBytes += size;
   }
-  
+
   public void cleanupUser(long userId) {
     Set<Long> userTempBlocks = mUserIdToTempBlockIdsMap.get(userId);
     if (null == userTempBlocks) {
@@ -933,1279 +2971,6 @@ public class StorageDir {
       mBlockIdToTempBlockMap.remove(blockId);
     }
     mUserIdToTempBlockIdsMap.remove(userId);
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
-
-import tachyon.Constants;
-import tachyon.Pair;
-import tachyon.conf.TachyonConf;
-import tachyon.worker.BlockStoreLocation;
-import tachyon.worker.block.allocator.Allocator;
-import tachyon.worker.block.allocator.NaiveAllocator;
-import tachyon.worker.block.evictor.EvictionPlan;
-import tachyon.worker.block.evictor.Evictor;
-import tachyon.worker.block.evictor.NaiveEvictor;
-import tachyon.worker.block.io.BlockReader;
-import tachyon.worker.block.io.BlockWriter;
-import tachyon.worker.block.io.LocalFileBlockReader;
-import tachyon.worker.block.io.LocalFileBlockWriter;
-import tachyon.worker.block.meta.BlockMeta;
-import tachyon.worker.block.meta.TempBlockMeta;
-
-
-public class TieredBlockStore implements BlockStore {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  private final TachyonConf mTachyonConf;
-  private final BlockMetadataManager mMetaManager;
-  private final BlockLockManager mLockManager;
-  private final Allocator mAllocator;
-  private final Evictor mEvictor;
-
-  private List<BlockAccessEventListener> mAccessEventListeners = new
-      ArrayList<BlockAccessEventListener>();
-  private List<BlockMetaEventListener> mMetaEventListeners = new
-      ArrayList<BlockMetaEventListener>();
-
-  
-  private final ReentrantReadWriteLock mEvictionLock = new ReentrantReadWriteLock();
-
-  public TieredBlockStore(TachyonConf tachyonConf) {
-    mTachyonConf = Preconditions.checkNotNull(tachyonConf);
-    mMetaManager = new BlockMetadataManager(mTachyonConf);
-    mLockManager = new BlockLockManager(mMetaManager);
-
-    
-    mAllocator = new NaiveAllocator(mMetaManager);
-    
-    mEvictor = new NaiveEvictor(mMetaManager);
-  }
-
-  @Override
-  public Optional<Long> lockBlock(long userId, long blockId) {
-    return mLockManager.lockBlock(userId, blockId, BlockLockType.READ);
-  }
-
-  @Override
-  public boolean unlockBlock(long lockId) {
-    return mLockManager.unlockBlock(lockId);
-  }
-
-  @Override
-  public boolean unlockBlock(long userId, long blockId) {
-    return mLockManager.unlockBlock(userId, blockId);
-  }
-
-  @Override
-  public Optional<BlockWriter> getBlockWriter(long userId, long blockId) throws IOException {
-    Optional<TempBlockMeta> optBlock = mMetaManager.getTempBlockMeta(blockId);
-    if (!optBlock.isPresent()) {
-      return Optional.absent();
-    }
-    BlockWriter writer = new LocalFileBlockWriter(optBlock.get());
-    return Optional.of(writer);
-  }
-
-  @Override
-  public Optional<BlockReader> getBlockReader(long userId, long blockId, long lockId)
-      throws IOException {
-    Preconditions.checkState(mLockManager.validateLockId(userId, blockId, lockId));
-
-    Optional<BlockMeta> optBlock = mMetaManager.getBlockMeta(blockId);
-    if (!optBlock.isPresent()) {
-      return Optional.absent();
-    }
-    BlockReader reader = new LocalFileBlockReader(optBlock.get());
-    return Optional.of(reader);
-  }
-
-  @Override
-  public Optional<TempBlockMeta> createBlockMeta(long userId, long blockId,
-      BlockStoreLocation location, long initialBlockSize) throws IOException {
-    mEvictionLock.readLock().lock();
-    Optional<TempBlockMeta> optTempBlock =
-        createBlockMetaNoLock(userId, blockId, location, initialBlockSize);
-    mEvictionLock.readLock().unlock();
-    return optTempBlock;
-  }
-
-  @Override
-  public Optional<BlockMeta> getBlockMeta(long userId, long blockId, long lockId) {
-    Preconditions.checkState(mLockManager.validateLockId(userId, blockId, lockId));
-    return mMetaManager.getBlockMeta(blockId);
-  }
-
-  @Override
-  public boolean commitBlock(long userId, long blockId) {
-    TempBlockMeta tempBlock = mMetaManager.getTempBlockMeta(blockId).orNull();
-    for (BlockMetaEventListener listener: mMetaEventListeners) {
-      listener.preCommitBlock(userId, blockId, tempBlock.getBlockLocation());
-    }
-
-    mEvictionLock.readLock().lock();
-    boolean result = commitBlockNoLock(userId, blockId);
-    mEvictionLock.readLock().unlock();
-
-    if (result) {
-      for (BlockMetaEventListener listener : mMetaEventListeners) {
-        listener.postCommitBlock(userId, blockId, tempBlock.getBlockLocation());
-      }
-    }
-    return true;
-  }
-
-  @Override
-  public boolean abortBlock(long userId, long blockId) {
-    mEvictionLock.readLock().lock();
-    boolean result = abortBlockNoLock(userId, blockId);
-    mEvictionLock.readLock().unlock();
-    return result;
-  }
-
-  @Override
-  public boolean requestSpace(long userId, long blockId, long moreBytes) throws IOException {
-    mEvictionLock.writeLock().lock();
-    boolean result = requestSpaceNoLock(userId, blockId, moreBytes);
-    mEvictionLock.writeLock().unlock();
-    return result;
-  }
-
-  @Override
-  public boolean moveBlock(long userId, long blockId, BlockStoreLocation newLocation)
-      throws IOException {
-    for (BlockMetaEventListener listener: mMetaEventListeners) {
-      listener.preMoveBlock(userId, blockId, newLocation);
-    }
-
-    mEvictionLock.readLock().lock();
-    
-    long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
-    boolean result = moveBlockNoLock(userId, blockId, newLocation);
-    mLockManager.unlockBlock(lockId);
-    mEvictionLock.readLock().unlock();
-
-    if (result) {
-      for (BlockMetaEventListener listener: mMetaEventListeners) {
-        listener.postMoveBlock(userId, blockId, newLocation);
-      }
-    }
-    return result;
-  }
-
-  @Override
-  public boolean removeBlock(long userId, long blockId) throws IOException {
-    for (BlockMetaEventListener listener: mMetaEventListeners) {
-      listener.preRemoveBlock(userId, blockId);
-    }
-
-    mEvictionLock.readLock().lock();
-    
-    long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
-    boolean result = removeBlockNoLock(userId, blockId);
-    mLockManager.unlockBlock(lockId);
-    mEvictionLock.readLock().unlock();
-
-    if (result) {
-      for (BlockMetaEventListener listener: mMetaEventListeners) {
-        listener.postRemoveBlock(userId, blockId);
-      }
-    }
-    return result;
-  }
-
-  @Override
-  public void accessBlock(long userId, long blockId) {
-    for (BlockAccessEventListener listener: mAccessEventListeners) {
-      listener.onAccessBlock(userId, blockId);
-    }
-  }
-
-  @Override
-  public boolean freeSpace(long userId, long availableBytes, BlockStoreLocation location)
-      throws IOException {
-    mEvictionLock.writeLock().lock();
-    boolean result = freeSpaceNoEvictionLock(userId, availableBytes, location);
-    mEvictionLock.writeLock().unlock();
-    return result;
-  }
-
-  @Override
-  public boolean cleanupUser(long userId) {
-    mEvictionLock.readLock().lock();
-    mMetaManager.cleanupUser(userId);
-    mLockManager.cleanupUser(userId);
-    mEvictionLock.readLock().unlock();
-    return true;
-  }
-
-  @Override
-  public BlockStoreMeta getBlockStoreMeta() {
-    return mMetaManager.getBlockStoreMeta();
-  }
-
-  @Override
-  public void registerMetaListener(BlockMetaEventListener listener) {
-    mMetaEventListeners.add(listener);
-  }
-
-  @Override
-  public void registerAccessListener(BlockAccessEventListener listener) {
-    mAccessEventListeners.add(listener);
-  }
-
-  private Optional<TempBlockMeta> createBlockMetaNoLock(long userId, long blockId,
-      BlockStoreLocation location, long initialBlockSize) throws IOException {
-    Optional<TempBlockMeta> optTempBlock =
-        mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
-    if (!optTempBlock.isPresent()) {
-      
-
-      
-      mEvictionLock.readLock().unlock();
-      mEvictionLock.writeLock().lock();
-
-      boolean result = freeSpaceNoEvictionLock(userId, initialBlockSize, location);
-
-      
-      mEvictionLock.readLock().lock();
-      mEvictionLock.writeLock().unlock();
-
-      
-      if (!result) {
-        LOG.error("Cannot free {} bytes space in {}", initialBlockSize, location);
-        return Optional.absent();
-      }
-      optTempBlock = mAllocator.allocateBlock(userId, blockId, initialBlockSize, location);
-      Preconditions.checkState(optTempBlock.isPresent(), "Cannot allocate block {}:", blockId);
-    }
-    
-    mMetaManager.addTempBlockMeta(optTempBlock.get());
-    return optTempBlock;
-  }
-
-  private boolean commitBlockNoLock(long userId, long blockId) {
-    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
-    if (!optTempBlock.isPresent()) {
-      return false;
-    }
-    TempBlockMeta tempBlock = optTempBlock.get();
-    
-    if (tempBlock.getUserId() != userId) {
-      return false;
-    }
-    String sourcePath = tempBlock.getPath();
-    String destPath = tempBlock.getCommitPath();
-    boolean renamed = new File(sourcePath).renameTo(new File(destPath));
-    if (!renamed) {
-      return false;
-    }
-    return mMetaManager.commitTempBlockMeta(tempBlock);
-  }
-
-  private boolean abortBlockNoLock(long userId, long blockId) {
-    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
-    if (!optTempBlock.isPresent()) {
-      return false;
-    }
-    TempBlockMeta tempBlock = optTempBlock.get();
-    
-    if (tempBlock.getUserId() != userId) {
-      return false;
-    }
-    String path = tempBlock.getPath();
-    boolean deleted = new File(path).delete();
-    if (!deleted) {
-      return false;
-    }
-    return mMetaManager.abortTempBlockMeta(tempBlock);
-  }
-
-  private boolean requestSpaceNoLock(long userId, long blockId, long moreBytes) throws IOException {
-    Optional<TempBlockMeta> optTempBlock = mMetaManager.getTempBlockMeta(blockId);
-    if (!optTempBlock.isPresent()) {
-      return false;
-    }
-    TempBlockMeta tempBlock = optTempBlock.get();
-    BlockStoreLocation location = tempBlock.getBlockLocation();
-    if (!freeSpaceNoEvictionLock(userId, moreBytes, location)) {
-      return false;
-    }
-
-    
-    tempBlock.setBlockSize(tempBlock.getBlockSize() + moreBytes);
-    return true;
-  }
-
-  private boolean moveBlockNoLock(long userId, long blockId, BlockStoreLocation newLocation)
-      throws IOException {
-    Optional<BlockMeta> optSrcBlock = mMetaManager.getBlockMeta(blockId);
-    if (!optSrcBlock.isPresent()) {
-      return false;
-    }
-    String srcPath = optSrcBlock.get().getPath();
-    Optional<BlockMeta> optDestBlock = mMetaManager.moveBlockMeta(userId, blockId, newLocation);
-    if (!optDestBlock.isPresent()) {
-      return false;
-    }
-    String destPath = optDestBlock.get().getPath();
-
-    return new File(srcPath).renameTo(new File(destPath));
-  }
-
-  private boolean removeBlockNoLock(long userId, long blockId) throws IOException {
-    Optional<BlockMeta> optBlock = mMetaManager.getBlockMeta(blockId);
-    if (!optBlock.isPresent()) {
-      LOG.error("Block is not present");
-      return false;
-    }
-    BlockMeta block = optBlock.get();
-    
-    if (!mMetaManager.removeBlockMeta(block)) {
-      LOG.error("Unable to remove metadata");
-      return false;
-    }
-    
-    return new File(block.getPath()).delete();
-  }
-
-  private boolean freeSpaceNoEvictionLock(long userId, long availableBytes,
-      BlockStoreLocation location) throws IOException {
-    Optional<EvictionPlan> optPlan = mEvictor.freeSpace(availableBytes, location);
-    
-    if (!optPlan.isPresent()) {
-      LOG.error("Failed to free space: no eviction plan by evictor");
-      return false;
-    }
-    EvictionPlan plan = optPlan.get();
-    
-    for (long blockId : plan.toEvict()) {
-      
-      long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
-      boolean result = removeBlockNoLock(userId, blockId);
-      mLockManager.unlockBlock(lockId);
-      if (!result) {
-        LOG.error("Failed to free space: cannot evict block {}", blockId);
-        return false;
-      }
-    }
-    
-    for (Pair<Long, BlockStoreLocation> entry : plan.toMove()) {
-      long blockId = entry.getFirst();
-      BlockStoreLocation newLocation = entry.getSecond();
-      
-      long lockId = mLockManager.lockBlock(userId, blockId, BlockLockType.WRITE).get();
-      boolean result = moveBlockNoLock(userId, blockId, newLocation);
-      mLockManager.unlockBlock(lockId);
-      if (!result) {
-        LOG.error("Failed to free space: cannot move block {} to {}", blockId, newLocation);
-        return false;
-      }
-    }
-    return true;
-  }
-
-}
-
-<code block>
-
-
-package tachyon.worker.block;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Optional;
-
-import tachyon.Constants;
-import tachyon.conf.TachyonConf;
-import tachyon.worker.BlockStoreLocation;
-import tachyon.worker.block.meta.BlockMeta;
-import tachyon.worker.block.meta.StorageDir;
-import tachyon.worker.block.meta.StorageTier;
-import tachyon.worker.block.meta.TempBlockMeta;
-
-
-public class BlockMetadataManager {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  
-  private Map<Integer, StorageTier> mTiers;
-
-  public BlockMetadataManager(TachyonConf tachyonConf) {
-    
-    int totalTiers = tachyonConf.getInt(Constants.WORKER_MAX_TIERED_STORAGE_LEVEL, 1);
-    mTiers = new HashMap<Integer, StorageTier>(totalTiers);
-    for (int i = 0; i < totalTiers; i ++) {
-      int tierAlias = i + 1;
-      mTiers.put(tierAlias, new StorageTier(tachyonConf, tierAlias));
-    }
-  }
-
-  
-  public synchronized StorageTier getTier(int tierAlias) {
-    return mTiers.get(tierAlias);
-  }
-
-  
-  public synchronized List<StorageTier> getTiers() {
-    return new ArrayList<StorageTier>(mTiers.values());
-  }
-
-  
-  public synchronized long getAvailableBytes(BlockStoreLocation location) {
-    long spaceAvailable = 0;
-
-    if (location.equals(BlockStoreLocation.anyTier())) {
-      for (StorageTier tier : getTiers()) {
-        spaceAvailable += tier.getAvailableBytes();
-      }
-      return spaceAvailable;
-    }
-
-    int tierAlias = location.tierAlias();
-    StorageTier tier = getTier(tierAlias);
-    if (location.equals(BlockStoreLocation.anyDirInTier(tierAlias))) {
-      return tier.getAvailableBytes();
-    }
-
-    int dirIndex = location.dir();
-    StorageDir dir = tier.getDir(dirIndex);
-    return dir.getAvailableBytes();
-  }
-
-  
-  public synchronized boolean hasBlockMeta(long blockId) {
-    for (StorageTier tier : mTiers.values()) {
-      for (StorageDir dir : tier.getStorageDirs()) {
-        if (dir.hasBlockMeta(blockId)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  
-  public synchronized Optional<BlockMeta> getBlockMeta(long blockId) {
-    for (StorageTier tier : mTiers.values()) {
-      for (StorageDir dir : tier.getStorageDirs()) {
-        if (dir.hasBlockMeta(blockId)) {
-          return tier.getBlockMeta(blockId);
-        }
-      }
-    }
-    return Optional.absent();
-  }
-
-  
-  public synchronized Optional<BlockMeta> moveBlockMeta(long userId, long blockId,
-      BlockStoreLocation newLocation) {
-    
-    BlockMeta block = getBlockMeta(blockId).orNull();
-    if (block == null) {
-      LOG.error("No block found for block ID {}", blockId);
-      return Optional.absent();
-    }
-
-    
-    if (newLocation.equals(BlockStoreLocation.anyTier())) {
-      return Optional.of(block);
-    }
-
-    int newTierAlias = newLocation.tierAlias();
-    StorageTier newTier = getTier(newTierAlias);
-    StorageDir newDir = null;
-    if (newLocation.equals(BlockStoreLocation.anyDirInTier(newTierAlias))) {
-      for (StorageDir dir : newTier.getStorageDirs()) {
-        if (dir.getAvailableBytes() > block.getBlockSize()) {
-          newDir = dir;
-        }
-      }
-    } else {
-      newDir = newTier.getDir(newLocation.dir());
-    }
-
-    if (newDir == null) {
-      return Optional.absent();
-    }
-    StorageDir oldDir = block.getParentDir();
-    if (!oldDir.removeBlockMeta(block)) {
-      return Optional.absent();
-    }
-    return newDir.addBlockMeta(block);
-  }
-
-  
-  public synchronized boolean removeBlockMeta(BlockMeta block) {
-    StorageDir dir = block.getParentDir();
-    return dir.removeBlockMeta(block);
-  }
-
-  
-  public synchronized Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
-    for (StorageTier tier : mTiers.values()) {
-      for (StorageDir dir : tier.getStorageDirs()) {
-        if (dir.hasTempBlockMeta(blockId)) {
-          return dir.getTempBlockMeta(blockId);
-        }
-      }
-    }
-    return Optional.absent();
-  }
-
-  
-  public synchronized boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
-    StorageDir dir = tempBlockMeta.getParentDir();
-    return dir.addTempBlockMeta(tempBlockMeta);
-  }
-
-  
-  public synchronized boolean commitTempBlockMeta(TempBlockMeta tempBlockMeta) {
-    BlockMeta block = new BlockMeta(tempBlockMeta);
-    StorageDir dir = tempBlockMeta.getParentDir();
-    return dir.removeTempBlockMeta(tempBlockMeta) && dir.addBlockMeta(block).isPresent();
-
-  }
-
-  
-  public synchronized boolean abortTempBlockMeta(TempBlockMeta tempBlockMeta) {
-    StorageDir dir = tempBlockMeta.getParentDir();
-    return dir.removeTempBlockMeta(tempBlockMeta);
-  }
-
-  
-  public synchronized void cleanupUser(long userId) {
-    for (StorageTier tier : mTiers.values()) {
-      for (StorageDir dir : tier.getStorageDirs()) {
-        dir.cleanupUser(userId);
-      }
-    }
-  }
-
-  
-  public synchronized BlockStoreMeta getBlockStoreMeta() {
-    return new BlockStoreMeta(this);
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Sets;
-
-import tachyon.Constants;
-import tachyon.StorageDirId;
-
-
-public class StorageDir {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  
-  private Map<Long, BlockMeta> mBlockIdToBlockMap;
-  
-  private Map<Long, TempBlockMeta> mBlockIdToTempBlockMap;
-  
-  private Map<Long, Set<Long>> mUserIdToTempBlockIdsMap;
-
-  private final long mCapacityBytes;
-  private long mAvailableBytes;
-  private String mDirPath;
-  private int mDirIndex;
-  private StorageTier mTier;
-
-  public StorageDir(StorageTier tier, int dirIndex, long capacityBytes, String dirPath) {
-    mTier = Preconditions.checkNotNull(tier);
-    mDirIndex = dirIndex;
-    mCapacityBytes = capacityBytes;
-    mAvailableBytes = capacityBytes;
-    mDirPath = dirPath;
-    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
-    mBlockIdToTempBlockMap = new HashMap<Long, TempBlockMeta>(200);
-    mUserIdToTempBlockIdsMap = new HashMap<Long, Set<Long>>(200);
-  }
-
-  public long getCapacityBytes() {
-    return mCapacityBytes;
-  }
-
-  public long getAvailableBytes() {
-    return mAvailableBytes;
-  }
-
-  public String getDirPath() {
-    return mDirPath;
-  }
-
-  public StorageTier getParentTier() {
-    return mTier;
-  }
-
-  public int getDirIndex() {
-    return mDirIndex;
-  }
-
-  
-  public long getStorageDirId() {
-    int level = mTier.getTierAlias() - 1;
-    int storageLevelAliasValue = mTier.getTierAlias();
-    return StorageDirId.getStorageDirId(level, storageLevelAliasValue, mDirIndex);
-  }
-
-  
-  public List<Long> getBlockIds() {
-    return new ArrayList<Long>(mBlockIdToBlockMap.keySet());
-  }
-
-  public Collection<BlockMeta> getBlocks() {
-    return mBlockIdToBlockMap.values();
-  }
-
-  
-  public boolean hasBlockMeta(long blockId) {
-    return mBlockIdToBlockMap.containsKey(blockId);
-  }
-
-  
-  public boolean hasTempBlockMeta(long blockId) {
-    return mBlockIdToTempBlockMap.containsKey(blockId);
-  }
-
-  
-  public Optional<BlockMeta> getBlockMeta(long blockId) {
-    return Optional.fromNullable(mBlockIdToBlockMap.get(blockId));
-  }
-
-  
-  public Optional<TempBlockMeta> getTempBlockMeta(long blockId) {
-    return Optional.fromNullable(mBlockIdToTempBlockMap.get(blockId));
-  }
-
-  
-  public Optional<BlockMeta> addBlockMeta(BlockMeta block) {
-    long blockId = block.getBlockId();
-    long blockSize = block.getBlockSize();
-
-    if (getAvailableBytes() < blockSize) {
-      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
-          blockId, toString(), blockSize, getAvailableBytes());
-      return Optional.absent();
-    }
-    if (hasBlockMeta(blockId)) {
-      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
-      return Optional.absent();
-    }
-    mBlockIdToBlockMap.put(blockId, block);
-    mAvailableBytes -= blockSize;
-    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
-    return Optional.of(block);
-  }
-
-
-  
-  public boolean addTempBlockMeta(TempBlockMeta tempBlockMeta) {
-    long userId = tempBlockMeta.getUserId();
-    long blockId = tempBlockMeta.getBlockId();
-    long blockSize = tempBlockMeta.getBlockSize();
-    mBlockIdToTempBlockMap.put(blockId, tempBlockMeta);
-    Set<Long> userTempBlocks = mUserIdToTempBlockIdsMap.get(userId);
-    if (null == userTempBlocks) {
-      mUserIdToTempBlockIdsMap.put(userId, Sets.newHashSet(blockId));
-    } else {
-      userTempBlocks.add(blockId);
-    }
-    mAvailableBytes -= blockSize;
-    return true;
-  }
-
-  
-  public boolean removeBlockMeta(BlockMeta block) {
-    Preconditions.checkNotNull(block);
-    mBlockIdToBlockMap.remove(block.getBlockId());
-    mAvailableBytes += block.getBlockSize();
-    return true;
-  }
-
-  
-  public boolean removeTempBlockMeta(TempBlockMeta tempBlockMeta) {
-    Preconditions.checkNotNull(tempBlockMeta);
-    long blockId = tempBlockMeta.getBlockId();
-    mBlockIdToTempBlockMap.remove(blockId);
-    Preconditions.checkNotNull(tempBlockMeta);
-    for (Map.Entry<Long, Set<Long>> entry : mUserIdToTempBlockIdsMap.entrySet()) {
-      Long userId = entry.getKey();
-      Set<Long> userBlocks = entry.getValue();
-      if (userBlocks.contains(blockId)) {
-        Preconditions.checkState(userBlocks.remove(blockId));
-        if (userBlocks.isEmpty()) {
-          mUserIdToTempBlockIdsMap.remove(userId);
-        }
-        mAvailableBytes += tempBlockMeta.getBlockSize();
-        Preconditions.checkState(mCapacityBytes >= mAvailableBytes,
-            "Available bytes should always be less than total capacity bytes");
-        return true;
-      }
-    }
-    return false;
-  }
-
-  
-  public void cleanupUser(long userId) {
-    Set<Long> userTempBlocks = mUserIdToTempBlockIdsMap.get(userId);
-    if (null == userTempBlocks) {
-      return;
-    }
-    for (long blockId : userTempBlocks) {
-      mBlockIdToTempBlockMap.remove(blockId);
-    }
-    mUserIdToTempBlockIdsMap.remove(userId);
-  }
-}
-
-<code block>
-
-
-package tachyon.client;
-
-import java.io.IOException;
-import java.nio.ByteBuffer;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.io.Closer;
-import com.google.common.primitives.Ints;
-
-import tachyon.Constants;
-import tachyon.conf.TachyonConf;
-import tachyon.util.CommonUtils;
-
-
-public class RemoteBlockOutStream extends BlockOutStream {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  private final int mBlockIndex;
-  private final long mBlockId;
-  private final long mBlockCapacityBytes;
-  private final Closer mCloser;
-  private final RemoteBlockWriter mRemoteWriter;
-
-  
-  private final ByteBuffer mBuffer;
-  
-  private final long mBufferBytes;
-  
-  private long mWrittenBytes = 0;
-  
-  private long mFlushedBytes = 0;
-  
-  private boolean mClosed = true;
-
-  
-  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, TachyonConf tachyonConf)
-      throws IOException {
-    this(file, opType, blockIndex, tachyonConf.getBytes(Constants.USER_QUOTA_UNIT_BYTES,
-        8 * Constants.MB), tachyonConf);
-  }
-
-  
-  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, long initialBytes,
-      TachyonConf tachyonConf) throws IOException {
-    super(file, opType, tachyonConf);
-
-    if (!opType.isCache()) {
-      throw new IOException("RemoteBlockOutStream only support WriteType.CACHE");
-    }
-
-    mBlockIndex = blockIndex;
-    mBlockCapacityBytes = mFile.getBlockSizeByte();
-    mBlockId = mFile.getBlockId(mBlockIndex);
-    mCloser = Closer.create();
-
-    
-    mBufferBytes = mTachyonConf.getBytes(Constants.USER_FILE_BUFFER_BYTES, Constants.MB);
-    mBuffer = ByteBuffer.allocate(Ints.checkedCast(mBufferBytes));
-
-    
-    mRemoteWriter =
-        mCloser.register(RemoteBlockWriter.Factory.createRemoteBlockWriter(tachyonConf));
-    mRemoteWriter.open(mTachyonFS.getWorkerDataServerAddress(), mBlockId, mTachyonFS.getUserId());
-    mClosed = false;
-  }
-
-  
-  private synchronized void writeToRemoteBlock(byte[] bytes, int offset, int length)
-      throws IOException {
-    mRemoteWriter.write(bytes, offset, length);
-    mFlushedBytes += length;
-  }
-
-  
-  private void flushBuffer() throws IOException {
-    writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
-    mBuffer.clear();
-  }
-
-  @Override
-  public void cancel() throws IOException {
-    if (!mClosed) {
-      mCloser.close();
-      mClosed = true;
-      if (mFlushedBytes > 0) {
-        mTachyonFS.cancelBlock(mBlockId);
-      }
-      LOG.info(String.format("Canceled output of block. blockId(%d)", mBlockId));
-    }
-  }
-
-  @Override
-  public void close() throws IOException {
-    if (!mClosed) {
-      if (mBuffer.position() > 0) {
-        writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
-      }
-      mCloser.close();
-      if (mWrittenBytes > 0) {
-        mTachyonFS.cacheBlock(mBlockId);
-      }
-      mClosed = true;
-    }
-  }
-
-  @Override
-  public void flush() throws IOException {
-    if (mBuffer.position() > 0) {
-      flushBuffer();
-    }
-  }
-
-  
-  public long getBlockId() {
-    return mBlockId;
-  }
-
-  
-  @Override
-  public long getRemainingSpaceBytes() {
-    return mBlockCapacityBytes - mWrittenBytes;
-  }
-
-  @Override
-  public void write(byte[] b) throws IOException {
-    write(b, 0, b.length);
-  }
-
-  @Override
-  public void write(byte[] b, int off, int len) throws IOException {
-    if (b == null) {
-      throw new NullPointerException();
-    } else if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
-        || ((off + len) < 0)) {
-      throw new IndexOutOfBoundsException(String.format("Buffer length (%d), offset(%d), len(%d)",
-          b.length, off, len));
-    }
-    if (mClosed) {
-      throw new IOException("Cannot write because block is already closed. blockId: " + mBlockId);
-    }
-    if (mWrittenBytes + len > mBlockCapacityBytes) {
-      throw new IOException("Out of capacity.");
-    }
-    if (len == 0) {
-      return;
-    }
-
-    if (mBuffer.position() > 0 && mBuffer.position() + len > mBufferBytes) {
-      
-      flushBuffer();
-    }
-
-    if (len > mBufferBytes / 2) {
-      
-      
-      if (mBuffer.position() > 0) {
-        
-        flushBuffer();
-      }
-      writeToRemoteBlock(b, off, len);
-    } else {
-      
-      mBuffer.put(b, off, len);
-    }
-
-    mWrittenBytes += len;
-  }
-
-  @Override
-  public void write(int b) throws IOException {
-    if (mClosed) {
-      throw new IOException("Cannot write because block is already closed. blockId: " + mBlockId);
-    }
-    if (mWrittenBytes + 1 > mBlockCapacityBytes) {
-      throw new IOException("Out of capacity.");
-    }
-    if (mBuffer.position() >= mBufferBytes) {
-      flushBuffer();
-    }
-    CommonUtils.putIntByteBuffer(mBuffer, b);
-    mWrittenBytes ++;
-  }
-}
-
-<code block>
-
-
-package tachyon.client;
-
-import java.io.IOException;
-
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
-
-import tachyon.Constants;
-import tachyon.TachyonURI;
-import tachyon.conf.TachyonConf;
-import tachyon.master.LocalTachyonCluster;
-
-
-public class BlockOutStreamIntegrationTest {
-  private static LocalTachyonCluster sLocalTachyonCluster = null;
-
-  @AfterClass
-  public static final void afterClass() throws Exception {
-    sLocalTachyonCluster.stop();
-  }
-
-  @BeforeClass
-  public static final void beforeClass() throws IOException {
-    sLocalTachyonCluster = new LocalTachyonCluster(10000, 1000, Constants.GB);
-    sLocalTachyonCluster.start();
-  }
-
-  
-  private BlockOutStream getBlockOutStream(String filename, boolean isLocalWrite)
-      throws IOException {
-    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
-    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, Boolean.toString(isLocalWrite));
-    TachyonFS fs = TachyonFS.get(conf);
-
-    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI(filename)));
-    return BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
-  }
-
-  
-  @Test
-  public void disableLocalWriteTest() throws IOException {
-    BlockOutStream os = getBlockOutStream("/file_no_local_write", false);
-    Assert.assertTrue(os instanceof RemoteBlockOutStream);
-    os.close();
-  }
-
-  
-  @Test
-  public void enableLocalWriteTest() throws IOException {
-    BlockOutStream os = getBlockOutStream("/file_local_write", true);
-    Assert.assertTrue(os instanceof LocalBlockOutStream);
-    os.close();
-  }
-
-  
-  @Test
-  public void cancelRemoteWriteTest() throws IOException {
-    BlockOutStream os = getBlockOutStream("/file_cancel_remote_write", false);
-    Assert.assertTrue(os instanceof RemoteBlockOutStream);
-    os.cancel();
-  }
-
-  
-  @Test
-  public void cancelLocalWriteTest() throws IOException {
-    BlockOutStream os = getBlockOutStream("/file_cancel_local_write", true);
-    Assert.assertTrue(os instanceof LocalBlockOutStream);
-    os.cancel();
-  }
-
-}
-
-<code block>
-
-
-package tachyon.client;
-
-import java.io.IOException;
-import java.nio.ByteBuffer;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.io.Closer;
-import com.google.common.primitives.Ints;
-
-import tachyon.Constants;
-import tachyon.conf.TachyonConf;
-import tachyon.util.CommonUtils;
-
-
-public class RemoteBlockOutStream extends BlockOutStream {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  private final int mBlockIndex;
-  private final long mBlockId;
-  private final long mBlockCapacityBytes;
-  private final Closer mCloser;
-  private final RemoteBlockWriter mRemoteWriter;
-
-  
-  private final ByteBuffer mBuffer;
-  
-  private final long mBufferBytes;
-  
-  private long mWrittenBytes = 0;
-  
-  private boolean mOpen = false;
-
-  
-  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, TachyonConf tachyonConf)
-      throws IOException {
-    this(file, opType, blockIndex, tachyonConf.getBytes(Constants.USER_QUOTA_UNIT_BYTES,
-        8 * Constants.MB), tachyonConf);
-  }
-
-  
-  RemoteBlockOutStream(TachyonFile file, WriteType opType, int blockIndex, long initialBytes,
-      TachyonConf tachyonConf) throws IOException {
-    super(file, opType, tachyonConf);
-
-    if (!opType.isCache()) {
-      throw new IOException("RemoteBlockOutStream only support WriteType.CACHE");
-    }
-
-    mBlockIndex = blockIndex;
-    mBlockCapacityBytes = mFile.getBlockSizeByte();
-    mBlockId = mFile.getBlockId(mBlockIndex);
-    mCloser = Closer.create();
-
-    
-    mBufferBytes = mTachyonConf.getBytes(Constants.USER_FILE_BUFFER_BYTES, Constants.MB);
-    long allocateBytes = mBufferBytes;
-    mBuffer = ByteBuffer.allocate(Ints.checkedCast(allocateBytes));
-
-    
-    mRemoteWriter =
-        mCloser.register(RemoteBlockWriter.Factory.createRemoteBlockWriter(tachyonConf));
-    mRemoteWriter.open(mTachyonFS.getWorkerDataServerAddress(), mBlockId, mTachyonFS.getUserId());
-    mOpen = true;
-  }
-
-  
-  private synchronized void writeToRemoteBlock(byte[] bytes, int offset, int length)
-      throws IOException {
-    mRemoteWriter.write(bytes, offset, length);
-  }
-
-  
-  private void flushBuffer() throws IOException {
-    writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
-    mBuffer.clear();
-  }
-
-  @Override
-  public void cancel() throws IOException {
-    if (mOpen) {
-      mCloser.close();
-      mOpen = false;
-      if (mWrittenBytes > 0) {
-        mTachyonFS.cancelBlock(mBlockId);
-      }
-      LOG.info(String.format("Canceled output of block. blockId(%d)", mBlockId));
-    }
-  }
-
-  @Override
-  public void close() throws IOException {
-    if (mOpen) {
-      if (mBuffer.position() > 0) {
-        writeToRemoteBlock(mBuffer.array(), 0, mBuffer.position());
-      }
-      mCloser.close();
-      if (mWrittenBytes > 0) {
-        mTachyonFS.cacheBlock(mBlockId);
-      }
-      mOpen = false;
-    }
-  }
-
-  @Override
-  public void flush() throws IOException {
-    if (mBuffer.position() > 0) {
-      flushBuffer();
-    }
-  }
-
-  
-  public long getBlockId() {
-    return mBlockId;
-  }
-
-  
-  @Override
-  public long getRemainingSpaceBytes() {
-    return mBlockCapacityBytes - mWrittenBytes;
-  }
-
-  @Override
-  public void write(byte[] b) throws IOException {
-    write(b, 0, b.length);
-  }
-
-  @Override
-  public void write(byte[] b, int off, int len) throws IOException {
-    if (b == null) {
-      throw new NullPointerException();
-    } else if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
-        || ((off + len) < 0)) {
-      throw new IndexOutOfBoundsException(String.format("Buffer length (%d), offset(%d), len(%d)",
-          b.length, off, len));
-    }
-    if (!mOpen) {
-      throw new IOException("Can not write cache.");
-    }
-    if (mWrittenBytes + len > mBlockCapacityBytes) {
-      throw new IOException("Out of capacity.");
-    }
-    if (len == 0) {
-      return;
-    }
-
-    if (mBuffer.position() > 0 && mBuffer.position() + len > mBufferBytes) {
-      
-      flushBuffer();
-    }
-
-    if (len > mBufferBytes / 2) {
-      
-      
-      if (mBuffer.position() > 0) {
-        
-        flushBuffer();
-      }
-      writeToRemoteBlock(b, off, len);
-    } else {
-      
-      mBuffer.put(b, off, len);
-    }
-
-    mWrittenBytes += len;
-  }
-
-  @Override
-  public void write(int b) throws IOException {
-    if (!mOpen) {
-      throw new IOException("Can not write cache.");
-    }
-    if (mWrittenBytes + 1 > mBlockCapacityBytes) {
-      throw new IOException("Out of capacity.");
-    }
-    if (mBuffer.position() >= mBufferBytes) {
-      flushBuffer();
-    }
-    CommonUtils.putIntByteBuffer(mBuffer, b);
-    mWrittenBytes ++;
-  }
-}
-
-<code block>
-
-
-package tachyon.client;
-
-import java.io.IOException;
-
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
-
-import tachyon.Constants;
-import tachyon.TachyonURI;
-import tachyon.conf.TachyonConf;
-import tachyon.master.LocalTachyonCluster;
-
-
-public class BlockOutStreamIntegrationTest {
-  private static LocalTachyonCluster sLocalTachyonCluster = null;
-
-  @AfterClass
-  public static final void afterClass() throws Exception {
-    sLocalTachyonCluster.stop();
-  }
-
-  @BeforeClass
-  public static final void beforeClass() throws IOException {
-    sLocalTachyonCluster = new LocalTachyonCluster(10000, 1000, Constants.GB);
-    sLocalTachyonCluster.start();
-  }
-
-  
-  @Test
-  public void disableLocalWriteTest() throws IOException {
-    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
-    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, "false");
-    TachyonFS fs = TachyonFS.get(conf);
-
-    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI("/file_no_local_write")));
-    BlockOutStream os = BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
-    Assert.assertTrue(os instanceof RemoteBlockOutStream);
-    os.close();
-  }
-
-  
-  @Test
-  public void enableLocalWriteTest() throws IOException {
-    TachyonConf conf = sLocalTachyonCluster.getWorkerTachyonConf();
-    conf.set(Constants.USER_ENABLE_LOCAL_WRITE, "true");
-    TachyonFS fs = TachyonFS.get(conf);
-
-    TachyonFile file = fs.getFile(fs.createFile(new TachyonURI("/file_local_write")));
-    BlockOutStream os = BlockOutStream.get(file, WriteType.MUST_CACHE, 0, conf);
-    Assert.assertTrue(os instanceof LocalBlockOutStream);
-    os.close();
   }
 }
 
@@ -2245,7 +3010,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
 
   private BlockMetadataManagerView mManagerView;
 
-  
+
   private Map<Long, Boolean> mLRUCache = Collections
       .synchronizedMap(new LinkedHashMap<Long, Boolean>(LINKED_HASH_MAP_INIT_CAPACITY,
           LINKED_HASH_MAP_INIT_LOAD_FACTOR, LINKED_HASH_MAP_ACCESS_ORDERED));
@@ -2253,7 +3018,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
   public LRUEvictor(BlockMetadataManagerView view) {
     mManagerView = Preconditions.checkNotNull(view);
 
-    
+
     for (StorageTierView tierView : mManagerView.getTierViews()) {
       for (StorageDirView dirView : tierView.getDirViews()) {
         for (BlockMeta blockMeta : dirView.getEvictableBlocks()) { 
@@ -2263,7 +3028,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
     }
   }
 
-  
+
   private StorageDirView selectDirWithRequestedSpace(long bytesToBeAvailable,
       BlockStoreLocation location) throws IOException {
     if (location.equals(BlockStoreLocation.anyTier())) {
@@ -2292,227 +3057,18 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
     return (dirView.getAvailableBytes() >= bytesToBeAvailable) ? dirView : null;
   }
 
-  
+
   private StorageDirView cascadingEvict(long bytesToBeAvailable, BlockStoreLocation location,
       EvictionPlan plan) throws IOException {
 
-    
+
     StorageDirView candidateDirView = selectDirWithRequestedSpace(bytesToBeAvailable, location);
     if (candidateDirView != null) {
       return candidateDirView;
     }
 
-    
-    
-    EvictionDirCandidates dirCandidates = new EvictionDirCandidates();
-    Iterator<Map.Entry<Long, Boolean>> it = mLRUCache.entrySet().iterator();
-    while (it.hasNext() && dirCandidates.candidateSize() < bytesToBeAvailable) {
-      long blockId = it.next().getKey();
-      try {
-        BlockMeta block = mManagerView.getBlockMeta(blockId);
-        if (null != block) { 
-          if (block.getBlockLocation().belongTo(location)) {
-            int tierAlias = block.getParentDir().getParentTier().getTierAlias();
-            int dirIndex = block.getParentDir().getDirIndex();
-            dirCandidates.add(mManagerView.getTierView(tierAlias).getDirView(dirIndex), blockId,
-                block.getBlockSize());
-          }
-        }
-      } catch (IOException ioe) {
-        LOG.warn("Remove block {} from LRU Cache because {}", blockId, ioe);
-        it.remove();
-      }
-    }
-
-    
-    if (dirCandidates.candidateSize() < bytesToBeAvailable) {
-      return null;
-    }
-
-    
-    
-    candidateDirView = dirCandidates.candidateDir();
-    List<Long> candidateBlocks = dirCandidates.candidateBlocks();
-    List<StorageTierView> tierViewsBelow =
-        mManagerView.getTierViewsBelow(candidateDirView.getParentTierView().getTierViewAlias());
-    
-    StorageDirView candidateNextDir = null;
-    for (StorageTierView tierView : tierViewsBelow) {
-      candidateNextDir =
-          cascadingEvict(dirCandidates.candidateSize(),
-              BlockStoreLocation.anyDirInTier(tierView.getTierViewAlias()), plan);
-      if (candidateNextDir != null) {
-        break;
-      }
-    }
-    if (candidateNextDir == null) {
-      
-      plan.toEvict().addAll(candidateBlocks);
-    } else {
-      BlockStoreLocation dest = candidateNextDir.toBlockStoreLocation();
-      for (long block : candidateBlocks) {
-        plan.toMove().add(new Pair<Long, BlockStoreLocation>(block, dest));
-      }
-    }
-    return candidateDirView;
-  }
 
 
-  @Override
-  public EvictionPlan freeSpaceWithView(long bytesToBeAvailable, BlockStoreLocation location,
-      BlockMetadataManagerView view) throws IOException {
-    mManagerView = view;
-
-    List<Pair<Long, BlockStoreLocation>> toMove = new ArrayList<Pair<Long, BlockStoreLocation>>();
-    List<Long> toEvict = new ArrayList<Long>();
-    EvictionPlan plan = new EvictionPlan(toMove, toEvict);
-    StorageDirView candidateDir = cascadingEvict(bytesToBeAvailable, location, plan);
-
-    if (candidateDir == null) {
-      return null;
-    }
-    if (plan.isEmpty()) {
-      return plan;
-    }
-
-    
-    Iterator<Pair<Long, BlockStoreLocation>> moveIt = plan.toMove().iterator();
-    while (moveIt.hasNext()) {
-      long id = moveIt.next().getFirst();
-      if (null == mManagerView.getBlockMeta(id)) {
-        mLRUCache.remove(id);
-        moveIt.remove();
-      }
-    }
-    Iterator<Long> evictIt = plan.toEvict().iterator();
-    while (evictIt.hasNext()) {
-      long id = evictIt.next();
-      if (null == mManagerView.getBlockMeta(id)) {
-        mLRUCache.remove(id);
-        evictIt.remove();
-      }
-    }
-
-    return EvictorUtils.legalCascadingPlan(bytesToBeAvailable, plan, mManagerView) ? plan : null;
-  }
-
-  @Override
-  public void onAccessBlock(long userId, long blockId) {
-    mLRUCache.put(blockId, UNUSED_MAP_VALUE);
-  }
-
-  @Override
-  public void onCommitBlock(long userId, long blockId, BlockStoreLocation location) {
-    
-    mLRUCache.put(blockId, UNUSED_MAP_VALUE);
-  }
-
-  @Override
-  public void onRemoveBlockByClient(long userId, long blockId) {
-    mLRUCache.remove(blockId);
-  }
-
-  @Override
-  public void onRemoveBlockByWorker(long userId, long blockId) {
-    mLRUCache.remove(blockId);
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.evictor;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Preconditions;
-
-import tachyon.Constants;
-import tachyon.Pair;
-import tachyon.worker.block.BlockMetadataManagerView;
-import tachyon.worker.block.BlockStoreEventListenerBase;
-import tachyon.worker.block.BlockStoreLocation;
-import tachyon.worker.block.meta.BlockMeta;
-import tachyon.worker.block.meta.StorageDirView;
-import tachyon.worker.block.meta.StorageTierView;
-
-public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-  private static final int LINKED_HASH_MAP_INIT_CAPACITY = 200;
-  private static final float LINKED_HASH_MAP_INIT_LOAD_FACTOR = 0.75f;
-  private static final boolean LINKED_HASH_MAP_ACCESS_ORDERED = true;
-  private static final boolean UNUSED_MAP_VALUE = true;
-
-  private BlockMetadataManagerView mManagerView;
-
-  
-  private Map<Long, Boolean> mLRUCache = Collections
-      .synchronizedMap(new LinkedHashMap<Long, Boolean>(LINKED_HASH_MAP_INIT_CAPACITY,
-          LINKED_HASH_MAP_INIT_LOAD_FACTOR, LINKED_HASH_MAP_ACCESS_ORDERED));
-
-  public LRUEvictor(BlockMetadataManagerView view) {
-    mManagerView = Preconditions.checkNotNull(view);
-
-    
-    for (StorageTierView tierView : mManagerView.getTierViews()) {
-      for (StorageDirView dirView : tierView.getDirViews()) {
-        for (BlockMeta blockMeta : dirView.getEvictableBlocks()) { 
-          mLRUCache.put(blockMeta.getBlockId(), UNUSED_MAP_VALUE);
-        }
-      }
-    }
-  }
-
-  
-  private StorageDirView selectDirWithRequestedSpace(long bytesToBeAvailable,
-      BlockStoreLocation location) throws IOException {
-    if (location.equals(BlockStoreLocation.anyTier())) {
-      for (StorageTierView tierView : mManagerView.getTierViews()) {
-        for (StorageDirView dirView : tierView.getDirViews()) {
-          if (dirView.getAvailableBytes() >= bytesToBeAvailable) {
-            return dirView;
-          }
-        }
-      }
-      return null;
-    }
-
-    int tierAlias = location.tierAlias();
-    StorageTierView tierView = mManagerView.getTierView(tierAlias);
-    if (location.equals(BlockStoreLocation.anyDirInTier(tierAlias))) {
-      for (StorageDirView dirView : tierView.getDirViews()) {
-        if (dirView.getAvailableBytes() >= bytesToBeAvailable) {
-          return dirView;
-        }
-      }
-      return null;
-    }
-
-    StorageDirView dirView = tierView.getDirView(location.dir());
-    return (dirView.getAvailableBytes() >= bytesToBeAvailable) ? dirView : null;
-  }
-
-  
-  private StorageDirView cascadingEvict(long bytesToBeAvailable, BlockStoreLocation location,
-      EvictionPlan plan) throws IOException {
-
-    
-    StorageDirView candidateDirView = selectDirWithRequestedSpace(bytesToBeAvailable, location);
-    if (candidateDirView != null) {
-      return candidateDirView;
-    }
-
-    
-    
     EvictionDirCandidates dirCandidates = new EvictionDirCandidates();
     Iterator<Map.Entry<Long, Boolean>> it = mLRUCache.entrySet().iterator();
     while (it.hasNext() && dirCandidates.candidateSize() < bytesToBeAvailable) {
@@ -2533,18 +3089,18 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
       }
     }
 
-    
+
     if (dirCandidates.candidateSize() < bytesToBeAvailable) {
       return null;
     }
 
-    
-    
+
+
     candidateDirView = dirCandidates.candidateDir();
     List<Long> candidateBlocks = dirCandidates.candidateBlocks();
     List<StorageTierView> tierViewsBelow =
         mManagerView.getTierViewsBelow(candidateDirView.getParentTierView().getTierViewAlias());
-    
+
     StorageDirView candidateNextDir = null;
     for (StorageTierView tierView : tierViewsBelow) {
       candidateNextDir =
@@ -2555,7 +3111,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
       }
     }
     if (candidateNextDir == null) {
-      
+
       plan.toEvict().addAll(candidateBlocks);
     } else {
       BlockStoreLocation dest = candidateNextDir.toBlockStoreLocation();
@@ -2574,7 +3130,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
     return freeSpace(bytesToBeAvailable, location);
   }
 
-  
+
   private EvictionPlan freeSpace(long bytesToBeAvailable, BlockStoreLocation location)
       throws IOException {
     List<Pair<Long, BlockStoreLocation>> toMove = new ArrayList<Pair<Long, BlockStoreLocation>>();
@@ -2589,7 +3145,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
       return plan;
     }
 
-    
+
     Iterator<Pair<Long, BlockStoreLocation>> moveIt = plan.toMove().iterator();
     while (moveIt.hasNext()) {
       long id = moveIt.next().getFirst();
@@ -2617,7 +3173,7 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
 
   @Override
   public void onCommitBlock(long userId, long blockId, BlockStoreLocation location) {
-    
+
     mLRUCache.put(blockId, UNUSED_MAP_VALUE);
   }
 
@@ -2635,764 +3191,208 @@ public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
 <code block>
 
 
-package tachyon.worker.block.meta;
+package tachyon.worker.block.evictor;
 
-import tachyon.util.CommonUtils;
-
-
-public class BlockMeta extends BlockMetaBase {
-  private final long mBlockSize;
-
-  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
-    super(blockId, dir);
-    mBlockSize = blockSize;
-  }
-
-  public BlockMeta(TempBlockMeta tempBlock) {
-    super(tempBlock.getBlockId(), tempBlock.getParentDir();
-    mBlockSize = tempBlock.getBlockSize();
-  }
-
-  @Override
-  public long getBlockSize() {
-    return mBlockSize;
-  }
-
-  @Override
-  public String getPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
-
-import com.google.common.base.Optional;
-
-import tachyon.Constants;
-import tachyon.conf.TachyonConf;
-import tachyon.util.CommonUtils;
-
-
-public class StorageTier {
-  private HashMap<Integer, StorageDir> mIdToStorageDirMap;
-  private final int mTierId;
-
-  public StorageTier(TachyonConf tachyonConf, int tier) {
-    mTierId = tier;
-    String tierDirPathConf =
-        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_PATH_FORMAT, tier);
-    String[] dirPaths = tachyonConf.get(tierDirPathConf, "/mnt/ramdisk").split(",");
-
-    String tierDirCapacityConf =
-        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_QUOTA_FORMAT, tier);
-    String[] dirQuotas = tachyonConf.get(tierDirCapacityConf, "0").split(",");
-
-    mIdToStorageDirMap = new HashMap<Integer, StorageDir>(dirPaths.length);
-
-    for (int i = 0; i < dirPaths.length; i ++) {
-      int index = i >= dirQuotas.length ? dirQuotas.length - 1 : i;
-      long capacity = CommonUtils.parseSpaceSize(dirQuotas[index]);
-      mIdToStorageDirMap.put(i, new StorageDir(i, capacity, dirPaths[i]));
-    }
-  }
-
-  public int getTierId() {
-    return mTierId;
-  }
-
-  public long getCapacityBytes() {
-    long capacityBytes = 0;
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      capacityBytes += dir.getCapacityBytes();
-    }
-    return capacityBytes;
-  }
-
-  public long getAvailableBytes() {
-    long availableBytes = 0;
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      availableBytes += dir.getAvailableBytes();
-    }
-    return availableBytes;
-  }
-
-  public Set<StorageDir> getStorageDirs() {
-    return new HashSet<StorageDir>(mIdToStorageDirMap.values());
-  }
-
-  public Optional<BlockMeta> getBlockMeta(long blockId) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      Optional<BlockMeta> optionalBlock = dir.getBlockMeta(blockId);
-      if (optionalBlock.isPresent()) {
-        return optionalBlock;
-      }
-    }
-    return Optional.absent();
-  }
-
-  public Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      Optional<BlockMeta> optionalBlock = dir.addBlockMeta(userId, blockId, blockSize);
-      if (optionalBlock.isPresent()) {
-        return optionalBlock;
-      }
-    }
-    return Optional.absent();
-  }
-
-  public boolean removeBlockMeta(long blockId) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      if (dir.hasBlockMeta(blockId)) {
-        return dir.removeBlockMeta(blockId);
-      }
-    }
-    return false;
-  }
-
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import java.util.HashMap;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Sets;
 
 import tachyon.Constants;
-
-
-public class StorageDir {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  private Map<Long, BlockMeta> mBlockIdToBlockMap;
-  private Map<Long, Set<Long>> mUserIdToBlocksMap;
-  private long mCapacityBytes;
-  private long mAvailableBytes;
-  private String mDirPath;
-  private int mDirId;
-  private StorageTier mTier;
-
-  public StorageDir(StorageTier tier, int dirId, long capacityBytes, String dirPath) {
-    mTier = Preconditions.checkNotNull(tier);
-    mDirId = dirId;
-    mCapacityBytes = capacityBytes;
-    mAvailableBytes = capacityBytes;
-    mDirPath = dirPath;
-    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
-    mUserIdToBlocksMap = new HashMap<Long, Set<Long>>(20);
-  }
-
-  public long getCapacityBytes() {
-    return mCapacityBytes;
-  }
-
-  public long getAvailableBytes() {
-    return mAvailableBytes;
-  }
-
-  public String getDirPath() {
-    return mDirPath;
-  }
-
-  public StorageTier getParentTier() {
-    return mTier;
-  }
-
-  public int getDirId() {
-    return mDirId;
-  }
-
-  
-  boolean hasBlockMeta(long blockId) {
-    return mBlockIdToBlockMap.containsKey(blockId)
-  }
-
-  
-  Optional<BlockMeta> getBlockMeta(long blockId) {
-    if (!hasBlockMeta(blockId)) {
-      return Optional.absent();
-    }
-    return Optional.of(mBlockIdToBlockMap.get(blockId));
-  }
-
-  
-  Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
-    if (getAvailableBytes() < blockSize) {
-      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
-          blockId, toString(), blockSize, getAvailableBytes());
-      return Optional.absent();
-    }
-    if (hasBlockMeta(blockId)) {
-      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
-      return Optional.absent();
-    }
-    Set<Long> userBlocks = mUserIdToBlocksMap.get(userId);
-    if (null == userBlocks) {
-      mUserIdToBlocksMap.put(userId, Sets.newHashSet(blockId));
-    } else {
-      userBlocks.add(blockId);
-    }
-    BlockMeta block = new BlockMeta(blockId, blockSize, getDirPath());
-    mBlockIdToBlockMap.put(userId, block);
-    mCapacityBytes += blockSize;
-    mAvailableBytes -= blockSize;
-    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
-    return Optional.of(block);
-  }
-
-  
-  boolean removeBlockMeta(long blockId) {
-    if (!hasBlockMeta(blockId)) {
-      return false;
-    }
-    BlockMeta block = mBlockIdToBlockMap.remove(blockId);
-    Preconditions.checkNotNull(block);
-    for (Map.Entry<Long, Set<Long>> entry : mUserIdToBlocksMap.entrySet()) {
-      Long userId = entry.getKey();
-      Set<Long> userBlocks = entry.getValue();
-      if (userBlocks.contains(blockId)) {
-        Preconditions.checkState(userBlocks.remove(blockId));
-        if (userBlocks.isEmpty()) {
-          mUserIdToBlocksMap.remove(userId);
-        }
-        mCapacityBytes -= block.getBlockSize();
-        mAvailableBytes += block.getBlockSize();
-        Preconditions.checkState(mCapacityBytes >= 0, "Capacity bytes should always be "
-            + "non-negative");
-        return true;
-      }
-    }
-    return false;
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import tachyon.util.CommonUtils;
-
-
-public class TempBlockMeta extends BlockMetaBase {
-  private final long mUserId;
-  private long mTempBlockSize;
-
-  public TempBlockMeta(long userId, long blockId, long initialBlockSize, StorageDir dir) {
-    super(blockId, dir);
-    mUserId = userId;
-    mTempBlockSize = initialBlockSize;
-  }
-
-  @Override
-  public long getBlockSize() {
-    return mTempBlockSize;
-  }
-
-  @Override
-  public String getPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mUserId, mBlockId);
-  }
-
-  public String getCommitPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
-  }
-
-  public long getUserId() {
-    return mUserId;
-  }
-
-  public void setBlockSize(long newSize) {
-    mTempBlockSize = newSize;
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import com.google.common.base.Preconditions;
-import tachyon.worker.BlockStoreLocation;
-
-
-public abstract class BlockMetaBase {
-  protected final long mBlockId;
-  protected final StorageDir mDir;
-
-  public BlockMetaBase(long blockId, StorageDir dir) {
-    mBlockId = blockId;
-    mDir = Preconditions.checkNotNull(dir);
-  }
-
-  public long getBlockId() {
-    return mBlockId;
-  }
-
-  
-  public BlockStoreLocation getBlockLocation() {
-    StorageTier tier = mDir.getParentTier();
-    return new BlockStoreLocation(tier.getTierId(), mDir.getDirId());
-  }
-
-  public StorageDir getParentDir() {
-    return mDir;
-  }
-
-  public abstract String getPath();
-
-  public abstract long getBlockSize();
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import tachyon.util.CommonUtils;
-
-
-public class BlockMeta extends BlockMetaBase {
-
-  public BlockMeta(long blockId, long blockSize, StorageDir dir) {
-    super(blockId, blockSize, dir);
-  }
-
-  public BlockMeta(TempBlockMeta tempBlock) {
-    super(tempBlock.getBlockId(), tempBlock.getBlockSize(), tempBlock.getParentDir();
-  }
-
-  @Override
-  public String getPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
-
-import com.google.common.base.Optional;
-
-import tachyon.Constants;
-import tachyon.conf.TachyonConf;
-import tachyon.util.CommonUtils;
-
-
-public class StorageTier {
-  private HashMap<Integer, StorageDir> mIdToStorageDirMap;
-  private final int mTierId;
-
-  public StorageTier(TachyonConf tachyonConf, int tier) {
-    mTierId = tier;
-    String tierDirPathConf =
-        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_PATH_FORMAT, tier);
-    String[] dirPaths = tachyonConf.get(tierDirPathConf, "/mnt/ramdisk").split(",");
-
-    String tierDirCapacityConf =
-        String.format(Constants.WORKER_TIERED_STORAGE_LEVEL_DIRS_QUOTA_FORMAT, tier);
-    String[] dirQuotas = tachyonConf.get(tierDirCapacityConf, "0").split(",");
-
-    mIdToStorageDirMap = new HashMap<Integer, StorageDir>(dirPaths.length);
-
-    for (int i = 0; i < dirPaths.length; i ++) {
-      int index = i >= dirQuotas.length ? dirQuotas.length - 1 : i;
-      long capacity = CommonUtils.parseSpaceSize(dirQuotas[index]);
-      mIdToStorageDirMap.put(i, new StorageDir(i, capacity, dirPaths[i]));
-    }
-  }
-
-  public int getTierId() {
-    return mTierId;
-  }
-
-  public long getCapacityBytes() {
-    long capacityBytes = 0;
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      capacityBytes += dir.getCapacityBytes();
-    }
-    return capacityBytes;
-  }
-
-  public long getAvailableBytes() {
-    long availableBytes = 0;
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      availableBytes += dir.getAvailableBytes();
-    }
-    return availableBytes;
-  }
-
-  public Set<StorageDir> getStorageDirs() {
-    return new HashSet<StorageDir>(mIdToStorageDirMap.values());
-  }
-
-  public Optional<BlockMeta> getBlockMeta(long blockId) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      Optional<BlockMeta> optionalBlock = dir.getBlockMeta(blockId);
-      if (optionalBlock.isPresent()) {
-        return optionalBlock;
-      }
-    }
-    return Optional.absent();
-  }
-
-  public Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      Optional<BlockMeta> optionalBlock = dir.addBlockMeta(userId, blockId, blockSize);
-      if (optionalBlock.isPresent()) {
-        return optionalBlock;
-      }
-    }
-    return Optional.absent();
-  }
-
-  public boolean removeBlockMeta(long blockId) {
-    for (StorageDir dir : mIdToStorageDirMap.values()) {
-      if (dir.hasBlockMeta(blockId)) {
-        return dir.removeBlockMeta(blockId);
-      }
-    }
-    return false;
-  }
-
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Sets;
-
-import tachyon.Constants;
-
-
-public class StorageDir {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
-  private Map<Long, BlockMeta> mBlockIdToBlockMap;
-  private Map<Long, Set<Long>> mUserIdToBlocksMap;
-  private long mCapacityBytes;
-  private long mAvailableBytes;
-  private String mDirPath;
-  private int mDirId;
-  private StorageTier mTier;
-
-  public StorageDir(StorageTier tier, int dirId, long capacityBytes, String dirPath) {
-    mTier = Preconditions.checkNotNull(tier);
-    mDirId = dirId;
-    mCapacityBytes = capacityBytes;
-    mAvailableBytes = capacityBytes;
-    mDirPath = dirPath;
-    mBlockIdToBlockMap = new HashMap<Long, BlockMeta>(200);
-    mUserIdToBlocksMap = new HashMap<Long, Set<Long>>(20);
-  }
-
-  public long getCapacityBytes() {
-    return mCapacityBytes;
-  }
-
-  public long getAvailableBytes() {
-    return mAvailableBytes;
-  }
-
-  public String getDirPath() {
-    return mDirPath;
-  }
-
-  public StorageTier getParentTier() {
-    return mTier;
-  }
-
-  public int getDirId() {
-    return mDirId;
-  }
-
-  
-  boolean hasBlockMeta(long blockId) {
-    return mBlockIdToBlockMap.containsKey(blockId)
-  }
-
-  
-  Optional<BlockMeta> getBlockMeta(long blockId) {
-    if (!hasBlockMeta(blockId)) {
-      return Optional.absent();
-    }
-    return Optional.of(mBlockIdToBlockMap.get(blockId));
-  }
-
-  
-  Optional<BlockMeta> addBlockMeta(long userId, long blockId, long blockSize) {
-    if (getAvailableBytes() < blockSize) {
-      LOG.error("Fail to create blockId {} in dir {}: {} bytes required, but {} bytes available",
-          blockId, toString(), blockSize, getAvailableBytes());
-      return Optional.absent();
-    }
-    if (hasBlockMeta(blockId)) {
-      LOG.error("Fail to create blockId {} in dir {}: blockId exists", blockId, toString());
-      return Optional.absent();
-    }
-    Set<Long> userBlocks = mUserIdToBlocksMap.get(userId);
-    if (null == userBlocks) {
-      mUserIdToBlocksMap.put(userId, Sets.newHashSet(blockId));
-    } else {
-      userBlocks.add(blockId);
-    }
-    BlockMeta block = new BlockMeta(blockId, blockSize, getDirPath());
-    mBlockIdToBlockMap.put(userId, block);
-    mCapacityBytes += blockSize;
-    mAvailableBytes -= blockSize;
-    Preconditions.checkState(mAvailableBytes >= 0, "Available bytes should always be non-negative");
-    return Optional.of(block);
-  }
-
-  
-  boolean removeBlockMeta(long blockId) {
-    if (!hasBlockMeta(blockId)) {
-      return false;
-    }
-    BlockMeta block = mBlockIdToBlockMap.remove(blockId);
-    Preconditions.checkNotNull(block);
-    for (Map.Entry<Long, Set<Long>> entry : mUserIdToBlocksMap.entrySet()) {
-      Long userId = entry.getKey();
-      Set<Long> userBlocks = entry.getValue();
-      if (userBlocks.contains(blockId)) {
-        Preconditions.checkState(userBlocks.remove(blockId));
-        if (userBlocks.isEmpty()) {
-          mUserIdToBlocksMap.remove(userId);
-        }
-        mCapacityBytes -= block.getBlockSize();
-        mAvailableBytes += block.getBlockSize();
-        Preconditions.checkState(mCapacityBytes >= 0, "Capacity bytes should always be "
-            + "non-negative");
-        return true;
-      }
-    }
-    return false;
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import tachyon.util.CommonUtils;
-
-
-public class TempBlockMeta extends BlockMetaBase {
-  private final long mUserId;
-
-  public TempBlockMeta(long userId, long blockId, long blockSize, StorageDir dir) {
-    super(blockId, blockSize, dir);
-    mUserId = userId;
-  }
-
-  @Override
-  public String getPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mUserId, mBlockId);
-  }
-
-  public String getCommitPath() {
-    return CommonUtils.concatPath(mDir.getDirPath(), mBlockId);
-  }
-
-  public void setBlockSize(long newSize) {
-    mBlockSize = newSize;
-  }
-}
-
-<code block>
-
-
-package tachyon.worker.block.meta;
-
-import com.google.common.base.Preconditions;
-import tachyon.worker.BlockStoreLocation;
-
-
-public abstract class BlockMetaBase {
-  protected final long mBlockId;
-  protected long mBlockSize;
-  protected StorageDir mDir;
-
-  public BlockMetaBase(long blockId, long blockSize, StorageDir dir) {
-    mBlockId = blockId;
-    mBlockSize = blockSize;
-    mDir = Preconditions.checkNotNull(dir);
-  }
-
-  public long getBlockId() {
-    return mBlockId;
-  }
-
-  public long getBlockSize() {
-    return mBlockSize;
-  }
-
-  
-  public BlockStoreLocation getBlockLocation() {
-    StorageTier tier = mDir.getParentTier();
-    return new BlockStoreLocation(tier.getTierId(), mDir.getDirId());
-  }
-
-  public StorageDir getParentDir() {
-    return mDir;
-  }
-
-  public abstract String getPath();
-}
-
-<code block>
-
-
-package tachyon.worker.block.allocator;
-
-import java.io.IOException;
-
-import com.google.common.base.Preconditions;
-
+import tachyon.Pair;
+import tachyon.worker.block.BlockMetadataManagerView;
+import tachyon.worker.block.BlockStoreEventListenerBase;
 import tachyon.worker.block.BlockStoreLocation;
-import tachyon.worker.block.BlockMetadataManager;
-import tachyon.worker.block.meta.StorageDir;
-import tachyon.worker.block.meta.StorageTier;
-import tachyon.worker.block.meta.TempBlockMeta;
+import tachyon.worker.block.meta.BlockMeta;
+import tachyon.worker.block.meta.StorageDirView;
+import tachyon.worker.block.meta.StorageTierView;
+
+public class LRUEvictor extends BlockStoreEventListenerBase implements Evictor {
+  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final int LINKED_HASH_MAP_INIT_CAPACITY = 200;
+  private static final float LINKED_HASH_MAP_INIT_LOAD_FACTOR = 0.75f;
+  private static final boolean LINKED_HASH_MAP_ACCESS_ORDERED = true;
+  private static final boolean UNUSED_MAP_VALUE = true;
+
+  private BlockMetadataManagerView mManagerView;
 
 
-public class MaxFreeAllocator implements Allocator {
-  private final BlockMetadataManager mMetaManager;
+  private Map<Long, Boolean> mLRUCache = Collections
+      .synchronizedMap(new LinkedHashMap<Long, Boolean>(LINKED_HASH_MAP_INIT_CAPACITY,
+          LINKED_HASH_MAP_INIT_LOAD_FACTOR, LINKED_HASH_MAP_ACCESS_ORDERED));
 
-  public MaxFreeAllocator(BlockMetadataManager metadata) {
-    mMetaManager = Preconditions.checkNotNull(metadata);
-  }
+  public LRUEvictor(BlockMetadataManagerView view) {
+    mManagerView = Preconditions.checkNotNull(view);
 
-  @Override
-  public TempBlockMeta allocateBlock(long userId, long blockId, long blockSize,
-      BlockStoreLocation location) throws IOException {
-    StorageDir candidateDir = null;
 
-    if (location.equals(BlockStoreLocation.anyTier())) {
-      for (StorageTier tier : mMetaManager.getTiers()) {
-        candidateDir = getCandidateDirInTier(tier, blockSize);
-        if (candidateDir != null) {
-          return new TempBlockMeta(userId, blockId, blockSize, candidateDir);
+    for (StorageTierView tierView : mManagerView.getTierViews()) {
+      for (StorageDirView dirView : tierView.getDirViews()) {
+        for (BlockMeta blockMeta : dirView.getEvictableBlocks()) { 
+          mLRUCache.put(blockMeta.getBlockId(), UNUSED_MAP_VALUE);
         }
       }
-    } else if (location.equals(BlockStoreLocation.anyDirInTier(location.tierAlias()))) {
-      StorageTier tier = mMetaManager.getTier(location.tierAlias());
-      candidateDir = getCandidateDirInTier(tier, blockSize);
-    } else {
-      StorageTier tier = mMetaManager.getTier(location.tierAlias());
-      StorageDir dir = tier.getDir(location.dir());
-      if (dir.getAvailableBytes() >= blockSize) {
-        candidateDir = dir;
-      }
     }
-
-    return candidateDir != null ? new TempBlockMeta(userId, blockId, blockSize, candidateDir)
-        : null;
   }
 
-  
-  private StorageDir getCandidateDirInTier(StorageTier tier, long blockSize) {
-    StorageDir candidateDir = null;
-    long maxFreeBytes = blockSize - 1;
-    for (StorageDir dir : tier.getStorageDirs()) {
-      if (dir.getAvailableBytes() > maxFreeBytes) {
-        maxFreeBytes = dir.getAvailableBytes();
-        candidateDir = dir;
-      }
-    }
-    return candidateDir;
-  }
-}
 
-<code block>
-
-
-package tachyon.worker.block.allocator;
-
-import java.io.IOException;
-
-import com.google.common.base.Preconditions;
-
-import tachyon.worker.block.BlockStoreLocation;
-import tachyon.worker.block.BlockMetadataManager;
-import tachyon.worker.block.meta.StorageDir;
-import tachyon.worker.block.meta.StorageTier;
-import tachyon.worker.block.meta.TempBlockMeta;
-
-
-public class MaxFreeAllocator implements Allocator {
-  private final BlockMetadataManager mMetaManager;
-
-  public MaxFreeAllocator(BlockMetadataManager metadata) {
-    mMetaManager = Preconditions.checkNotNull(metadata);
-  }
-
-  @Override
-  public TempBlockMeta allocateBlock(long userId, long blockId, long blockSize,
+  private StorageDirView selectDirWithRequestedSpace(long bytesToBeAvailable,
       BlockStoreLocation location) throws IOException {
-
-    StorageDir candidateDir = null;
-    long maxFreeBytes = blockSize;
-
     if (location.equals(BlockStoreLocation.anyTier())) {
-      for (StorageTier tier : mMetaManager.getTiers()) {
-        for (StorageDir dir : tier.getStorageDirs()) {
-          if (dir.getAvailableBytes() >= maxFreeBytes) {
-            maxFreeBytes = dir.getAvailableBytes();
-            candidateDir = dir;
+      for (StorageTierView tierView : mManagerView.getTierViews()) {
+        for (StorageDirView dirView : tierView.getDirViews()) {
+          if (dirView.getAvailableBytes() >= bytesToBeAvailable) {
+            return dirView;
           }
         }
       }
-    } else if (location.equals(BlockStoreLocation.anyDirInTier(location.tierAlias()))) {
-      StorageTier tier = mMetaManager.getTier(location.tierAlias());
-      for (StorageDir dir : tier.getStorageDirs()) {
-        if (dir.getAvailableBytes() >= maxFreeBytes) {
-          maxFreeBytes = dir.getAvailableBytes();
-          candidateDir = dir;
+      return null;
+    }
+
+    int tierAlias = location.tierAlias();
+    StorageTierView tierView = mManagerView.getTierView(tierAlias);
+    if (location.equals(BlockStoreLocation.anyDirInTier(tierAlias))) {
+      for (StorageDirView dirView : tierView.getDirViews()) {
+        if (dirView.getAvailableBytes() >= bytesToBeAvailable) {
+          return dirView;
         }
       }
-    } else {
-      StorageTier tier = mMetaManager.getTier(location.tierAlias());
-      StorageDir dir = tier.getDir(location.dir());
-      if (dir.getAvailableBytes() >= blockSize) {
-        candidateDir = dir;
+      return null;
+    }
+
+    StorageDirView dirView = tierView.getDirView(location.dir());
+    return (dirView.getAvailableBytes() >= bytesToBeAvailable) ? dirView : null;
+  }
+
+
+  private StorageDirView cascadingEvict(long bytesToBeAvailable, BlockStoreLocation location,
+      EvictionPlan plan) throws IOException {
+
+
+    StorageDirView candidateDirView = selectDirWithRequestedSpace(bytesToBeAvailable, location);
+    if (candidateDirView != null) {
+      return candidateDirView;
+    }
+
+
+
+    EvictionDirCandidates dirCandidates = new EvictionDirCandidates();
+    Iterator<Map.Entry<Long, Boolean>> it = mLRUCache.entrySet().iterator();
+    while (it.hasNext() && dirCandidates.candidateSize() < bytesToBeAvailable) {
+      long blockId = it.next().getKey();
+      try {
+        BlockMeta block = mManagerView.getBlockMeta(blockId);
+        if (null != block) { 
+          if (block.getBlockLocation().belongTo(location)) {
+            int tierAlias = block.getParentDir().getParentTier().getTierAlias();
+            int dirIndex = block.getParentDir().getDirIndex();
+            dirCandidates.add(mManagerView.getTierView(tierAlias).getDirView(dirIndex), blockId,
+                block.getBlockSize());
+          }
+        }
+      } catch (IOException ioe) {
+        LOG.warn("Remove block {} from LRU Cache because {}", blockId, ioe);
+        it.remove();
       }
     }
 
-    return candidateDir != null ? new TempBlockMeta(userId, blockId, blockSize, candidateDir)
-        : null;
+
+    if (dirCandidates.candidateSize() < bytesToBeAvailable) {
+      return null;
+    }
+
+
+
+    candidateDirView = dirCandidates.candidateDir();
+    List<Long> candidateBlocks = dirCandidates.candidateBlocks();
+    List<StorageTierView> tierViewsBelow =
+        mManagerView.getTierViewsBelow(candidateDirView.getParentTierView().getTierViewAlias());
+
+    StorageDirView candidateNextDir = null;
+    for (StorageTierView tierView : tierViewsBelow) {
+      candidateNextDir =
+          cascadingEvict(dirCandidates.candidateSize(),
+              BlockStoreLocation.anyDirInTier(tierView.getTierViewAlias()), plan);
+      if (candidateNextDir != null) {
+        break;
+      }
+    }
+    if (candidateNextDir == null) {
+
+      plan.toEvict().addAll(candidateBlocks);
+    } else {
+      BlockStoreLocation dest = candidateNextDir.toBlockStoreLocation();
+      for (long block : candidateBlocks) {
+        plan.toMove().add(new Pair<Long, BlockStoreLocation>(block, dest));
+      }
+    }
+    return candidateDirView;
+  }
+
+
+  @Override
+  public EvictionPlan freeSpaceWithView(long bytesToBeAvailable, BlockStoreLocation location,
+      BlockMetadataManagerView view) throws IOException {
+    mManagerView = view;
+
+    List<Pair<Long, BlockStoreLocation>> toMove = new ArrayList<Pair<Long, BlockStoreLocation>>();
+    List<Long> toEvict = new ArrayList<Long>();
+    EvictionPlan plan = new EvictionPlan(toMove, toEvict);
+    StorageDirView candidateDir = cascadingEvict(bytesToBeAvailable, location, plan);
+
+    if (candidateDir == null) {
+      return null;
+    }
+    if (plan.isEmpty()) {
+      return plan;
+    }
+
+
+    Iterator<Pair<Long, BlockStoreLocation>> moveIt = plan.toMove().iterator();
+    while (moveIt.hasNext()) {
+      long id = moveIt.next().getFirst();
+      if (null == mManagerView.getBlockMeta(id)) {
+        mLRUCache.remove(id);
+        moveIt.remove();
+      }
+    }
+    Iterator<Long> evictIt = plan.toEvict().iterator();
+    while (evictIt.hasNext()) {
+      long id = evictIt.next();
+      if (null == mManagerView.getBlockMeta(id)) {
+        mLRUCache.remove(id);
+        evictIt.remove();
+      }
+    }
+
+    return EvictorUtils.legalCascadingPlan(bytesToBeAvailable, plan, mManagerView) ? plan : null;
+  }
+
+  @Override
+  public void onAccessBlock(long userId, long blockId) {
+    mLRUCache.put(blockId, UNUSED_MAP_VALUE);
+  }
+
+  @Override
+  public void onCommitBlock(long userId, long blockId, BlockStoreLocation location) {
+
+    mLRUCache.put(blockId, UNUSED_MAP_VALUE);
+  }
+
+  @Override
+  public void onRemoveBlockByClient(long userId, long blockId) {
+    mLRUCache.remove(blockId);
+  }
+
+  @Override
+  public void onRemoveBlockByWorker(long userId, long blockId) {
+    mLRUCache.remove(blockId);
   }
 }

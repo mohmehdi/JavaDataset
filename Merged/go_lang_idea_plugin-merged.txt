@@ -1,5 +1,2417 @@
 
 
+package com.goide.completion;
+
+import com.goide.GoConstants;
+import com.goide.GoParserDefinition;
+import com.goide.GoTypes;
+import com.goide.psi.GoImportString;
+import com.goide.psi.GoPackageClause;
+import com.goide.psi.GoReferenceExpressionBase;
+import com.goide.util.GoUtil;
+import com.intellij.codeInsight.completion.CompletionContributor;
+import com.intellij.codeInsight.completion.CompletionParameters;
+import com.intellij.codeInsight.completion.CompletionResultSet;
+import com.intellij.codeInsight.completion.CompletionType;
+import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.openapi.util.io.FileUtil;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.patterns.PlatformPatterns;
+import com.intellij.patterns.PsiElementPattern;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.Collection;
+
+public class GoCompletionContributor extends CompletionContributor {
+  public GoCompletionContributor() {
+    extend(CompletionType.BASIC, importString(), new GoImportPathsCompletionProvider());
+    extend(CompletionType.BASIC, referenceExpression(), new GoReferenceCompletionProvider());
+  }
+
+  @Override
+  public void fillCompletionVariants(@NotNull CompletionParameters parameters, @NotNull CompletionResultSet result) {
+    PsiElement position = parameters.getPosition();
+    if (position.getParent() instanceof GoPackageClause && position.getNode().getElementType() == GoTypes.IDENTIFIER) {
+      PsiDirectory directory = parameters.getOriginalFile().getParent();
+      Collection<String> packagesInDirectory = GoUtil.getAllPackagesInDirectory(directory);
+      for (String packageName : packagesInDirectory) {
+        result.addElement(LookupElementBuilder.create(packageName));
+        if (packageName.endsWith(GoConstants.TEST_SUFFIX)) {
+          result.addElement(LookupElementBuilder.create(StringUtil.trimEnd(packageName, GoConstants.TEST_SUFFIX)));
+        }
+      }
+
+      if (packagesInDirectory.isEmpty() && directory != null) {
+        String packageFromDirectory = FileUtil.sanitizeFileName(directory.getName());
+        if (!packageFromDirectory.isEmpty()) {
+          result.addElement(LookupElementBuilder.create(packageFromDirectory));
+        }
+      }
+      result.addElement(LookupElementBuilder.create(GoConstants.MAIN));
+    }
+    super.fillCompletionVariants(parameters, result);
+  }
+
+  private static PsiElementPattern.Capture<PsiElement> importString() {
+    return PlatformPatterns.psiElement().withElementType(GoParserDefinition.STRING_LITERALS).withParent(GoImportString.class);
+  }
+  
+  private static PsiElementPattern.Capture<PsiElement> referenceExpression() {
+    return PlatformPatterns.psiElement().withParent(GoReferenceExpressionBase.class);
+  }
+}
+
+<code block>
+
+
+package com.goide.completion;
+
+import com.goide.psi.*;
+import com.goide.psi.impl.GoFieldNameReference;
+import com.goide.psi.impl.GoReference;
+import com.goide.psi.impl.GoScopeProcessor;
+import com.goide.psi.impl.GoTypeReference;
+import com.intellij.codeInsight.completion.CompletionParameters;
+import com.intellij.codeInsight.completion.CompletionProvider;
+import com.intellij.codeInsight.completion.CompletionResultSet;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.ProcessingContext;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import static com.goide.completion.GoCompletionUtil.createPrefixMatcher;
+
+public class GoReferenceCompletionProvider extends CompletionProvider<CompletionParameters> {
+  @Override
+  protected void addCompletions(@NotNull CompletionParameters parameters, ProcessingContext context, @NotNull CompletionResultSet set) {
+    final GoReferenceExpressionBase expression = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoReferenceExpressionBase.class);
+    if (expression != null) {
+      fillVariantsByReference(expression.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
+    }
+  }
+
+  private static void fillVariantsByReference(@Nullable PsiReference reference, @NotNull final CompletionResultSet result) {
+    if (reference == null) return;
+    if (reference instanceof PsiMultiReference) {
+      PsiReference[] references = ((PsiMultiReference)reference).getReferences();
+      ContainerUtil.sort(references, PsiMultiReference.COMPARATOR);
+      fillVariantsByReference(ArrayUtil.getFirstElement(references), result);
+    }
+    else if (reference instanceof GoReference) {
+      ((GoReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
+
+      PsiElement element = reference.getElement();
+      if (element instanceof GoReferenceExpression && PsiTreeUtil.getParentOfType(element, GoCompositeLit.class) != null) {
+        for (Object o : new GoFieldNameReference(((GoReferenceExpression)element)).getVariants()) {
+          if (o instanceof LookupElement) result.addElement(((LookupElement)o));
+        }
+      }
+    }
+    else if (reference instanceof GoTypeReference) {
+      PsiElement element = reference.getElement();
+      final PsiElement spec = PsiTreeUtil.getParentOfType(element, GoFieldDeclaration.class, GoTypeSpec.class);
+      final boolean insideParameter = PsiTreeUtil.getParentOfType(element, GoParameterDeclaration.class) != null;
+      ((GoTypeReference)reference).processResolveVariants(new MyGoScopeProcessor(result, true) {
+        @Override
+        protected boolean accept(@NotNull PsiElement e) {
+          return e != spec &&
+                 !(insideParameter &&
+                   (e instanceof GoNamedSignatureOwner || e instanceof GoVarDefinition || e instanceof GoConstDefinition));
+        }
+      });
+      if (element instanceof GoReferenceExpressionBase && element.getParent() instanceof GoReceiverType) {
+        fillVariantsByReference(new GoReference((GoReferenceExpressionBase)element), result);
+      }
+    }
+  }
+
+  private static void addElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes, @NotNull CompletionResultSet set) {
+    LookupElement lookup = createLookupElement(o, state, forTypes);
+    if (lookup != null) {
+      set.addElement(lookup);
+    }
+  }
+
+  @Nullable
+  private static LookupElement createLookupElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes) {
+    if (o instanceof GoNamedElement && !((GoNamedElement)o).isBlank() || o instanceof GoImportSpec && !((GoImportSpec)o).isDot()) {
+      if (o instanceof GoImportSpec) {
+        return GoCompletionUtil.createPackageLookupElement(((GoImportSpec)o), state.get(GoReference.ACTUAL_NAME));
+      }
+      else if (o instanceof GoNamedSignatureOwner && ((GoNamedSignatureOwner)o).getName() != null) {
+        String name = ((GoNamedSignatureOwner)o).getName();
+        if (name != null) {
+          return GoCompletionUtil.createFunctionOrMethodLookupElement((GoNamedSignatureOwner)o, name, null,
+                                                                        GoCompletionUtil.FUNCTION_PRIORITY);
+        }
+      }
+      else if (o instanceof GoTypeSpec) {
+        return forTypes
+                 ? GoCompletionUtil.createTypeLookupElement((GoTypeSpec)o)
+                 : GoCompletionUtil.createTypeConversionLookupElement((GoTypeSpec)o);
+      }
+      else if (o instanceof PsiDirectory) {
+        return GoCompletionUtil.createPackageLookupElement(((PsiDirectory)o).getName(), o, true);
+      }
+      else {
+        return GoCompletionUtil.createVariableLikeLookupElement((GoNamedElement)o);
+      }
+    }
+    return null;
+  }
+
+  private static class MyGoScopeProcessor extends GoScopeProcessor {
+    private final CompletionResultSet myResult;
+    private final boolean myForTypes;
+
+    public MyGoScopeProcessor(@NotNull CompletionResultSet result, boolean forTypes) {
+      myResult = result;
+      myForTypes = forTypes;
+    }
+
+    @Override
+    public boolean execute(@NotNull PsiElement o, @NotNull ResolveState state) {
+      if (accept(o)) {
+        addElement(o, state, myForTypes, myResult);
+      }
+      return true;
+    }
+
+    protected boolean accept(@NotNull PsiElement e) {
+      return true;
+    }
+
+    @Override
+    public boolean isCompletion() {
+      return true;
+    }
+  }
+}
+                                                      
+<code block>
+
+
+package com.goide.completion;
+
+import com.goide.GoIcons;
+import com.goide.psi.*;
+import com.goide.psi.impl.GoPsiImplUtil;
+import com.goide.sdk.GoSdkUtil;
+import com.goide.stubs.GoFieldDefinitionStub;
+import com.intellij.codeInsight.completion.InsertHandler;
+import com.intellij.codeInsight.completion.InsertionContext;
+import com.intellij.codeInsight.completion.PrefixMatcher;
+import com.intellij.codeInsight.completion.PrioritizedLookupElement;
+import com.intellij.codeInsight.completion.impl.CamelHumpMatcher;
+import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.codeInsight.lookup.LookupElementPresentation;
+import com.intellij.codeInsight.lookup.LookupElementRenderer;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ObjectUtils;
+import com.intellij.util.ui.UIUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import javax.swing.*;
+
+public class GoCompletionUtil {
+  public static final int KEYWORD_PRIORITY = 20;
+  public static final int CONTEXT_KEYWORD_PRIORITY = 25;
+  public static final int NOT_IMPORTED_FUNCTION_PRIORITY = 3;
+  public static final int FUNCTION_PRIORITY = NOT_IMPORTED_FUNCTION_PRIORITY + 10;
+  public static final int NOT_IMPORTED_TYPE_PRIORITY = 5;
+  public static final int TYPE_PRIORITY = NOT_IMPORTED_TYPE_PRIORITY + 10;
+  public static final int NOT_IMPORTED_TYPE_CONVERSION = 1;
+  public static final int TYPE_CONVERSION = NOT_IMPORTED_TYPE_CONVERSION + 10;
+  public static final int VAR_PRIORITY = 15;
+  public static final int LABEL_PRIORITY = 15;
+  public static final int PACKAGE_PRIORITY = 5;
+  public static final InsertHandler<LookupElement> FUNCTION_INSERT_HANDLER = new InsertHandler<LookupElement>() {
+    @Override
+    public void handleInsert(InsertionContext context, LookupElement item) {
+      PsiElement element = item.getPsiElement();
+      if (!(element instanceof GoSignatureOwner)) return;
+      GoSignatureOwner f = (GoSignatureOwner)element;
+      GoSignature signature = f.getSignature();
+      int paramsCount = signature != null ? signature.getParameters().getParameterDeclarationList().size() : 0;
+      InsertHandler<LookupElement> handler =
+        paramsCount == 0 ? ParenthesesInsertHandler.NO_PARAMETERS : ParenthesesInsertHandler.WITH_PARAMETERS;
+      handler.handleInsert(context, item);
+    }
+  };
+  public static final LookupElementRenderer<LookupElement> FUNCTION_RENDERER = new LookupElementRenderer<LookupElement>() {
+    @Override
+    public void renderElement(LookupElement element, LookupElementPresentation p) {
+      PsiElement o = element.getPsiElement();
+      if (!(o instanceof GoNamedSignatureOwner)) return;
+      GoNamedSignatureOwner f = (GoNamedSignatureOwner)o;
+      Icon icon = f instanceof GoMethodDeclaration || f instanceof GoMethodSpec ? GoIcons.METHOD : GoIcons.FUNCTION;
+      String typeText = "";
+      GoSignature signature = f.getSignature();
+      String paramText = "";
+      if (signature != null) {
+        GoResult result = signature.getResult();
+        paramText = signature.getParameters().getText();
+        if (result != null) typeText = result.getText();
+      }
+
+      p.setIcon(icon);
+      p.setTypeText(typeText);
+      p.setTypeGrayed(true);
+      p.setTailText(calcTailText(f), true);
+      p.setItemText(element.getLookupString() + paramText);
+    }
+  };
+  public static final LookupElementRenderer<LookupElement> VARIABLE_RENDERER = new LookupElementRenderer<LookupElement>() {
+    @Override
+    public void renderElement(LookupElement element, LookupElementPresentation p) {
+      PsiElement o = element.getPsiElement();
+      if (!(o instanceof GoNamedElement)) return;
+      GoNamedElement v = (GoNamedElement)o;
+      GoType type = v.getGoType(null);
+      String text = GoPsiImplUtil.getText(type);
+      Icon icon = v instanceof GoVarDefinition ? GoIcons.VARIABLE :
+                  v instanceof GoParamDefinition ? GoIcons.PARAMETER :
+                  v instanceof GoFieldDefinition ? GoIcons.FIELD :
+                  v instanceof GoReceiver ? GoIcons.RECEIVER :
+                  v instanceof GoConstDefinition ? GoIcons.CONSTANT :
+                  v instanceof GoAnonymousFieldDefinition ? GoIcons.FIELD :
+                  null;
+
+      p.setIcon(icon);
+      p.setTailText(calcTailTextForFields(v), true);
+      p.setTypeText(text);
+      p.setTypeGrayed(true);
+    }
+  };
+
+  private static class Lazy {
+    private static final SingleCharInsertHandler DIR_INSERT_HANDLER = new SingleCharInsertHandler('/');
+    private static final SingleCharInsertHandler PACKAGE_INSERT_HANDLER = new SingleCharInsertHandler('.');
+  }
+
+  private GoCompletionUtil() {
+
+  }
+
+  @NotNull
+  public static CamelHumpMatcher createPrefixMatcher(@NotNull PrefixMatcher original) {
+    return createPrefixMatcher(original.getPrefix());
+  }
+
+  @NotNull
+  public static CamelHumpMatcher createPrefixMatcher(@NotNull String prefix) {
+    return new CamelHumpMatcher(prefix, false);
+  }
+
+  @NotNull
+  public static LookupElement createFunctionOrMethodLookupElement(@NotNull final GoNamedSignatureOwner f,
+                                                                  @NotNull final String lookupString,
+                                                                  @Nullable final InsertHandler<LookupElement> h,
+                                                                  final double priority) {
+    return PrioritizedLookupElement.withPriority(LookupElementBuilder
+                                                   .createWithSmartPointer(lookupString, f)
+                                                   .withRenderer(FUNCTION_RENDERER)
+                                                   .withInsertHandler(h != null ? h : FUNCTION_INSERT_HANDLER), priority);
+  }
+
+  @Nullable
+  private static String calcTailText(GoSignatureOwner m) {
+    String text = "";
+    if (m instanceof GoMethodDeclaration) {
+      text = GoPsiImplUtil.getText(((GoMethodDeclaration)m).getReceiver().getType());
+    }
+    else if (m instanceof GoMethodSpec) {
+      PsiElement parent = m.getParent();
+      if (parent instanceof GoInterfaceType) {
+        text = GoPsiImplUtil.getText((GoInterfaceType)parent);
+      }
+    }
+    return StringUtil.isNotEmpty(text) ? " " + UIUtil.rightArrow() + " " + text : null;
+  }
+
+  @NotNull
+  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t) {
+    return createTypeLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_PRIORITY);
+  }
+
+  @NotNull
+  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t,
+                                                      @NotNull String lookupString,
+                                                      @Nullable InsertHandler<LookupElement> handler,
+                                                      @Nullable String importPath,
+                                                      double priority) {
+    LookupElementBuilder builder = LookupElementBuilder.createWithSmartPointer(lookupString, t)
+      .withInsertHandler(handler).withIcon(GoIcons.TYPE);
+    if (importPath != null) builder = builder.withTailText(" " + importPath, true);
+    return PrioritizedLookupElement.withPriority(builder, priority);
+  }
+
+  @NotNull
+  public static LookupElement createLabelLookupElement(@NotNull GoLabelDefinition l, @NotNull String lookupString) {
+    return PrioritizedLookupElement.withPriority(LookupElementBuilder.createWithSmartPointer(lookupString, l)
+                                                   .withIcon(GoIcons.LABEL), LABEL_PRIORITY);
+  }
+
+  @NotNull
+  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t) {
+    return createTypeConversionLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_CONVERSION);
+  }
+
+  @NotNull
+  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t,
+                                                                @NotNull String lookupString,
+                                                                @Nullable InsertHandler<LookupElement> insertHandler,
+                                                                @Nullable String importPath,
+                                                                double priority) {
+
+    InsertHandler<LookupElement> handler = ObjectUtils.notNull(insertHandler, getTypeConversionInsertHandler(t));
+    return createTypeLookupElement(t, lookupString, handler, importPath, priority);
+  }
+
+  @NotNull
+  public static InsertHandler<LookupElement> getTypeConversionInsertHandler(@NotNull GoTypeSpec t) {
+    GoType type = t.getType();
+    return type instanceof GoStructType || type instanceof GoArrayOrSliceType || type instanceof GoMapType
+           ? BracesInsertHandler.ONE_LINER
+           : ParenthesesInsertHandler.WITH_PARAMETERS;
+  }
+
+  @NotNull
+  public static LookupElement createVariableLikeLookupElement(@NotNull GoNamedElement v) {
+    String name = StringUtil.notNullize(v.getName());
+    SingleCharInsertHandler handler =
+      v instanceof GoFieldDefinition ?
+      new SingleCharInsertHandler(':') {
+        @Override
+        public void handleInsert(@NotNull InsertionContext context, LookupElement item) {
+          PsiFile file = context.getFile();
+          if (!(file instanceof GoFile)) return;
+          context.commitDocument();
+          int offset = context.getStartOffset();
+          PsiElement at = file.findElementAt(offset);
+          GoCompositeElement ref = PsiTreeUtil.getParentOfType(at, GoValue.class, GoReferenceExpression.class);
+          if (ref instanceof GoReferenceExpression && (((GoReferenceExpression)ref).getQualifier() != null || GoPsiImplUtil.prevDot(ref))) {
+            return;
+          }
+          GoValue value = PsiTreeUtil.getParentOfType(at, GoValue.class);
+          if (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null) return;
+          super.handleInsert(context, item);
+        }
+      } : null;
+    return PrioritizedLookupElement.withPriority(
+      LookupElementBuilder.createWithSmartPointer(name, v)
+        .withLookupString(name.toLowerCase()).withRenderer(VARIABLE_RENDERER)
+        .withInsertHandler(handler)
+      , VAR_PRIORITY);
+  }
+
+  @Nullable
+  private static String calcTailTextForFields(@NotNull GoNamedElement v) {
+    String name = null;
+    if (v instanceof GoFieldDefinition) {
+      GoFieldDefinitionStub stub = ((GoFieldDefinition)v).getStub();
+      GoTypeSpec spec = stub != null ? stub.getParentStubOfType(GoTypeSpec.class) : PsiTreeUtil.getParentOfType(v, GoTypeSpec.class);
+      name = spec != null ? spec.getName() : null;
+    }
+    return StringUtil.isNotEmpty(name) ? " " + UIUtil.rightArrow() + " " + name : null;
+  }
+
+  @Nullable
+  public static LookupElement createPackageLookupElement(@NotNull GoImportSpec spec, @Nullable String name) {
+    name = name != null ? name : ObjectUtils.notNull(spec.getAlias(), spec.getLocalPackageName());
+    return createPackageLookupElement(name, spec, true);
+  }
+
+  @NotNull
+  public static LookupElement createPackageLookupElement(@NotNull String importPath,
+                                                         @Nullable PsiElement context,
+                                                         boolean forType) {
+    return createPackageLookupElement(importPath, getContextImportPath(context), forType);
+  }
+
+  @NotNull
+  public static LookupElement createPackageLookupElement(@NotNull String importPath, @Nullable String contextImportPath, boolean forType) {
+    return PrioritizedLookupElement.withPriority(
+      LookupElementBuilder.create(importPath)
+        .withLookupString(importPath.substring(Math.max(0, importPath.lastIndexOf('/'))))
+        .withIcon(GoIcons.PACKAGE).withInsertHandler(forType ? Lazy.PACKAGE_INSERT_HANDLER : null),
+      calculatePackagePriority(importPath, contextImportPath));
+  }
+
+  public static int calculatePackagePriority(@NotNull String importPath, @Nullable String currentPath) {
+    int priority = PACKAGE_PRIORITY;
+    if (StringUtil.isNotEmpty(currentPath)) {
+      String[] givenSplit = importPath.split("/");
+      String[] contextSplit = currentPath.split("/");
+      for (int i = 0; i < contextSplit.length && i < givenSplit.length; i++) {
+        if (contextSplit[i].equals(givenSplit[i])) {
+          priority++;
+        }
+        else {
+          break;
+        }
+      }
+    }
+    return priority - StringUtil.countChars(importPath, '/') - StringUtil.countChars(importPath, '.');
+  }
+
+  @Nullable
+  public static String getContextImportPath(@Nullable PsiElement context) {
+    if (context == null) return null;
+    String currentPath = null;
+    if (context instanceof PsiDirectory) {
+      currentPath = GoSdkUtil.getImportPath((PsiDirectory)context);
+    }
+    else {
+      PsiFile file = context.getContainingFile();
+      if (file instanceof GoFile) {
+        currentPath = ((GoFile)file).getImportPath();
+      }
+    }
+    return currentPath;
+  }
+
+  @NotNull
+  public static LookupElementBuilder createDirectoryLookupElement(@NotNull PsiDirectory dir) {
+    int files = dir.getFiles().length;
+    return LookupElementBuilder.createWithSmartPointer(dir.getName(), dir).withIcon(GoIcons.DIRECTORY)
+      .withInsertHandler(files == 0 ? Lazy.DIR_INSERT_HANDLER : null);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.util.GoUtil;
+import com.intellij.openapi.util.TextRange;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReferenceBase;
+import com.intellij.psi.impl.source.resolve.ResolveCache;
+import com.intellij.util.IncorrectOperationException;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class GoCachedReference<T extends PsiElement> extends PsiReferenceBase<T> {
+  protected GoCachedReference(@NotNull T element) {
+    super(element, TextRange.from(0, element.getTextLength()));
+  }
+
+  private static final ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement> MY_RESOLVER =
+    new ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement>() {
+      @Override
+      public PsiElement resolve(@NotNull PsiReferenceBase base, boolean b) {
+        return ((GoCachedReference)base).resolveInner();
+      }
+    };
+
+  @Nullable
+  protected abstract PsiElement resolveInner();
+
+  @Nullable
+  @Override
+  public final PsiElement resolve() {
+    return myElement.isValid()
+           ? ResolveCache.getInstance(myElement.getProject()).resolveWithCaching(this, MY_RESOLVER, false, false)
+           : null;
+  }
+
+  @Override
+  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
+    myElement.replace(GoElementFactory.createIdentifierFromText(myElement.getProject(), newElementName));
+    return myElement;
+  }
+
+  @Override
+  public boolean isReferenceTo(PsiElement element) {
+    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.psi.GoFunctionOrMethodDeclaration;
+import com.goide.psi.GoNamedElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.scope.BaseScopeProcessor;
+import com.intellij.util.containers.ContainerUtil;
+import com.intellij.util.containers.OrderedSet;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.List;
+
+public abstract class GoScopeProcessorBase extends BaseScopeProcessor {
+  @NotNull protected final OrderedSet<GoNamedElement> myResult = new OrderedSet<GoNamedElement>();
+
+  @NotNull protected final PsiElement myOrigin;
+  @NotNull private final String myRequestedName;
+  protected final boolean myIsCompletion;
+
+  public GoScopeProcessorBase(@NotNull String requestedName, @NotNull PsiElement origin, boolean completion) {
+    myRequestedName = requestedName;
+    myOrigin = origin;
+    myIsCompletion = completion;
+  }
+
+  @Override
+  public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
+    if (psiElement instanceof GoFunctionOrMethodDeclaration) return false;
+    if (!(psiElement instanceof GoNamedElement)) return true;
+    if (!myIsCompletion && !myRequestedName.equals(((GoNamedElement)psiElement).getName())) return true;
+    if (condition(psiElement)) return true;
+    if (psiElement.equals(myOrigin)) return true;
+    return add((GoNamedElement)psiElement) || myIsCompletion;
+  }
+
+  protected boolean add(@NotNull GoNamedElement psiElement) {
+    return !myResult.add(psiElement);
+  }
+
+  @Nullable
+  public GoNamedElement getResult() {
+    return ContainerUtil.getFirstItem(myResult);
+  }
+
+  @NotNull
+  public List<GoNamedElement> getVariants() {
+    return myResult;
+  }
+
+  protected abstract boolean condition(@NotNull PsiElement element);
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.completion.GoCompletionUtil;
+import com.goide.psi.GoBlock;
+import com.goide.psi.GoLabelDefinition;
+import com.goide.psi.GoLabelRef;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+
+public class GoLabelReference extends GoCachedReference<GoLabelRef> {
+  private final GoScopeProcessorBase myProcessor = new GoScopeProcessorBase(myElement.getText(), myElement, false) {
+    @Override
+    protected boolean condition(@NotNull PsiElement element) {
+      return !(element instanceof GoLabelDefinition);
+    }
+  };
+
+  public GoLabelReference(@NotNull GoLabelRef element) {
+    super(element);
+  }
+
+  @NotNull
+  private Collection<GoLabelDefinition> getLabelDefinitions() {
+    GoBlock block = PsiTreeUtil.getTopmostParentOfType(myElement, GoBlock.class);
+    return PsiTreeUtil.findChildrenOfType(block, GoLabelDefinition.class);
+  }
+
+  @Nullable
+  @Override
+  protected PsiElement resolveInner() {
+    Collection<GoLabelDefinition> defs = getLabelDefinitions();
+    for (GoLabelDefinition def : defs) {
+      if (!myProcessor.execute(def, ResolveState.initial())) return def;
+    }
+    return null;
+  }
+
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    Collection<LookupElement> result = ContainerUtil.newArrayList();
+    for (GoLabelDefinition element : getLabelDefinitions()) {
+      String name = element.getName();
+      if (name != null) {
+        result.add(GoCompletionUtil.createLabelLookupElement(element, name));
+      }
+    }
+    return ArrayUtil.toObjectArray(result);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.completion.GoCompletionUtil;
+import com.goide.psi.*;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+import java.util.List;
+
+public class GoFieldNameReference extends GoCachedReference<GoReferenceExpressionBase> {
+  private GoCompositeElement myValue;
+
+  @NotNull
+  private GoScopeProcessorBase getProcessor(final boolean completion) {
+    return new GoScopeProcessorBase(myElement.getText(), myElement, completion) {
+      @Override
+      protected boolean condition(@NotNull PsiElement element) {
+        return !(element instanceof GoFieldDefinition) && !(element instanceof GoAnonymousFieldDefinition);
+      }
+    };
+  }
+
+  public GoFieldNameReference(@NotNull GoReferenceExpressionBase element) {
+    super(element);
+    GoCompositeElement place = myElement;
+    while ((place = PsiTreeUtil.getParentOfType(place, GoLiteralValue.class)) != null) {
+      if (place.getParent() instanceof GoValue) {
+        myValue = (GoValue)place.getParent();
+        break;
+      }
+    }
+  }
+
+  private boolean processFields(@NotNull GoScopeProcessorBase processor) {
+    GoKey key = PsiTreeUtil.getParentOfType(myElement, GoKey.class);
+    GoValue value = PsiTreeUtil.getParentOfType(myElement, GoValue.class);
+    if (key == null && (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null)) return false;
+
+    GoCompositeLit lit = PsiTreeUtil.getParentOfType(myElement, GoCompositeLit.class);
+
+    GoType type = lit != null ? lit.getType() : null;
+    if (type == null && lit != null) {
+      type = GoPsiImplUtil.getType(lit.getTypeReferenceExpression());
+    }
+
+    type = getType(type);
+
+    if (type instanceof GoStructType && !type.processDeclarations(processor, ResolveState.initial(), null, myElement)) return true;
+
+    return false;
+  }
+
+  @Nullable
+  private GoType getType(GoType type) { 
+    boolean inValue = myValue != null;
+    
+    if (inValue && type instanceof GoArrayOrSliceType) type = ((GoArrayOrSliceType)type).getType();
+    else if (type instanceof GoMapType) type = inValue ? ((GoMapType)type).getValueType() : ((GoMapType)type).getKeyType();
+    else if (inValue && type instanceof GoStructType) {
+      GoKey key = PsiTreeUtil.getPrevSiblingOfType(myValue, GoKey.class);
+      GoFieldName field = key != null ? key.getFieldName() : null;
+      PsiReference reference = field != null ? field.getReference() : null;
+      PsiElement resolve = reference != null ? reference.resolve() : null;
+      if (resolve instanceof GoFieldDefinition) {
+        type = PsiTreeUtil.getNextSiblingOfType(resolve, GoType.class);
+      }
+    }
+
+    if (type != null && type.getTypeReferenceExpression() != null) {
+      type = GoPsiImplUtil.getType(type.getTypeReferenceExpression());
+    }
+
+    if (type instanceof GoPointerType) {
+      GoType inner = ((GoPointerType)type).getType();
+      if (inner != null && inner.getTypeReferenceExpression() != null) {
+        type = GoPsiImplUtil.getType(inner.getTypeReferenceExpression());
+      }
+    }
+
+    return type;
+  }
+
+  @Nullable
+  @Override
+  public PsiElement resolveInner() {
+    GoScopeProcessorBase p = getProcessor(false);
+    processFields(p);
+    return p.getResult();
+  }
+
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    GoScopeProcessorBase p = getProcessor(true);
+    processFields(p);
+    List<GoNamedElement> variants = p.getVariants();
+    if (variants.isEmpty()) return EMPTY_ARRAY;
+    Collection<LookupElement> result = ContainerUtil.newArrayList();
+    for (GoNamedElement element : variants) {
+      result.add(GoCompletionUtil.createVariableLikeLookupElement(element));
+    }
+    return ArrayUtil.toObjectArray(result);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.psi.GoBlock;
+import com.goide.psi.GoFunctionOrMethodDeclaration;
+import com.goide.psi.GoStatement;
+import com.goide.psi.GoVarDefinition;
+import com.goide.util.GoUtil;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.IncorrectOperationException;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public class GoVarReference extends GoCachedReference<GoVarDefinition> {
+  private final GoBlock myPotentialStopBlock;
+
+  public GoVarReference(@NotNull GoVarDefinition element) {
+    super(element);
+    myPotentialStopBlock = PsiTreeUtil.getParentOfType(element, GoBlock.class);
+  }
+
+  @Nullable
+  @Override
+  public PsiElement resolveInner() {
+    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, false);
+    if (myPotentialStopBlock != null) {
+      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
+        GoReference.processFunctionParameters(myElement, p);
+        if (p.getResult() != null) return p.getResult();
+      }
+      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
+                                               myElement);
+    }
+    return p.getResult();
+  }
+
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, true);
+    if (myPotentialStopBlock != null) {
+      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
+        GoReference.processFunctionParameters(myElement, p);
+      }
+      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
+                                               myElement);
+    }
+    return ArrayUtil.toObjectArray(p.getVariants());
+  }
+
+  @Override
+  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
+    myElement.replace(GoElementFactory.createVarDefinitionFromText(myElement.getProject(), newElementName));
+    return myElement;
+  }
+
+  @Override
+  public boolean isReferenceTo(PsiElement element) {
+    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
+  }
+}
+
+<code block>
+
+
+package com.goide.completion;
+
+import com.goide.GoConstants;
+import com.goide.GoParserDefinition;
+import com.goide.GoTypes;
+import com.goide.psi.GoImportString;
+import com.goide.psi.GoPackageClause;
+import com.goide.psi.GoReferenceExpressionBase;
+import com.goide.psi.GoVarDefinition;
+import com.goide.util.GoUtil;
+import com.intellij.codeInsight.completion.CompletionContributor;
+import com.intellij.codeInsight.completion.CompletionParameters;
+import com.intellij.codeInsight.completion.CompletionResultSet;
+import com.intellij.codeInsight.completion.CompletionType;
+import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.openapi.util.io.FileUtil;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.patterns.PlatformPatterns;
+import com.intellij.patterns.PsiElementPattern;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.Collection;
+
+public class GoCompletionContributor extends CompletionContributor {
+  public GoCompletionContributor() {
+    extend(CompletionType.BASIC, importString(), new GoImportPathsCompletionProvider());
+    extend(CompletionType.BASIC, referenceExpression(), new GoReferenceCompletionProvider());
+    extend(CompletionType.BASIC, varDefinition(), new GoReferenceCompletionProvider());
+  }
+
+  @Override
+  public void fillCompletionVariants(@NotNull CompletionParameters parameters, @NotNull CompletionResultSet result) {
+    PsiElement position = parameters.getPosition();
+    if (position.getParent() instanceof GoPackageClause && position.getNode().getElementType() == GoTypes.IDENTIFIER) {
+      PsiDirectory directory = parameters.getOriginalFile().getParent();
+      Collection<String> packagesInDirectory = GoUtil.getAllPackagesInDirectory(directory);
+      for (String packageName : packagesInDirectory) {
+        result.addElement(LookupElementBuilder.create(packageName));
+        if (packageName.endsWith(GoConstants.TEST_SUFFIX)) {
+          result.addElement(LookupElementBuilder.create(StringUtil.trimEnd(packageName, GoConstants.TEST_SUFFIX)));
+        }
+      }
+
+      if (packagesInDirectory.isEmpty() && directory != null) {
+        String packageFromDirectory = FileUtil.sanitizeFileName(directory.getName());
+        if (!packageFromDirectory.isEmpty()) {
+          result.addElement(LookupElementBuilder.create(packageFromDirectory));
+        }
+      }
+      result.addElement(LookupElementBuilder.create(GoConstants.MAIN));
+    }
+    super.fillCompletionVariants(parameters, result);
+  }
+
+  private static PsiElementPattern.Capture<PsiElement> importString() {
+    return PlatformPatterns.psiElement().withElementType(GoParserDefinition.STRING_LITERALS).withParent(GoImportString.class);
+  }
+
+  private static PsiElementPattern.Capture<PsiElement> referenceExpression() {
+    return PlatformPatterns.psiElement().withParent(GoReferenceExpressionBase.class);
+  }
+
+  private static PsiElementPattern.Capture<PsiElement> varDefinition() {
+    return PlatformPatterns.psiElement().withParent(GoVarDefinition.class);
+  }
+}
+
+<code block>
+
+
+package com.goide.completion;
+
+import com.goide.psi.*;
+import com.goide.psi.impl.*;
+import com.intellij.codeInsight.completion.CompletionParameters;
+import com.intellij.codeInsight.completion.CompletionProvider;
+import com.intellij.codeInsight.completion.CompletionResultSet;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.ProcessingContext;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import static com.goide.completion.GoCompletionUtil.createPrefixMatcher;
+
+public class GoReferenceCompletionProvider extends CompletionProvider<CompletionParameters> {
+  @Override
+  protected void addCompletions(@NotNull CompletionParameters parameters, ProcessingContext context, @NotNull CompletionResultSet set) {
+    GoReferenceExpressionBase expression = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoReferenceExpressionBase.class);
+    if (expression != null) {
+      fillVariantsByReference(expression.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
+    }
+    GoVarDefinition varDefinition = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoVarDefinition.class);
+    if (varDefinition != null) {
+      fillVariantsByReference(varDefinition.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
+    }
+  }
+
+  private static void fillVariantsByReference(@Nullable PsiReference reference, @NotNull final CompletionResultSet result) {
+    if (reference == null) return;
+    if (reference instanceof PsiMultiReference) {
+      PsiReference[] references = ((PsiMultiReference)reference).getReferences();
+      ContainerUtil.sort(references, PsiMultiReference.COMPARATOR);
+      fillVariantsByReference(ArrayUtil.getFirstElement(references), result);
+    }
+    else if (reference instanceof GoReference) {
+      ((GoReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
+
+      PsiElement element = reference.getElement();
+      if (element instanceof GoReferenceExpression && PsiTreeUtil.getParentOfType(element, GoCompositeLit.class) != null) {
+        for (Object o : new GoFieldNameReference(((GoReferenceExpression)element)).getVariants()) {
+          if (o instanceof LookupElement) result.addElement(((LookupElement)o));
+        }
+      }
+    }
+    else if (reference instanceof GoTypeReference) {
+      PsiElement element = reference.getElement();
+      final PsiElement spec = PsiTreeUtil.getParentOfType(element, GoFieldDeclaration.class, GoTypeSpec.class);
+      final boolean insideParameter = PsiTreeUtil.getParentOfType(element, GoParameterDeclaration.class) != null;
+      ((GoTypeReference)reference).processResolveVariants(new MyGoScopeProcessor(result, true) {
+        @Override
+        protected boolean accept(@NotNull PsiElement e) {
+          return e != spec &&
+                 !(insideParameter &&
+                   (e instanceof GoNamedSignatureOwner || e instanceof GoVarDefinition || e instanceof GoConstDefinition));
+        }
+      });
+      if (element instanceof GoReferenceExpressionBase && element.getParent() instanceof GoReceiverType) {
+        fillVariantsByReference(new GoReference((GoReferenceExpressionBase)element), result);
+      }
+    }
+    else if (reference instanceof GoCachedReference) {
+      ((GoCachedReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
+    }
+  }
+
+  private static void addElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes, @NotNull CompletionResultSet set) {
+    LookupElement lookup = createLookupElement(o, state, forTypes);
+    if (lookup != null) {
+      set.addElement(lookup);
+    }
+  }
+
+  @Nullable
+  private static LookupElement createLookupElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes) {
+    if (o instanceof GoNamedElement && !((GoNamedElement)o).isBlank() || o instanceof GoImportSpec && !((GoImportSpec)o).isDot()) {
+      if (o instanceof GoImportSpec) {
+        return GoCompletionUtil.createPackageLookupElement(((GoImportSpec)o), state.get(GoReference.ACTUAL_NAME));
+      }
+      else if (o instanceof GoNamedSignatureOwner && ((GoNamedSignatureOwner)o).getName() != null) {
+        String name = ((GoNamedSignatureOwner)o).getName();
+        if (name != null) {
+          return GoCompletionUtil.createFunctionOrMethodLookupElement((GoNamedSignatureOwner)o, name, null,
+                                                                      GoCompletionUtil.FUNCTION_PRIORITY);
+        }
+      }
+      else if (o instanceof GoTypeSpec) {
+        return forTypes
+               ? GoCompletionUtil.createTypeLookupElement((GoTypeSpec)o)
+               : GoCompletionUtil.createTypeConversionLookupElement((GoTypeSpec)o);
+      }
+      else if (o instanceof PsiDirectory) {
+        return GoCompletionUtil.createPackageLookupElement(((PsiDirectory)o).getName(), o, true);
+      }
+      else {
+        return GoCompletionUtil.createVariableLikeLookupElement((GoNamedElement)o);
+      }
+    }
+    return null;
+  }
+
+  private static class MyGoScopeProcessor extends GoScopeProcessor {
+    private final CompletionResultSet myResult;
+    private final boolean myForTypes;
+
+    public MyGoScopeProcessor(@NotNull CompletionResultSet result, boolean forTypes) {
+      myResult = result;
+      myForTypes = forTypes;
+    }
+
+    @Override
+    public boolean execute(@NotNull PsiElement o, @NotNull ResolveState state) {
+      if (accept(o)) {
+        addElement(o, state, myForTypes, myResult);
+      }
+      return true;
+    }
+
+    protected boolean accept(@NotNull PsiElement e) {
+      return true;
+    }
+
+    @Override
+    public boolean isCompletion() {
+      return true;
+    }
+  }
+}
+                                                      
+<code block>
+
+
+package com.goide.completion;
+
+import com.goide.GoIcons;
+import com.goide.psi.*;
+import com.goide.psi.impl.GoPsiImplUtil;
+import com.goide.sdk.GoSdkUtil;
+import com.goide.stubs.GoFieldDefinitionStub;
+import com.intellij.codeInsight.completion.InsertHandler;
+import com.intellij.codeInsight.completion.InsertionContext;
+import com.intellij.codeInsight.completion.PrefixMatcher;
+import com.intellij.codeInsight.completion.PrioritizedLookupElement;
+import com.intellij.codeInsight.completion.impl.CamelHumpMatcher;
+import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.codeInsight.lookup.LookupElementPresentation;
+import com.intellij.codeInsight.lookup.LookupElementRenderer;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ObjectUtils;
+import com.intellij.util.ui.UIUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import javax.swing.*;
+
+public class GoCompletionUtil {
+  public static final int KEYWORD_PRIORITY = 20;
+  public static final int CONTEXT_KEYWORD_PRIORITY = 25;
+  public static final int NOT_IMPORTED_FUNCTION_PRIORITY = 3;
+  public static final int FUNCTION_PRIORITY = NOT_IMPORTED_FUNCTION_PRIORITY + 10;
+  public static final int NOT_IMPORTED_TYPE_PRIORITY = 5;
+  public static final int TYPE_PRIORITY = NOT_IMPORTED_TYPE_PRIORITY + 10;
+  public static final int NOT_IMPORTED_TYPE_CONVERSION = 1;
+  public static final int TYPE_CONVERSION = NOT_IMPORTED_TYPE_CONVERSION + 10;
+  public static final int VAR_PRIORITY = 15;
+  public static final int LABEL_PRIORITY = 15;
+  public static final int PACKAGE_PRIORITY = 5;
+  public static final InsertHandler<LookupElement> FUNCTION_INSERT_HANDLER = new InsertHandler<LookupElement>() {
+    @Override
+    public void handleInsert(InsertionContext context, LookupElement item) {
+      PsiElement element = item.getPsiElement();
+      if (!(element instanceof GoSignatureOwner)) return;
+      GoSignatureOwner f = (GoSignatureOwner)element;
+      GoSignature signature = f.getSignature();
+      int paramsCount = signature != null ? signature.getParameters().getParameterDeclarationList().size() : 0;
+      InsertHandler<LookupElement> handler =
+        paramsCount == 0 ? ParenthesesInsertHandler.NO_PARAMETERS : ParenthesesInsertHandler.WITH_PARAMETERS;
+      handler.handleInsert(context, item);
+    }
+  };
+  public static final LookupElementRenderer<LookupElement> FUNCTION_RENDERER = new LookupElementRenderer<LookupElement>() {
+    @Override
+    public void renderElement(LookupElement element, LookupElementPresentation p) {
+      PsiElement o = element.getPsiElement();
+      if (!(o instanceof GoNamedSignatureOwner)) return;
+      GoNamedSignatureOwner f = (GoNamedSignatureOwner)o;
+      Icon icon = f instanceof GoMethodDeclaration || f instanceof GoMethodSpec ? GoIcons.METHOD : GoIcons.FUNCTION;
+      String typeText = "";
+      GoSignature signature = f.getSignature();
+      String paramText = "";
+      if (signature != null) {
+        GoResult result = signature.getResult();
+        paramText = signature.getParameters().getText();
+        if (result != null) typeText = result.getText();
+      }
+
+      p.setIcon(icon);
+      p.setTypeText(typeText);
+      p.setTypeGrayed(true);
+      p.setTailText(calcTailText(f), true);
+      p.setItemText(element.getLookupString() + paramText);
+    }
+  };
+  public static final LookupElementRenderer<LookupElement> VARIABLE_RENDERER = new LookupElementRenderer<LookupElement>() {
+    @Override
+    public void renderElement(LookupElement element, LookupElementPresentation p) {
+      PsiElement o = element.getPsiElement();
+      if (!(o instanceof GoNamedElement)) return;
+      GoNamedElement v = (GoNamedElement)o;
+      GoType type = v.getGoType(null);
+      String text = GoPsiImplUtil.getText(type);
+      Icon icon = v instanceof GoVarDefinition ? GoIcons.VARIABLE :
+                  v instanceof GoParamDefinition ? GoIcons.PARAMETER :
+                  v instanceof GoFieldDefinition ? GoIcons.FIELD :
+                  v instanceof GoReceiver ? GoIcons.RECEIVER :
+                  v instanceof GoConstDefinition ? GoIcons.CONSTANT :
+                  v instanceof GoAnonymousFieldDefinition ? GoIcons.FIELD :
+                  null;
+
+      p.setIcon(icon);
+      p.setTailText(calcTailTextForFields(v), true);
+      p.setTypeText(text);
+      p.setTypeGrayed(true);
+      p.setItemText(element.getLookupString());
+    }
+  };
+
+  private static class Lazy {
+    private static final SingleCharInsertHandler DIR_INSERT_HANDLER = new SingleCharInsertHandler('/');
+    private static final SingleCharInsertHandler PACKAGE_INSERT_HANDLER = new SingleCharInsertHandler('.');
+  }
+
+  private GoCompletionUtil() {
+
+  }
+
+  @NotNull
+  public static CamelHumpMatcher createPrefixMatcher(@NotNull PrefixMatcher original) {
+    return createPrefixMatcher(original.getPrefix());
+  }
+
+  @NotNull
+  public static CamelHumpMatcher createPrefixMatcher(@NotNull String prefix) {
+    return new CamelHumpMatcher(prefix, false);
+  }
+
+  @NotNull
+  public static LookupElement createFunctionOrMethodLookupElement(@NotNull final GoNamedSignatureOwner f,
+                                                                  @NotNull final String lookupString,
+                                                                  @Nullable final InsertHandler<LookupElement> h,
+                                                                  final double priority) {
+    return PrioritizedLookupElement.withPriority(LookupElementBuilder
+                                                   .createWithSmartPointer(lookupString, f)
+                                                   .withRenderer(FUNCTION_RENDERER)
+                                                   .withInsertHandler(h != null ? h : FUNCTION_INSERT_HANDLER), priority);
+  }
+
+  @Nullable
+  private static String calcTailText(GoSignatureOwner m) {
+    String text = "";
+    if (m instanceof GoMethodDeclaration) {
+      text = GoPsiImplUtil.getText(((GoMethodDeclaration)m).getReceiver().getType());
+    }
+    else if (m instanceof GoMethodSpec) {
+      PsiElement parent = m.getParent();
+      if (parent instanceof GoInterfaceType) {
+        text = GoPsiImplUtil.getText((GoInterfaceType)parent);
+      }
+    }
+    return StringUtil.isNotEmpty(text) ? " " + UIUtil.rightArrow() + " " + text : null;
+  }
+
+  @NotNull
+  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t) {
+    return createTypeLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_PRIORITY);
+  }
+
+  @NotNull
+  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t,
+                                                      @NotNull String lookupString,
+                                                      @Nullable InsertHandler<LookupElement> handler,
+                                                      @Nullable String importPath,
+                                                      double priority) {
+    LookupElementBuilder builder = LookupElementBuilder.createWithSmartPointer(lookupString, t)
+      .withInsertHandler(handler).withIcon(GoIcons.TYPE);
+    if (importPath != null) builder = builder.withTailText(" " + importPath, true);
+    return PrioritizedLookupElement.withPriority(builder, priority);
+  }
+
+  @NotNull
+  public static LookupElement createLabelLookupElement(@NotNull GoLabelDefinition l, @NotNull String lookupString) {
+    return PrioritizedLookupElement.withPriority(LookupElementBuilder.createWithSmartPointer(lookupString, l)
+                                                   .withIcon(GoIcons.LABEL), LABEL_PRIORITY);
+  }
+
+  @NotNull
+  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t) {
+    return createTypeConversionLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_CONVERSION);
+  }
+
+  @NotNull
+  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t,
+                                                                @NotNull String lookupString,
+                                                                @Nullable InsertHandler<LookupElement> insertHandler,
+                                                                @Nullable String importPath,
+                                                                double priority) {
+
+    InsertHandler<LookupElement> handler = ObjectUtils.notNull(insertHandler, getTypeConversionInsertHandler(t));
+    return createTypeLookupElement(t, lookupString, handler, importPath, priority);
+  }
+
+  @NotNull
+  public static InsertHandler<LookupElement> getTypeConversionInsertHandler(@NotNull GoTypeSpec t) {
+    GoType type = t.getType();
+    return type instanceof GoStructType || type instanceof GoArrayOrSliceType || type instanceof GoMapType
+           ? BracesInsertHandler.ONE_LINER
+           : ParenthesesInsertHandler.WITH_PARAMETERS;
+  }
+
+  @NotNull
+  public static LookupElement createVariableLikeLookupElement(@NotNull GoNamedElement v) {
+    String name = StringUtil.notNullize(v.getName());
+    SingleCharInsertHandler handler =
+      v instanceof GoFieldDefinition ?
+      new SingleCharInsertHandler(':') {
+        @Override
+        public void handleInsert(@NotNull InsertionContext context, LookupElement item) {
+          PsiFile file = context.getFile();
+          if (!(file instanceof GoFile)) return;
+          context.commitDocument();
+          int offset = context.getStartOffset();
+          PsiElement at = file.findElementAt(offset);
+          GoCompositeElement ref = PsiTreeUtil.getParentOfType(at, GoValue.class, GoReferenceExpression.class);
+          if (ref instanceof GoReferenceExpression && (((GoReferenceExpression)ref).getQualifier() != null || GoPsiImplUtil.prevDot(ref))) {
+            return;
+          }
+          GoValue value = PsiTreeUtil.getParentOfType(at, GoValue.class);
+          if (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null) return;
+          super.handleInsert(context, item);
+        }
+      } : null;
+    return PrioritizedLookupElement.withPriority(
+      LookupElementBuilder.createWithSmartPointer(name, v).withRenderer(VARIABLE_RENDERER).withInsertHandler(handler), VAR_PRIORITY);
+  }
+
+  @Nullable
+  private static String calcTailTextForFields(@NotNull GoNamedElement v) {
+    String name = null;
+    if (v instanceof GoFieldDefinition) {
+      GoFieldDefinitionStub stub = ((GoFieldDefinition)v).getStub();
+      GoTypeSpec spec = stub != null ? stub.getParentStubOfType(GoTypeSpec.class) : PsiTreeUtil.getParentOfType(v, GoTypeSpec.class);
+      name = spec != null ? spec.getName() : null;
+    }
+    return StringUtil.isNotEmpty(name) ? " " + UIUtil.rightArrow() + " " + name : null;
+  }
+
+  @Nullable
+  public static LookupElement createPackageLookupElement(@NotNull GoImportSpec spec, @Nullable String name) {
+    name = name != null ? name : ObjectUtils.notNull(spec.getAlias(), spec.getLocalPackageName());
+    return createPackageLookupElement(name, spec, true);
+  }
+
+  @NotNull
+  public static LookupElement createPackageLookupElement(@NotNull String importPath,
+                                                         @Nullable PsiElement context,
+                                                         boolean forType) {
+    return createPackageLookupElement(importPath, getContextImportPath(context), forType);
+  }
+
+  @NotNull
+  public static LookupElement createPackageLookupElement(@NotNull String importPath, @Nullable String contextImportPath, boolean forType) {
+    return PrioritizedLookupElement.withPriority(
+      LookupElementBuilder.create(importPath)
+        .withLookupString(importPath.substring(Math.max(0, importPath.lastIndexOf('/'))))
+        .withIcon(GoIcons.PACKAGE).withInsertHandler(forType ? Lazy.PACKAGE_INSERT_HANDLER : null),
+      calculatePackagePriority(importPath, contextImportPath));
+  }
+
+  public static int calculatePackagePriority(@NotNull String importPath, @Nullable String currentPath) {
+    int priority = PACKAGE_PRIORITY;
+    if (StringUtil.isNotEmpty(currentPath)) {
+      String[] givenSplit = importPath.split("/");
+      String[] contextSplit = currentPath.split("/");
+      for (int i = 0; i < contextSplit.length && i < givenSplit.length; i++) {
+        if (contextSplit[i].equals(givenSplit[i])) {
+          priority++;
+        }
+        else {
+          break;
+        }
+      }
+    }
+    return priority - StringUtil.countChars(importPath, '/') - StringUtil.countChars(importPath, '.');
+  }
+
+  @Nullable
+  public static String getContextImportPath(@Nullable PsiElement context) {
+    if (context == null) return null;
+    String currentPath = null;
+    if (context instanceof PsiDirectory) {
+      currentPath = GoSdkUtil.getImportPath((PsiDirectory)context);
+    }
+    else {
+      PsiFile file = context.getContainingFile();
+      if (file instanceof GoFile) {
+        currentPath = ((GoFile)file).getImportPath();
+      }
+    }
+    return currentPath;
+  }
+
+  @NotNull
+  public static LookupElementBuilder createDirectoryLookupElement(@NotNull PsiDirectory dir) {
+    int files = dir.getFiles().length;
+    return LookupElementBuilder.createWithSmartPointer(dir.getName(), dir).withIcon(GoIcons.DIRECTORY)
+      .withInsertHandler(files == 0 ? Lazy.DIR_INSERT_HANDLER : null);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.util.GoUtil;
+import com.intellij.openapi.util.TextRange;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReferenceBase;
+import com.intellij.psi.impl.source.resolve.ResolveCache;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.IncorrectOperationException;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class GoCachedReference<T extends PsiElement> extends PsiReferenceBase<T> {
+  protected GoCachedReference(@NotNull T element) {
+    super(element, TextRange.from(0, element.getTextLength()));
+  }
+
+  private static final ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement> MY_RESOLVER =
+    new ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement>() {
+      @Override
+      public PsiElement resolve(@NotNull PsiReferenceBase base, boolean b) {
+        return ((GoCachedReference)base).resolveInner();
+      }
+    };
+
+  @Nullable
+  protected abstract PsiElement resolveInner();
+
+  @Nullable
+  @Override
+  public final PsiElement resolve() {
+    return myElement.isValid()
+           ? ResolveCache.getInstance(myElement.getProject()).resolveWithCaching(this, MY_RESOLVER, false, false)
+           : null;
+  }
+
+  public abstract void processResolveVariants(@NotNull GoScopeProcessor processor);
+
+  @Override
+  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
+    myElement.replace(GoElementFactory.createIdentifierFromText(myElement.getProject(), newElementName));
+    return myElement;
+  }
+
+  @Override
+  public boolean isReferenceTo(PsiElement element) {
+    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
+  }
+  
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    return ArrayUtil.EMPTY_OBJECT_ARRAY;
+  }
+
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.psi.GoFunctionOrMethodDeclaration;
+import com.goide.psi.GoNamedElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.util.containers.ContainerUtil;
+import com.intellij.util.containers.OrderedSet;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.List;
+
+public abstract class GoScopeProcessorBase extends GoScopeProcessor {
+  @NotNull protected final OrderedSet<GoNamedElement> myResult = new OrderedSet<GoNamedElement>();
+
+  @NotNull protected final PsiElement myOrigin;
+  @NotNull private final String myRequestedName;
+  protected final boolean myIsCompletion;
+
+  public GoScopeProcessorBase(@NotNull String requestedName, @NotNull PsiElement origin, boolean completion) {
+    myRequestedName = requestedName;
+    myOrigin = origin;
+    myIsCompletion = completion;
+  }
+
+  @Override
+  public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
+    if (psiElement instanceof GoFunctionOrMethodDeclaration) return false;
+    if (!(psiElement instanceof GoNamedElement)) return true;
+    if (!myIsCompletion && !myRequestedName.equals(((GoNamedElement)psiElement).getName())) return true;
+    if (condition(psiElement)) return true;
+    if (psiElement.equals(myOrigin)) return true;
+    return add((GoNamedElement)psiElement) || myIsCompletion;
+  }
+
+  protected boolean add(@NotNull GoNamedElement psiElement) {
+    return !myResult.add(psiElement);
+  }
+
+  @Nullable
+  public GoNamedElement getResult() {
+    return ContainerUtil.getFirstItem(myResult);
+  }
+
+  @NotNull
+  public List<GoNamedElement> getVariants() {
+    return myResult;
+  }
+
+  protected abstract boolean condition(@NotNull PsiElement element);
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.completion.GoCompletionUtil;
+import com.goide.psi.GoBlock;
+import com.goide.psi.GoLabelDefinition;
+import com.goide.psi.GoLabelRef;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+
+public class GoLabelReference extends GoCachedReference<GoLabelRef> {
+  private final GoScopeProcessorBase myProcessor = new GoScopeProcessorBase(myElement.getText(), myElement, false) {
+    @Override
+    protected boolean condition(@NotNull PsiElement element) {
+      return !(element instanceof GoLabelDefinition);
+    }
+  };
+
+  public GoLabelReference(@NotNull GoLabelRef element) {
+    super(element);
+  }
+
+  @NotNull
+  private Collection<GoLabelDefinition> getLabelDefinitions() {
+    GoBlock block = PsiTreeUtil.getTopmostParentOfType(myElement, GoBlock.class);
+    return PsiTreeUtil.findChildrenOfType(block, GoLabelDefinition.class);
+  }
+
+  @Nullable
+  @Override
+  protected PsiElement resolveInner() {
+    Collection<GoLabelDefinition> defs = getLabelDefinitions();
+    for (GoLabelDefinition def : defs) {
+      if (!myProcessor.execute(def, ResolveState.initial())) return def;
+    }
+    return null;
+  }
+
+  @Override
+  public void processResolveVariants(@NotNull GoScopeProcessor processor) {
+  }
+
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    Collection<LookupElement> result = ContainerUtil.newArrayList();
+    for (GoLabelDefinition element : getLabelDefinitions()) {
+      String name = element.getName();
+      if (name != null) {
+        result.add(GoCompletionUtil.createLabelLookupElement(element, name));
+      }
+    }
+    return ArrayUtil.toObjectArray(result);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.completion.GoCompletionUtil;
+import com.goide.psi.*;
+import com.intellij.codeInsight.lookup.LookupElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.ArrayUtil;
+import com.intellij.util.containers.ContainerUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+import java.util.List;
+
+public class GoFieldNameReference extends GoCachedReference<GoReferenceExpressionBase> {
+  private GoCompositeElement myValue;
+
+  @NotNull
+  private GoScopeProcessorBase getProcessor(final boolean completion) {
+    return new GoScopeProcessorBase(myElement.getText(), myElement, completion) {
+      @Override
+      protected boolean condition(@NotNull PsiElement element) {
+        return !(element instanceof GoFieldDefinition) && !(element instanceof GoAnonymousFieldDefinition);
+      }
+    };
+  }
+
+  public GoFieldNameReference(@NotNull GoReferenceExpressionBase element) {
+    super(element);
+    GoCompositeElement place = myElement;
+    while ((place = PsiTreeUtil.getParentOfType(place, GoLiteralValue.class)) != null) {
+      if (place.getParent() instanceof GoValue) {
+        myValue = (GoValue)place.getParent();
+        break;
+      }
+    }
+  }
+
+  private boolean processFields(@NotNull GoScopeProcessorBase processor) {
+    GoKey key = PsiTreeUtil.getParentOfType(myElement, GoKey.class);
+    GoValue value = PsiTreeUtil.getParentOfType(myElement, GoValue.class);
+    if (key == null && (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null)) return false;
+
+    GoCompositeLit lit = PsiTreeUtil.getParentOfType(myElement, GoCompositeLit.class);
+
+    GoType type = lit != null ? lit.getType() : null;
+    if (type == null && lit != null) {
+      type = GoPsiImplUtil.getType(lit.getTypeReferenceExpression());
+    }
+
+    type = getType(type);
+
+    if (type instanceof GoStructType && !type.processDeclarations(processor, ResolveState.initial(), null, myElement)) return true;
+
+    return false;
+  }
+
+  @Nullable
+  private GoType getType(GoType type) { 
+    boolean inValue = myValue != null;
+    
+    if (inValue && type instanceof GoArrayOrSliceType) type = ((GoArrayOrSliceType)type).getType();
+    else if (type instanceof GoMapType) type = inValue ? ((GoMapType)type).getValueType() : ((GoMapType)type).getKeyType();
+    else if (inValue && type instanceof GoStructType) {
+      GoKey key = PsiTreeUtil.getPrevSiblingOfType(myValue, GoKey.class);
+      GoFieldName field = key != null ? key.getFieldName() : null;
+      PsiReference reference = field != null ? field.getReference() : null;
+      PsiElement resolve = reference != null ? reference.resolve() : null;
+      if (resolve instanceof GoFieldDefinition) {
+        type = PsiTreeUtil.getNextSiblingOfType(resolve, GoType.class);
+      }
+    }
+
+    if (type != null && type.getTypeReferenceExpression() != null) {
+      type = GoPsiImplUtil.getType(type.getTypeReferenceExpression());
+    }
+
+    if (type instanceof GoPointerType) {
+      GoType inner = ((GoPointerType)type).getType();
+      if (inner != null && inner.getTypeReferenceExpression() != null) {
+        type = GoPsiImplUtil.getType(inner.getTypeReferenceExpression());
+      }
+    }
+
+    return type;
+  }
+
+  @Nullable
+  @Override
+  public PsiElement resolveInner() {
+    GoScopeProcessorBase p = getProcessor(false);
+    processFields(p);
+    return p.getResult();
+  }
+
+  @Override
+  public void processResolveVariants(@NotNull GoScopeProcessor processor) {
+  }
+
+  @NotNull
+  @Override
+  public Object[] getVariants() {
+    GoScopeProcessorBase p = getProcessor(true);
+    processFields(p);
+    List<GoNamedElement> variants = p.getVariants();
+    if (variants.isEmpty()) return EMPTY_ARRAY;
+    Collection<LookupElement> result = ContainerUtil.newArrayList();
+    for (GoNamedElement element : variants) {
+      result.add(GoCompletionUtil.createVariableLikeLookupElement(element));
+    }
+    return ArrayUtil.toObjectArray(result);
+  }
+}
+
+<code block>
+
+
+package com.goide.psi.impl;
+
+import com.goide.psi.GoBlock;
+import com.goide.psi.GoFunctionOrMethodDeclaration;
+import com.goide.psi.GoStatement;
+import com.goide.psi.GoVarDefinition;
+import com.goide.util.GoUtil;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.ResolveState;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.util.IncorrectOperationException;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public class GoVarReference extends GoCachedReference<GoVarDefinition> {
+  private final GoBlock myPotentialStopBlock;
+
+  public GoVarReference(@NotNull GoVarDefinition element) {
+    super(element);
+    myPotentialStopBlock = PsiTreeUtil.getParentOfType(element, GoBlock.class);
+  }
+
+  @Nullable
+  @Override
+  public PsiElement resolveInner() {
+    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, false);
+    processResolveVariants(p);
+    return p.getResult(); 
+  }
+
+  @Override
+  public void processResolveVariants(@NotNull final GoScopeProcessor processor) {
+    GoVarProcessor p = processor instanceof GoVarProcessor
+                       ? ((GoVarProcessor)processor)
+                       : new GoVarProcessor(myElement.getText(), myElement, processor.isCompletion()) {
+                         @Override
+                         public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
+                           return super.execute(psiElement, resolveState) && processor.execute(psiElement, resolveState);
+                         }
+                       };
+
+    if (myPotentialStopBlock != null) {
+      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
+        GoReference.processFunctionParameters(myElement, p);
+      }
+      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
+                                               myElement);
+    }
+  }
+
+  @Override
+  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
+    myElement.replace(GoElementFactory.createVarDefinitionFromText(myElement.getProject(), newElementName));
+    return myElement;
+  }
+
+  @Override
+  public boolean isReferenceTo(PsiElement element) {
+    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
+  }
+}
+
+<code block>
+
+
+package com.goide.actions.fmt;
+
+import com.goide.psi.GoFile;
+import com.intellij.execution.ExecutionException;
+import com.intellij.ide.util.PropertiesComponent;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.vcs.CheckinProjectPanel;
+import com.intellij.openapi.vcs.changes.CommitContext;
+import com.intellij.openapi.vcs.changes.CommitExecutor;
+import com.intellij.openapi.vcs.checkin.CheckinHandler;
+import com.intellij.openapi.vcs.checkin.CheckinHandlerFactory;
+import com.intellij.openapi.vcs.ui.RefreshableOnComponent;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiManager;
+import com.intellij.util.PairConsumer;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import javax.swing.*;
+import java.awt.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+public class GoFmtCheckinFactory extends CheckinHandlerFactory {
+  private static final String GO_FMT = "GO_FMT";
+
+  @NotNull
+  public CheckinHandler createHandler(@NotNull final CheckinProjectPanel panel, @NotNull CommitContext commitContext) {
+    return new CheckinHandler() {
+      @Override
+      public RefreshableOnComponent getBeforeCheckinConfigurationPanel() {
+        final JCheckBox checkBox = new JCheckBox("Go fmt");
+        return new RefreshableOnComponent() {
+          @NotNull
+          public JComponent getComponent() {
+            JPanel panel = new JPanel(new BorderLayout());
+            panel.add(checkBox, BorderLayout.WEST);
+            return panel;
+          }
+
+          public void refresh() {
+          }
+
+          public void saveState() {
+            PropertiesComponent.getInstance(panel.getProject()).setValue(GO_FMT, Boolean.toString(checkBox.isSelected()));
+          }
+
+          public void restoreState() {
+            checkBox.setSelected(enabled(panel));
+          }
+        };
+      }
+
+      @Override
+      public ReturnResult beforeCheckin(@Nullable CommitExecutor executor, PairConsumer<Object, Object> additionalDataConsumer) {
+        if (enabled(panel)) {
+          FileDocumentManager.getInstance().saveAllDocuments();
+          for (PsiFile file : getPsiFiles()) {
+            try {
+              VirtualFile virtualFile = file.getVirtualFile();
+              new GoFmtFileAction().doSomething(virtualFile, ModuleUtilCore.findModuleForPsiElement(file), file.getProject(), "Go fmt");
+            }
+            catch (ExecutionException ignored) {
+            }
+          }
+        }
+        return super.beforeCheckin();
+      }
+
+      @NotNull
+      private List<PsiFile> getPsiFiles() {
+        Collection<VirtualFile> files = panel.getVirtualFiles();
+        List<PsiFile> psiFiles = new ArrayList<PsiFile>();
+        PsiManager manager = PsiManager.getInstance(panel.getProject());
+        for (VirtualFile file : files) {
+          PsiFile psiFile = manager.findFile(file);
+          if (psiFile instanceof GoFile) {
+            psiFiles.add(psiFile);
+          }
+        }
+        return psiFiles;
+      }
+    };
+  }
+
+  private static boolean enabled(@NotNull CheckinProjectPanel panel) {
+    return PropertiesComponent.getInstance(panel.getProject()).getBoolean(GO_FMT, false);
+  }
+}
+<code block>
+
+
+package com.goide.actions.fmt;
+
+import com.goide.GoConstants;
+import com.goide.GoFileType;
+import com.goide.sdk.GoSdkService;
+import com.goide.util.GoExecutor;
+import com.intellij.execution.ExecutionException;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.CommonDataKeys;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.project.DumbAwareAction;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.util.ExceptionUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class GoExternalToolsAction extends DumbAwareAction {
+  private static final Logger LOG = Logger.getInstance(GoExternalToolsAction.class);
+
+  private static void error(@NotNull String title, @NotNull Project project, @Nullable Exception ex) {
+    String message = ex == null ? "" : ExceptionUtil.getUserStackTrace(ex, LOG);
+    NotificationType type = NotificationType.ERROR;
+    Notifications.Bus.notify(GoConstants.GO_EXECUTION_NOTIFICATION_GROUP.createNotification(title, message, type, null), project);
+  }
+
+  @Override
+  public void update(@NotNull AnActionEvent e) {
+    super.update(e);
+    Project project = e.getProject();
+    VirtualFile file = e.getData(CommonDataKeys.VIRTUAL_FILE);
+    if (project == null || file == null || !file.isInLocalFileSystem() || file.getFileType() != GoFileType.INSTANCE) {
+      e.getPresentation().setEnabled(false);
+      return;
+    }
+    Module module = ModuleUtilCore.findModuleForFile(file, project);
+    e.getPresentation().setEnabled(GoSdkService.getInstance(project).isGoModule(module));
+  }
+
+  @Override
+  public void actionPerformed(@NotNull AnActionEvent e) {
+    Project project = e.getProject();
+    VirtualFile file = e.getRequiredData(CommonDataKeys.VIRTUAL_FILE);
+    assert project != null;
+    String title = StringUtil.notNullize(e.getPresentation().getText());
+    
+    final Module module = ModuleUtilCore.findModuleForFile(file, project);
+    try {
+      doSomething(file, module, project, title);
+    }
+    catch (ExecutionException ex) {
+      error(title, project, ex);
+      LOG.error(ex);
+    }
+  }
+
+  protected boolean doSomething(@NotNull VirtualFile virtualFile, @Nullable Module module, @NotNull Project project, @NotNull String title)
+    throws ExecutionException {
+    Document document = FileDocumentManager.getInstance().getDocument(virtualFile);
+    assert document != null;
+    final String filePath = virtualFile.getCanonicalPath();
+    assert filePath != null;
+
+    FileDocumentManager.getInstance().saveDocument(document);
+    createExecutor(project, module, title, filePath).executeWithProgress(false);
+    return true;
+  }
+
+  @NotNull
+  protected abstract GoExecutor createExecutor(@NotNull Project project,
+                                               @Nullable Module module,
+                                               @NotNull String title,
+                                               @NotNull String filePath);
+}
+
+<code block>
+
+
+package com.goide.actions.fmt;
+
+import com.goide.psi.GoFile;
+import com.intellij.execution.ExecutionException;
+import com.intellij.ide.util.PropertiesComponent;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.vcs.CheckinProjectPanel;
+import com.intellij.openapi.vcs.changes.CommitContext;
+import com.intellij.openapi.vcs.changes.CommitExecutor;
+import com.intellij.openapi.vcs.checkin.CheckinHandler;
+import com.intellij.openapi.vcs.checkin.CheckinHandlerFactory;
+import com.intellij.openapi.vcs.ui.RefreshableOnComponent;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiManager;
+import com.intellij.util.PairConsumer;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import javax.swing.*;
+import java.awt.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+public class GoFmtCheckinFactory extends CheckinHandlerFactory {
+  private static final String GO_FMT = "GO_FMT";
+
+  @NotNull
+  public CheckinHandler createHandler(@NotNull final CheckinProjectPanel panel, @NotNull CommitContext commitContext) {
+    return new CheckinHandler() {
+      @Override
+      public RefreshableOnComponent getBeforeCheckinConfigurationPanel() {
+        final JCheckBox checkBox = new JCheckBox("Go fmt");
+        return new RefreshableOnComponent() {
+          @NotNull
+          public JComponent getComponent() {
+            JPanel panel = new JPanel(new BorderLayout());
+            panel.add(checkBox, BorderLayout.WEST);
+            return panel;
+          }
+
+          public void refresh() {
+          }
+
+          public void saveState() {
+            PropertiesComponent.getInstance(panel.getProject()).setValue(GO_FMT, Boolean.toString(checkBox.isSelected()));
+          }
+
+          public void restoreState() {
+            checkBox.setSelected(enabled(panel));
+          }
+        };
+      }
+
+      @Override
+      public ReturnResult beforeCheckin(@Nullable CommitExecutor executor, PairConsumer<Object, Object> additionalDataConsumer) {
+        if (enabled(panel)) {
+          FileDocumentManager.getInstance().saveAllDocuments();
+          for (PsiFile file : getPsiFiles()) {
+            try {
+              VirtualFile virtualFile = file.getVirtualFile();
+              new GoFmtFileAction().doSomething(virtualFile, ModuleUtilCore.findModuleForPsiElement(file), file.getProject(), "Go fmt", true);
+            }
+            catch (ExecutionException ignored) {
+            }
+          }
+        }
+        return super.beforeCheckin();
+      }
+
+      @NotNull
+      private List<PsiFile> getPsiFiles() {
+        Collection<VirtualFile> files = panel.getVirtualFiles();
+        List<PsiFile> psiFiles = new ArrayList<PsiFile>();
+        PsiManager manager = PsiManager.getInstance(panel.getProject());
+        for (VirtualFile file : files) {
+          PsiFile psiFile = manager.findFile(file);
+          if (psiFile instanceof GoFile) {
+            psiFiles.add(psiFile);
+          }
+        }
+        return psiFiles;
+      }
+    };
+  }
+
+  private static boolean enabled(@NotNull CheckinProjectPanel panel) {
+    return PropertiesComponent.getInstance(panel.getProject()).getBoolean(GO_FMT, false);
+  }
+}
+<code block>
+
+
+package com.goide.actions.fmt;
+
+import com.goide.GoConstants;
+import com.goide.GoFileType;
+import com.goide.sdk.GoSdkService;
+import com.goide.util.GoExecutor;
+import com.intellij.execution.ExecutionException;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.CommonDataKeys;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.project.DumbAwareAction;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.util.ExceptionUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class GoExternalToolsAction extends DumbAwareAction {
+  private static final Logger LOG = Logger.getInstance(GoExternalToolsAction.class);
+
+  private static void error(@NotNull String title, @NotNull Project project, @Nullable Exception ex) {
+    String message = ex == null ? "" : ExceptionUtil.getUserStackTrace(ex, LOG);
+    NotificationType type = NotificationType.ERROR;
+    Notifications.Bus.notify(GoConstants.GO_EXECUTION_NOTIFICATION_GROUP.createNotification(title, message, type, null), project);
+  }
+
+  @Override
+  public void update(@NotNull AnActionEvent e) {
+    super.update(e);
+    Project project = e.getProject();
+    VirtualFile file = e.getData(CommonDataKeys.VIRTUAL_FILE);
+    if (project == null || file == null || !file.isInLocalFileSystem() || file.getFileType() != GoFileType.INSTANCE) {
+      e.getPresentation().setEnabled(false);
+      return;
+    }
+    Module module = ModuleUtilCore.findModuleForFile(file, project);
+    e.getPresentation().setEnabled(GoSdkService.getInstance(project).isGoModule(module));
+  }
+
+  @Override
+  public void actionPerformed(@NotNull AnActionEvent e) {
+    Project project = e.getProject();
+    VirtualFile file = e.getRequiredData(CommonDataKeys.VIRTUAL_FILE);
+    assert project != null;
+    String title = StringUtil.notNullize(e.getPresentation().getText());
+
+    final Module module = ModuleUtilCore.findModuleForFile(file, project);
+    try {
+      doSomething(file, module, project, title);
+    }
+    catch (ExecutionException ex) {
+      error(title, project, ex);
+      LOG.error(ex);
+    }
+  }
+
+  protected boolean doSomething(@NotNull VirtualFile virtualFile,
+                                @Nullable Module module, 
+                                @NotNull Project project, 
+                                @NotNull String title) throws ExecutionException {
+    return doSomething(virtualFile, module, project, title, false);
+  }
+
+  protected boolean doSomething(@NotNull VirtualFile virtualFile,
+                                @Nullable Module module,
+                                @NotNull Project project,
+                                @NotNull String title,
+                                boolean withProgress) throws ExecutionException {
+    Document document = FileDocumentManager.getInstance().getDocument(virtualFile);
+    assert document != null;
+    final String filePath = virtualFile.getCanonicalPath();
+    assert filePath != null;
+
+    FileDocumentManager.getInstance().saveDocument(document);
+    createExecutor(project, module, title, filePath).executeWithProgress(withProgress);
+    return true;
+  }
+
+  @NotNull
+  protected abstract GoExecutor createExecutor(@NotNull Project project,
+                                               @Nullable Module module,
+                                               @NotNull String title,
+                                               @NotNull String filePath);
+}
+
+<code block>
+
+
+package com.goide.runconfig;
+
+import com.goide.GoConstants;
+import com.goide.GoFileType;
+import com.goide.psi.GoFile;
+import com.goide.psi.GoPackageClause;
+import com.intellij.execution.actions.ConfigurationContext;
+import com.intellij.openapi.fileChooser.FileChooserDescriptor;
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.TextBrowseFolderListener;
+import com.intellij.openapi.ui.TextFieldWithBrowseButton;
+import com.intellij.openapi.util.Condition;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiManager;
+import com.intellij.psi.util.PsiTreeUtil;
+import org.jetbrains.annotations.Contract;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public class GoRunUtil {
+  private GoRunUtil() {
+    
+  }
+
+  @Contract("null -> false")
+  public static boolean isPackageContext(@Nullable PsiElement contextElement) {
+    return PsiTreeUtil.getNonStrictParentOfType(contextElement, GoPackageClause.class) != null;
+  }
+
+  @Nullable
+  public static PsiFile findMainFileInDirectory(@NotNull VirtualFile packageDirectory, @NotNull Project project) {
+    for (VirtualFile file : packageDirectory.getChildren()) {
+      if (file == null) {
+        continue;
+      }
+      PsiFile psiFile = PsiManager.getInstance(project).findFile(file);
+      if (isMainGoFile(psiFile)) {
+        return psiFile;
+      }
+    }
+    return null;
+  }
+
+  @Nullable
+  public static PsiElement getContextElement(@Nullable ConfigurationContext context) {
+    if (context == null) {
+      return null;
+    }
+    PsiElement psiElement = context.getPsiLocation();
+    if (psiElement == null || !psiElement.isValid()) {
+      return null;
+    }
+    return psiElement;
+  }
+
+  public static void installGoWithMainFileChooser(final Project project, @NotNull TextFieldWithBrowseButton fileField) {
+    installFileChooser(project, fileField, false, new Condition<VirtualFile>() {
+      @Override
+      public boolean value(VirtualFile file) {
+        if (file.getFileType() != GoFileType.INSTANCE) {
+          return false;
+        }
+        final PsiFile psiFile = PsiManager.getInstance(project).findFile(file);
+        return isMainGoFile(psiFile);
+      }
+    });
+  }
+  
+  public static boolean isMainGoFile(@Nullable PsiFile psiFile) {
+    if (psiFile != null && psiFile instanceof GoFile) {
+      return GoConstants.MAIN.equals(((GoFile)psiFile).getPackageName()) && ((GoFile)psiFile).hasMainFunction();
+    }
+    return false;
+  }
+
+  public static void installFileChooser(@NotNull Project project,
+                                        @NotNull TextFieldWithBrowseButton field,
+                                        boolean directory) {
+    installFileChooser(project, field, directory, null);
+  }
+
+  public static void installFileChooser(@NotNull Project project,
+                                        @NotNull TextFieldWithBrowseButton field,
+                                        boolean directory,
+                                        @Nullable Condition<VirtualFile> fileFilter) {
+    FileChooserDescriptor chooseDirectoryDescriptor = directory
+                                                      ? FileChooserDescriptorFactory.createSingleFolderDescriptor()
+                                                      : FileChooserDescriptorFactory.createSingleLocalFileDescriptor();
+    chooseDirectoryDescriptor.setRoots(project.getBaseDir());
+    chooseDirectoryDescriptor.setShowFileSystemRoots(false);
+    chooseDirectoryDescriptor.withFileFilter(fileFilter);
+    field.addBrowseFolderListener(new TextBrowseFolderListener(chooseDirectoryDescriptor));
+  }
+}
+
+<code block>
+
+
+package com.goide.runconfig.testing;
+
+import com.goide.psi.GoFile;
+import com.goide.psi.GoFunctionDeclaration;
+import com.goide.runconfig.GoRunUtil;
+import com.goide.sdk.GoSdkService;
+import com.intellij.execution.actions.ConfigurationContext;
+import com.intellij.execution.actions.RunConfigurationProducer;
+import com.intellij.execution.configurations.ConfigurationType;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.util.Comparing;
+import com.intellij.openapi.util.Ref;
+import com.intellij.openapi.util.io.FileUtil;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.util.PsiTreeUtil;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class GoTestRunConfigurationProducerBase extends RunConfigurationProducer<GoTestRunConfigurationBase> {
+
+  protected GoTestRunConfigurationProducerBase(@NotNull ConfigurationType configurationType) {
+    super(configurationType);
+  }
+
+  @Override
+  protected boolean setupConfigurationFromContext(@NotNull GoTestRunConfigurationBase configuration, ConfigurationContext context, Ref sourceElement) {
+    PsiElement contextElement = GoRunUtil.getContextElement(context);
+    if (contextElement == null) {
+      return false;
+    }
+
+    Module module = ModuleUtilCore.findModuleForPsiElement(contextElement);
+    if (module == null || !GoSdkService.getInstance(configuration.getProject()).isGoModule(module)) {
+      return false;
+    }
+    
+    configuration.setModule(module);
+    if (contextElement instanceof PsiDirectory) {
+      configuration.setName("All in '" + ((PsiDirectory)contextElement).getName() + "'");
+      configuration.setKind(GoTestRunConfigurationBase.Kind.DIRECTORY);
+      String directoryPath = ((PsiDirectory)contextElement).getVirtualFile().getPath();
+      configuration.setDirectoryPath(directoryPath);
+      configuration.setWorkingDirectory(directoryPath);
+      return true;
+    }
+    else {
+      PsiFile file = contextElement.getContainingFile();
+      if (GoTestFinder.isTestFile(file)) {
+        if (GoRunUtil.isPackageContext(contextElement)) {
+          String packageName = StringUtil.notNullize(((GoFile)file).getImportPath());
+          configuration.setKind(GoTestRunConfigurationBase.Kind.PACKAGE);
+          configuration.setPackage(packageName);
+          configuration.setName("All in '" + packageName + "'");
+        }
+        else {
+          String functionNameFromContext = findFunctionNameFromContext(contextElement);
+          if (functionNameFromContext != null) {
+            configuration.setName(functionNameFromContext + " in " + file.getName());
+            configuration.setPattern("^" + functionNameFromContext + "$");
+
+            configuration.setKind(GoTestRunConfigurationBase.Kind.PACKAGE);
+            configuration.setPackage(StringUtil.notNullize(((GoFile)file).getImportPath()));
+          }
+          else {
+            configuration.setName(file.getName());
+            configuration.setKind(GoTestRunConfigurationBase.Kind.FILE);
+            configuration.setFilePath(file.getVirtualFile().getPath());
+          }
+        }
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  @Override
+  public boolean isConfigurationFromContext(@NotNull GoTestRunConfigurationBase configuration, ConfigurationContext context) {
+    PsiElement contextElement = GoRunUtil.getContextElement(context);
+    if (contextElement == null) return false;
+
+    Module module = ModuleUtilCore.findModuleForPsiElement(contextElement);
+    if (!Comparing.equal(module, configuration.getConfigurationModule().getModule())) return false;
+
+    PsiFile file = contextElement.getContainingFile();
+    switch (configuration.getKind()) {
+      case DIRECTORY:
+        if (contextElement instanceof PsiDirectory) {
+          String directoryPath = ((PsiDirectory)contextElement).getVirtualFile().getPath();
+          return FileUtil.pathsEqual(configuration.getDirectoryPath(), directoryPath) &&
+                 FileUtil.pathsEqual(configuration.getWorkingDirectory(), directoryPath);
+        }
+      case PACKAGE:
+        if (!GoTestFinder.isTestFile(file)) return false;
+        if (!Comparing.equal(((GoFile)file).getImportPath(), configuration.getPackage())) return false;
+        if (GoRunUtil.isPackageContext(contextElement) && configuration.getPattern().isEmpty()) return true;
+        
+        String functionNameFromContext = findFunctionNameFromContext(contextElement);
+        return functionNameFromContext != null 
+               ? configuration.getPattern().equals("^" + functionNameFromContext + "$") 
+               : configuration.getPattern().isEmpty();
+      case FILE:
+        return GoTestFinder.isTestFile(file) && FileUtil.pathsEqual(configuration.getFilePath(), file.getVirtualFile().getPath()) &&
+          findFunctionNameFromContext(contextElement) == null;
+    }
+    return false;
+  }
+
+  @Nullable
+  private static String findFunctionNameFromContext(PsiElement contextElement) {
+    GoFunctionDeclaration function = PsiTreeUtil.getNonStrictParentOfType(contextElement, GoFunctionDeclaration.class);
+    return function != null ? GoTestFinder.getTestFunctionName(function) : null;
+  }
+}
+
+<code block>
+
+
+package com.goide.runconfig.testing.frameworks.gocheck;
+
+import com.goide.psi.GoFile;
+import com.goide.runconfig.GoModuleBasedConfiguration;
+import com.goide.runconfig.testing.GoTestRunConfigurationBase;
+import com.goide.runconfig.testing.GoTestRunningState;
+import com.goide.runconfig.testing.ui.GoTestRunConfigurationEditorForm;
+import com.goide.stubs.index.GoPackagesIndex;
+import com.goide.util.GoUtil;
+import com.intellij.execution.configurations.ConfigurationType;
+import com.intellij.execution.configurations.ModuleBasedConfiguration;
+import com.intellij.execution.configurations.RunConfiguration;
+import com.intellij.execution.configurations.RuntimeConfigurationException;
+import com.intellij.execution.runners.ExecutionEnvironment;
+import com.intellij.execution.testframework.TestConsoleProperties;
+import com.intellij.execution.testframework.sm.runner.OutputToGeneralTestEventsConverter;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.options.SettingsEditor;
+import com.intellij.openapi.project.Project;
+import com.intellij.psi.stubs.StubIndex;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.regex.Pattern;
+
+public class GocheckRunConfiguration extends GoTestRunConfigurationBase {
+  private static final Pattern GO_CHECK_IMPORT_PATH = Pattern.compile("gopkg\\.in/check\\.v\\d+");
+  private static final Pattern GO_CHECK_GITHUB_IMPORT_PATH = Pattern.compile("github\\.com/go-check/check\\.v\\d+");
+
+  public GocheckRunConfiguration(@NotNull Project project, String name, @NotNull ConfigurationType configurationType) {
+    super(project, name, configurationType);
+  }
+
+  @Override
+  public OutputToGeneralTestEventsConverter createTestEventsConverter(@NotNull TestConsoleProperties consoleProperties) {
+    return new GocheckEventsConverter(consoleProperties);
+  }
+
+  @Override
+  public String getFrameworkName() {
+    return "gocheck";
+  }
+
+  @Override
+  public void checkConfiguration() throws RuntimeConfigurationException {
+    super.checkConfiguration();
+    GoModuleBasedConfiguration configurationModule = getConfigurationModule();
+    Module module = configurationModule.getModule();
+    assert module != null;
+    for (GoFile file : StubIndex.getElements(GoPackagesIndex.KEY, "check", getProject(), GoUtil.moduleScope(module), GoFile.class)) {
+      String importPath = file.getImportPath();
+      if (importPath != null && (GO_CHECK_IMPORT_PATH.matcher(importPath).matches() ||
+                                 GO_CHECK_GITHUB_IMPORT_PATH.matcher(importPath).matches())) {
+        return;
+      }
+    }
+    throw new RuntimeConfigurationException("Cannot find gocheck package in GOPATH");
+  }
+
+  @NotNull
+  @Override
+  public SettingsEditor<? extends RunConfiguration> getConfigurationEditor() {
+    return new GoTestRunConfigurationEditorForm(getProject());
+  }
+
+  @NotNull
+  @Override
+  protected GoTestRunningState newRunningState(@NotNull ExecutionEnvironment env, @NotNull Module module) {
+    return new GocheckRunningState(env, module, this);
+  }
+
+  @NotNull
+  @Override
+  protected ModuleBasedConfiguration createInstance() {
+    return new GocheckRunConfiguration(getProject(), getName(), GocheckRunConfigurationType.getInstance());
+  }
+}
+
+<code block>
+
+
+package com.goide.runconfig.testing.frameworks.gocheck;
+
+import com.goide.runconfig.testing.GoTestRunConfigurationProducerBase;
+
+
+public class GocheckRunConfigurationProducer extends GoTestRunConfigurationProducerBase implements Cloneable {
+  public GocheckRunConfigurationProducer() {
+    super(GocheckRunConfigurationType.getInstance());
+  }
+}
+
+<code block>
+
+
 package com.goide.runconfig;
 
 import com.goide.GoConstants;
@@ -324,2418 +2736,5 @@ public class GocheckRunConfigurationProducer extends GoTestRunConfigurationProdu
   @Override
   protected boolean isAvailableInModule(@Nullable Module module) {
     return super.isAvailableInModule(module) && GoRunUtil.hasGoCheckSupport(module);
-  }
-}
-
-<code block>
-
-
-package com.goide.runconfig;
-
-import com.goide.GoConstants;
-import com.goide.GoFileType;
-import com.goide.psi.GoFile;
-import com.goide.psi.GoPackageClause;
-import com.intellij.execution.actions.ConfigurationContext;
-import com.intellij.openapi.fileChooser.FileChooserDescriptor;
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.TextBrowseFolderListener;
-import com.intellij.openapi.ui.TextFieldWithBrowseButton;
-import com.intellij.openapi.util.Condition;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiManager;
-import com.intellij.psi.util.PsiTreeUtil;
-import org.jetbrains.annotations.Contract;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public class GoRunUtil {
-  private GoRunUtil() {
-    
-  }
-
-  @Contract("null -> false")
-  public static boolean isPackageContext(@Nullable PsiElement contextElement) {
-    return PsiTreeUtil.getNonStrictParentOfType(contextElement, GoPackageClause.class) != null;
-  }
-
-  @Nullable
-  public static PsiFile findMainFileInDirectory(@NotNull VirtualFile packageDirectory, @NotNull Project project) {
-    for (VirtualFile file : packageDirectory.getChildren()) {
-      if (file == null) {
-        continue;
-      }
-      PsiFile psiFile = PsiManager.getInstance(project).findFile(file);
-      if (isMainGoFile(psiFile)) {
-        return psiFile;
-      }
-    }
-    return null;
-  }
-
-  @Nullable
-  public static PsiElement getContextElement(@Nullable ConfigurationContext context) {
-    if (context == null) {
-      return null;
-    }
-    PsiElement psiElement = context.getPsiLocation();
-    if (psiElement == null || !psiElement.isValid()) {
-      return null;
-    }
-    return psiElement;
-  }
-
-  public static void installGoWithMainFileChooser(final Project project, @NotNull TextFieldWithBrowseButton fileField) {
-    installFileChooser(project, fileField, false, new Condition<VirtualFile>() {
-      @Override
-      public boolean value(VirtualFile file) {
-        if (file.getFileType() != GoFileType.INSTANCE) {
-          return false;
-        }
-        final PsiFile psiFile = PsiManager.getInstance(project).findFile(file);
-        return isMainGoFile(psiFile);
-      }
-    });
-  }
-  
-  public static boolean isMainGoFile(@Nullable PsiFile psiFile) {
-    if (psiFile != null && psiFile instanceof GoFile) {
-      return GoConstants.MAIN.equals(((GoFile)psiFile).getPackageName()) && ((GoFile)psiFile).hasMainFunction();
-    }
-    return false;
-  }
-
-  public static void installFileChooser(@NotNull Project project,
-                                        @NotNull TextFieldWithBrowseButton field,
-                                        boolean directory) {
-    installFileChooser(project, field, directory, null);
-  }
-
-  public static void installFileChooser(@NotNull Project project,
-                                        @NotNull TextFieldWithBrowseButton field,
-                                        boolean directory,
-                                        @Nullable Condition<VirtualFile> fileFilter) {
-    FileChooserDescriptor chooseDirectoryDescriptor = directory
-                                                      ? FileChooserDescriptorFactory.createSingleFolderDescriptor()
-                                                      : FileChooserDescriptorFactory.createSingleLocalFileDescriptor();
-    chooseDirectoryDescriptor.setRoots(project.getBaseDir());
-    chooseDirectoryDescriptor.setShowFileSystemRoots(false);
-    chooseDirectoryDescriptor.withFileFilter(fileFilter);
-    field.addBrowseFolderListener(new TextBrowseFolderListener(chooseDirectoryDescriptor));
-  }
-}
-
-<code block>
-
-
-package com.goide.runconfig.testing;
-
-import com.goide.psi.GoFile;
-import com.goide.psi.GoFunctionDeclaration;
-import com.goide.runconfig.GoRunUtil;
-import com.goide.sdk.GoSdkService;
-import com.intellij.execution.actions.ConfigurationContext;
-import com.intellij.execution.actions.RunConfigurationProducer;
-import com.intellij.execution.configurations.ConfigurationType;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleUtilCore;
-import com.intellij.openapi.util.Comparing;
-import com.intellij.openapi.util.Ref;
-import com.intellij.openapi.util.io.FileUtil;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.util.PsiTreeUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public abstract class GoTestRunConfigurationProducerBase extends RunConfigurationProducer<GoTestRunConfigurationBase> {
-
-  protected GoTestRunConfigurationProducerBase(@NotNull ConfigurationType configurationType) {
-    super(configurationType);
-  }
-
-  @Override
-  protected boolean setupConfigurationFromContext(@NotNull GoTestRunConfigurationBase configuration, ConfigurationContext context, Ref sourceElement) {
-    PsiElement contextElement = GoRunUtil.getContextElement(context);
-    if (contextElement == null) {
-      return false;
-    }
-
-    Module module = ModuleUtilCore.findModuleForPsiElement(contextElement);
-    if (module == null || !GoSdkService.getInstance(configuration.getProject()).isGoModule(module)) {
-      return false;
-    }
-    
-    configuration.setModule(module);
-    if (contextElement instanceof PsiDirectory) {
-      configuration.setName("All in '" + ((PsiDirectory)contextElement).getName() + "'");
-      configuration.setKind(GoTestRunConfigurationBase.Kind.DIRECTORY);
-      String directoryPath = ((PsiDirectory)contextElement).getVirtualFile().getPath();
-      configuration.setDirectoryPath(directoryPath);
-      configuration.setWorkingDirectory(directoryPath);
-      return true;
-    }
-    else {
-      PsiFile file = contextElement.getContainingFile();
-      if (GoTestFinder.isTestFile(file)) {
-        if (GoRunUtil.isPackageContext(contextElement)) {
-          String packageName = StringUtil.notNullize(((GoFile)file).getImportPath());
-          configuration.setKind(GoTestRunConfigurationBase.Kind.PACKAGE);
-          configuration.setPackage(packageName);
-          configuration.setName("All in '" + packageName + "'");
-        }
-        else {
-          String functionNameFromContext = findFunctionNameFromContext(contextElement);
-          if (functionNameFromContext != null) {
-            configuration.setName(functionNameFromContext + " in " + file.getName());
-            configuration.setPattern("^" + functionNameFromContext + "$");
-
-            configuration.setKind(GoTestRunConfigurationBase.Kind.PACKAGE);
-            configuration.setPackage(StringUtil.notNullize(((GoFile)file).getImportPath()));
-          }
-          else {
-            configuration.setName(file.getName());
-            configuration.setKind(GoTestRunConfigurationBase.Kind.FILE);
-            configuration.setFilePath(file.getVirtualFile().getPath());
-          }
-        }
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  @Override
-  public boolean isConfigurationFromContext(@NotNull GoTestRunConfigurationBase configuration, ConfigurationContext context) {
-    PsiElement contextElement = GoRunUtil.getContextElement(context);
-    if (contextElement == null) return false;
-
-    Module module = ModuleUtilCore.findModuleForPsiElement(contextElement);
-    if (!Comparing.equal(module, configuration.getConfigurationModule().getModule())) return false;
-
-    PsiFile file = contextElement.getContainingFile();
-    switch (configuration.getKind()) {
-      case DIRECTORY:
-        if (contextElement instanceof PsiDirectory) {
-          String directoryPath = ((PsiDirectory)contextElement).getVirtualFile().getPath();
-          return FileUtil.pathsEqual(configuration.getDirectoryPath(), directoryPath) &&
-                 FileUtil.pathsEqual(configuration.getWorkingDirectory(), directoryPath);
-        }
-      case PACKAGE:
-        if (!GoTestFinder.isTestFile(file)) return false;
-        if (!Comparing.equal(((GoFile)file).getImportPath(), configuration.getPackage())) return false;
-        if (GoRunUtil.isPackageContext(contextElement) && configuration.getPattern().isEmpty()) return true;
-        
-        String functionNameFromContext = findFunctionNameFromContext(contextElement);
-        return functionNameFromContext != null 
-               ? configuration.getPattern().equals("^" + functionNameFromContext + "$") 
-               : configuration.getPattern().isEmpty();
-      case FILE:
-        return GoTestFinder.isTestFile(file) && FileUtil.pathsEqual(configuration.getFilePath(), file.getVirtualFile().getPath()) &&
-          findFunctionNameFromContext(contextElement) == null;
-    }
-    return false;
-  }
-
-  @Nullable
-  private static String findFunctionNameFromContext(PsiElement contextElement) {
-    GoFunctionDeclaration function = PsiTreeUtil.getNonStrictParentOfType(contextElement, GoFunctionDeclaration.class);
-    return function != null ? GoTestFinder.getTestFunctionName(function) : null;
-  }
-}
-
-<code block>
-
-
-package com.goide.runconfig.testing.frameworks.gocheck;
-
-import com.goide.psi.GoFile;
-import com.goide.runconfig.GoModuleBasedConfiguration;
-import com.goide.runconfig.testing.GoTestRunConfigurationBase;
-import com.goide.runconfig.testing.GoTestRunningState;
-import com.goide.runconfig.testing.ui.GoTestRunConfigurationEditorForm;
-import com.goide.stubs.index.GoPackagesIndex;
-import com.goide.util.GoUtil;
-import com.intellij.execution.configurations.ConfigurationType;
-import com.intellij.execution.configurations.ModuleBasedConfiguration;
-import com.intellij.execution.configurations.RunConfiguration;
-import com.intellij.execution.configurations.RuntimeConfigurationException;
-import com.intellij.execution.runners.ExecutionEnvironment;
-import com.intellij.execution.testframework.TestConsoleProperties;
-import com.intellij.execution.testframework.sm.runner.OutputToGeneralTestEventsConverter;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.options.SettingsEditor;
-import com.intellij.openapi.project.Project;
-import com.intellij.psi.stubs.StubIndex;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.regex.Pattern;
-
-public class GocheckRunConfiguration extends GoTestRunConfigurationBase {
-  private static final Pattern GO_CHECK_IMPORT_PATH = Pattern.compile("gopkg\\.in/check\\.v\\d+");
-  private static final Pattern GO_CHECK_GITHUB_IMPORT_PATH = Pattern.compile("github\\.com/go-check/check\\.v\\d+");
-
-  public GocheckRunConfiguration(@NotNull Project project, String name, @NotNull ConfigurationType configurationType) {
-    super(project, name, configurationType);
-  }
-
-  @Override
-  public OutputToGeneralTestEventsConverter createTestEventsConverter(@NotNull TestConsoleProperties consoleProperties) {
-    return new GocheckEventsConverter(consoleProperties);
-  }
-
-  @Override
-  public String getFrameworkName() {
-    return "gocheck";
-  }
-
-  @Override
-  public void checkConfiguration() throws RuntimeConfigurationException {
-    super.checkConfiguration();
-    GoModuleBasedConfiguration configurationModule = getConfigurationModule();
-    Module module = configurationModule.getModule();
-    assert module != null;
-    for (GoFile file : StubIndex.getElements(GoPackagesIndex.KEY, "check", getProject(), GoUtil.moduleScope(module), GoFile.class)) {
-      String importPath = file.getImportPath();
-      if (importPath != null && (GO_CHECK_IMPORT_PATH.matcher(importPath).matches() ||
-                                 GO_CHECK_GITHUB_IMPORT_PATH.matcher(importPath).matches())) {
-        return;
-      }
-    }
-    throw new RuntimeConfigurationException("Cannot find gocheck package in GOPATH");
-  }
-
-  @NotNull
-  @Override
-  public SettingsEditor<? extends RunConfiguration> getConfigurationEditor() {
-    return new GoTestRunConfigurationEditorForm(getProject());
-  }
-
-  @NotNull
-  @Override
-  protected GoTestRunningState newRunningState(@NotNull ExecutionEnvironment env, @NotNull Module module) {
-    return new GocheckRunningState(env, module, this);
-  }
-
-  @NotNull
-  @Override
-  protected ModuleBasedConfiguration createInstance() {
-    return new GocheckRunConfiguration(getProject(), getName(), GocheckRunConfigurationType.getInstance());
-  }
-}
-
-<code block>
-
-
-package com.goide.runconfig.testing.frameworks.gocheck;
-
-import com.goide.runconfig.testing.GoTestRunConfigurationProducerBase;
-
-
-public class GocheckRunConfigurationProducer extends GoTestRunConfigurationProducerBase implements Cloneable {
-  public GocheckRunConfigurationProducer() {
-    super(GocheckRunConfigurationType.getInstance());
-  }
-}
-
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.psi.*;
-import com.goide.psi.impl.*;
-import com.intellij.codeInsight.completion.CompletionParameters;
-import com.intellij.codeInsight.completion.CompletionProvider;
-import com.intellij.codeInsight.completion.CompletionResultSet;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReference;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.ProcessingContext;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import static com.goide.completion.GoCompletionUtil.createPrefixMatcher;
-
-public class GoReferenceCompletionProvider extends CompletionProvider<CompletionParameters> {
-  @Override
-  protected void addCompletions(@NotNull CompletionParameters parameters, ProcessingContext context, @NotNull CompletionResultSet set) {
-    GoReferenceExpressionBase expression = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoReferenceExpressionBase.class);
-    if (expression != null) {
-      fillVariantsByReference(expression.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
-    }
-    GoVarDefinition varDefinition = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoVarDefinition.class);
-    if (varDefinition != null) {
-      fillVariantsByReference(varDefinition.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
-    }
-  }
-
-  private static void fillVariantsByReference(@Nullable PsiReference reference, @NotNull final CompletionResultSet result) {
-    if (reference == null) return;
-    if (reference instanceof PsiMultiReference) {
-      PsiReference[] references = ((PsiMultiReference)reference).getReferences();
-      ContainerUtil.sort(references, PsiMultiReference.COMPARATOR);
-      fillVariantsByReference(ArrayUtil.getFirstElement(references), result);
-    }
-    else if (reference instanceof GoReference) {
-      ((GoReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
-
-      PsiElement element = reference.getElement();
-      if (element instanceof GoReferenceExpression && PsiTreeUtil.getParentOfType(element, GoCompositeLit.class) != null) {
-        for (Object o : new GoFieldNameReference(((GoReferenceExpression)element)).getVariants()) {
-          if (o instanceof LookupElement) result.addElement(((LookupElement)o));
-        }
-      }
-    }
-    else if (reference instanceof GoTypeReference) {
-      PsiElement element = reference.getElement();
-      final PsiElement spec = PsiTreeUtil.getParentOfType(element, GoFieldDeclaration.class, GoTypeSpec.class);
-      final boolean insideParameter = PsiTreeUtil.getParentOfType(element, GoParameterDeclaration.class) != null;
-      ((GoTypeReference)reference).processResolveVariants(new MyGoScopeProcessor(result, true) {
-        @Override
-        protected boolean accept(@NotNull PsiElement e) {
-          return e != spec &&
-                 !(insideParameter &&
-                   (e instanceof GoNamedSignatureOwner || e instanceof GoVarDefinition || e instanceof GoConstDefinition));
-        }
-      });
-      if (element instanceof GoReferenceExpressionBase && element.getParent() instanceof GoReceiverType) {
-        fillVariantsByReference(new GoReference((GoReferenceExpressionBase)element), result);
-      }
-    }
-    else if (reference instanceof GoCachedReference) {
-      ((GoCachedReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
-    }
-  }
-
-  private static void addElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes, @NotNull CompletionResultSet set) {
-    LookupElement lookup = createLookupElement(o, state, forTypes);
-    if (lookup != null) {
-      set.addElement(lookup);
-    }
-  }
-
-  @Nullable
-  private static LookupElement createLookupElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes) {
-    if (o instanceof GoNamedElement && !((GoNamedElement)o).isBlank() || o instanceof GoImportSpec && !((GoImportSpec)o).isDot()) {
-      if (o instanceof GoImportSpec) {
-        return GoCompletionUtil.createPackageLookupElement(((GoImportSpec)o), state.get(GoReference.ACTUAL_NAME));
-      }
-      else if (o instanceof GoNamedSignatureOwner && ((GoNamedSignatureOwner)o).getName() != null) {
-        String name = ((GoNamedSignatureOwner)o).getName();
-        if (name != null) {
-          return GoCompletionUtil.createFunctionOrMethodLookupElement((GoNamedSignatureOwner)o, name, null,
-                                                                      GoCompletionUtil.FUNCTION_PRIORITY);
-        }
-      }
-      else if (o instanceof GoTypeSpec) {
-        return forTypes
-               ? GoCompletionUtil.createTypeLookupElement((GoTypeSpec)o)
-               : GoCompletionUtil.createTypeConversionLookupElement((GoTypeSpec)o);
-      }
-      else if (o instanceof PsiDirectory) {
-        return GoCompletionUtil.createPackageLookupElement(((PsiDirectory)o).getName(), o, true);
-      }
-      else {
-        return GoCompletionUtil.createVariableLikeLookupElement((GoNamedElement)o);
-      }
-    }
-    return null;
-  }
-
-  private static class MyGoScopeProcessor extends GoScopeProcessor {
-    private final CompletionResultSet myResult;
-    private final boolean myForTypes;
-
-    public MyGoScopeProcessor(@NotNull CompletionResultSet result, boolean forTypes) {
-      myResult = result;
-      myForTypes = forTypes;
-    }
-
-    @Override
-    public boolean execute(@NotNull PsiElement o, @NotNull ResolveState state) {
-      if (accept(o)) {
-        addElement(o, state, myForTypes, myResult);
-      }
-      return true;
-    }
-
-    protected boolean accept(@NotNull PsiElement e) {
-      return true;
-    }
-
-    @Override
-    public boolean isCompletion() {
-      return true;
-    }
-  }
-}
-                                                      
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.GoConstants;
-import com.goide.GoParserDefinition;
-import com.goide.GoTypes;
-import com.goide.psi.GoImportString;
-import com.goide.psi.GoPackageClause;
-import com.goide.psi.GoReferenceExpressionBase;
-import com.goide.psi.GoVarDefinition;
-import com.goide.util.GoUtil;
-import com.intellij.codeInsight.completion.CompletionContributor;
-import com.intellij.codeInsight.completion.CompletionParameters;
-import com.intellij.codeInsight.completion.CompletionResultSet;
-import com.intellij.codeInsight.completion.CompletionType;
-import com.intellij.codeInsight.lookup.LookupElementBuilder;
-import com.intellij.openapi.util.io.FileUtil;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.patterns.PlatformPatterns;
-import com.intellij.patterns.PsiElementPattern;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.Collection;
-
-public class GoCompletionContributor extends CompletionContributor {
-  public GoCompletionContributor() {
-    extend(CompletionType.BASIC, importString(), new GoImportPathsCompletionProvider());
-    extend(CompletionType.BASIC, referenceExpression(), new GoReferenceCompletionProvider());
-    extend(CompletionType.BASIC, varDefinition(), new GoReferenceCompletionProvider());
-  }
-
-  @Override
-  public void fillCompletionVariants(@NotNull CompletionParameters parameters, @NotNull CompletionResultSet result) {
-    PsiElement position = parameters.getPosition();
-    if (position.getParent() instanceof GoPackageClause && position.getNode().getElementType() == GoTypes.IDENTIFIER) {
-      PsiDirectory directory = parameters.getOriginalFile().getParent();
-      Collection<String> packagesInDirectory = GoUtil.getAllPackagesInDirectory(directory);
-      for (String packageName : packagesInDirectory) {
-        result.addElement(LookupElementBuilder.create(packageName));
-        if (packageName.endsWith(GoConstants.TEST_SUFFIX)) {
-          result.addElement(LookupElementBuilder.create(StringUtil.trimEnd(packageName, GoConstants.TEST_SUFFIX)));
-        }
-      }
-
-      if (packagesInDirectory.isEmpty() && directory != null) {
-        String packageFromDirectory = FileUtil.sanitizeFileName(directory.getName());
-        if (!packageFromDirectory.isEmpty()) {
-          result.addElement(LookupElementBuilder.create(packageFromDirectory));
-        }
-      }
-      result.addElement(LookupElementBuilder.create(GoConstants.MAIN));
-    }
-    super.fillCompletionVariants(parameters, result);
-  }
-
-  private static PsiElementPattern.Capture<PsiElement> importString() {
-    return PlatformPatterns.psiElement().withElementType(GoParserDefinition.STRING_LITERALS).withParent(GoImportString.class);
-  }
-
-  private static PsiElementPattern.Capture<PsiElement> referenceExpression() {
-    return PlatformPatterns.psiElement().withParent(GoReferenceExpressionBase.class);
-  }
-
-  private static PsiElementPattern.Capture<PsiElement> varDefinition() {
-    return PlatformPatterns.psiElement().withParent(GoVarDefinition.class);
-  }
-}
-
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.GoIcons;
-import com.goide.psi.*;
-import com.goide.psi.impl.GoPsiImplUtil;
-import com.goide.sdk.GoSdkUtil;
-import com.goide.stubs.GoFieldDefinitionStub;
-import com.intellij.codeInsight.completion.InsertHandler;
-import com.intellij.codeInsight.completion.InsertionContext;
-import com.intellij.codeInsight.completion.PrefixMatcher;
-import com.intellij.codeInsight.completion.PrioritizedLookupElement;
-import com.intellij.codeInsight.completion.impl.CamelHumpMatcher;
-import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.codeInsight.lookup.LookupElementBuilder;
-import com.intellij.codeInsight.lookup.LookupElementPresentation;
-import com.intellij.codeInsight.lookup.LookupElementRenderer;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ObjectUtils;
-import com.intellij.util.ui.UIUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import javax.swing.*;
-
-public class GoCompletionUtil {
-  public static final int KEYWORD_PRIORITY = 20;
-  public static final int CONTEXT_KEYWORD_PRIORITY = 25;
-  public static final int NOT_IMPORTED_FUNCTION_PRIORITY = 3;
-  public static final int FUNCTION_PRIORITY = NOT_IMPORTED_FUNCTION_PRIORITY + 10;
-  public static final int NOT_IMPORTED_TYPE_PRIORITY = 5;
-  public static final int TYPE_PRIORITY = NOT_IMPORTED_TYPE_PRIORITY + 10;
-  public static final int NOT_IMPORTED_TYPE_CONVERSION = 1;
-  public static final int TYPE_CONVERSION = NOT_IMPORTED_TYPE_CONVERSION + 10;
-  public static final int VAR_PRIORITY = 15;
-  public static final int LABEL_PRIORITY = 15;
-  public static final int PACKAGE_PRIORITY = 5;
-  public static final InsertHandler<LookupElement> FUNCTION_INSERT_HANDLER = new InsertHandler<LookupElement>() {
-    @Override
-    public void handleInsert(InsertionContext context, LookupElement item) {
-      PsiElement element = item.getPsiElement();
-      if (!(element instanceof GoSignatureOwner)) return;
-      GoSignatureOwner f = (GoSignatureOwner)element;
-      GoSignature signature = f.getSignature();
-      int paramsCount = signature != null ? signature.getParameters().getParameterDeclarationList().size() : 0;
-      InsertHandler<LookupElement> handler =
-        paramsCount == 0 ? ParenthesesInsertHandler.NO_PARAMETERS : ParenthesesInsertHandler.WITH_PARAMETERS;
-      handler.handleInsert(context, item);
-    }
-  };
-  public static final LookupElementRenderer<LookupElement> FUNCTION_RENDERER = new LookupElementRenderer<LookupElement>() {
-    @Override
-    public void renderElement(LookupElement element, LookupElementPresentation p) {
-      PsiElement o = element.getPsiElement();
-      if (!(o instanceof GoNamedSignatureOwner)) return;
-      GoNamedSignatureOwner f = (GoNamedSignatureOwner)o;
-      Icon icon = f instanceof GoMethodDeclaration || f instanceof GoMethodSpec ? GoIcons.METHOD : GoIcons.FUNCTION;
-      String typeText = "";
-      GoSignature signature = f.getSignature();
-      String paramText = "";
-      if (signature != null) {
-        GoResult result = signature.getResult();
-        paramText = signature.getParameters().getText();
-        if (result != null) typeText = result.getText();
-      }
-
-      p.setIcon(icon);
-      p.setTypeText(typeText);
-      p.setTypeGrayed(true);
-      p.setTailText(calcTailText(f), true);
-      p.setItemText(element.getLookupString() + paramText);
-    }
-  };
-  public static final LookupElementRenderer<LookupElement> VARIABLE_RENDERER = new LookupElementRenderer<LookupElement>() {
-    @Override
-    public void renderElement(LookupElement element, LookupElementPresentation p) {
-      PsiElement o = element.getPsiElement();
-      if (!(o instanceof GoNamedElement)) return;
-      GoNamedElement v = (GoNamedElement)o;
-      GoType type = v.getGoType(null);
-      String text = GoPsiImplUtil.getText(type);
-      Icon icon = v instanceof GoVarDefinition ? GoIcons.VARIABLE :
-                  v instanceof GoParamDefinition ? GoIcons.PARAMETER :
-                  v instanceof GoFieldDefinition ? GoIcons.FIELD :
-                  v instanceof GoReceiver ? GoIcons.RECEIVER :
-                  v instanceof GoConstDefinition ? GoIcons.CONSTANT :
-                  v instanceof GoAnonymousFieldDefinition ? GoIcons.FIELD :
-                  null;
-
-      p.setIcon(icon);
-      p.setTailText(calcTailTextForFields(v), true);
-      p.setTypeText(text);
-      p.setTypeGrayed(true);
-      p.setItemText(element.getLookupString());
-    }
-  };
-
-  private static class Lazy {
-    private static final SingleCharInsertHandler DIR_INSERT_HANDLER = new SingleCharInsertHandler('/');
-    private static final SingleCharInsertHandler PACKAGE_INSERT_HANDLER = new SingleCharInsertHandler('.');
-  }
-
-  private GoCompletionUtil() {
-
-  }
-
-  @NotNull
-  public static CamelHumpMatcher createPrefixMatcher(@NotNull PrefixMatcher original) {
-    return createPrefixMatcher(original.getPrefix());
-  }
-
-  @NotNull
-  public static CamelHumpMatcher createPrefixMatcher(@NotNull String prefix) {
-    return new CamelHumpMatcher(prefix, false);
-  }
-
-  @NotNull
-  public static LookupElement createFunctionOrMethodLookupElement(@NotNull final GoNamedSignatureOwner f,
-                                                                  @NotNull final String lookupString,
-                                                                  @Nullable final InsertHandler<LookupElement> h,
-                                                                  final double priority) {
-    return PrioritizedLookupElement.withPriority(LookupElementBuilder
-                                                   .createWithSmartPointer(lookupString, f)
-                                                   .withRenderer(FUNCTION_RENDERER)
-                                                   .withInsertHandler(h != null ? h : FUNCTION_INSERT_HANDLER), priority);
-  }
-
-  @Nullable
-  private static String calcTailText(GoSignatureOwner m) {
-    String text = "";
-    if (m instanceof GoMethodDeclaration) {
-      text = GoPsiImplUtil.getText(((GoMethodDeclaration)m).getReceiver().getType());
-    }
-    else if (m instanceof GoMethodSpec) {
-      PsiElement parent = m.getParent();
-      if (parent instanceof GoInterfaceType) {
-        text = GoPsiImplUtil.getText((GoInterfaceType)parent);
-      }
-    }
-    return StringUtil.isNotEmpty(text) ? " " + UIUtil.rightArrow() + " " + text : null;
-  }
-
-  @NotNull
-  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t) {
-    return createTypeLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_PRIORITY);
-  }
-
-  @NotNull
-  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t,
-                                                      @NotNull String lookupString,
-                                                      @Nullable InsertHandler<LookupElement> handler,
-                                                      @Nullable String importPath,
-                                                      double priority) {
-    LookupElementBuilder builder = LookupElementBuilder.createWithSmartPointer(lookupString, t)
-      .withInsertHandler(handler).withIcon(GoIcons.TYPE);
-    if (importPath != null) builder = builder.withTailText(" " + importPath, true);
-    return PrioritizedLookupElement.withPriority(builder, priority);
-  }
-
-  @NotNull
-  public static LookupElement createLabelLookupElement(@NotNull GoLabelDefinition l, @NotNull String lookupString) {
-    return PrioritizedLookupElement.withPriority(LookupElementBuilder.createWithSmartPointer(lookupString, l)
-                                                   .withIcon(GoIcons.LABEL), LABEL_PRIORITY);
-  }
-
-  @NotNull
-  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t) {
-    return createTypeConversionLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_CONVERSION);
-  }
-
-  @NotNull
-  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t,
-                                                                @NotNull String lookupString,
-                                                                @Nullable InsertHandler<LookupElement> insertHandler,
-                                                                @Nullable String importPath,
-                                                                double priority) {
-    
-    InsertHandler<LookupElement> handler = ObjectUtils.notNull(insertHandler, getTypeConversionInsertHandler(t));
-    return createTypeLookupElement(t, lookupString, handler, importPath, priority);
-  }
-
-  @NotNull
-  public static InsertHandler<LookupElement> getTypeConversionInsertHandler(@NotNull GoTypeSpec t) {
-    GoType type = t.getType();
-    return type instanceof GoStructType || type instanceof GoArrayOrSliceType || type instanceof GoMapType
-           ? BracesInsertHandler.ONE_LINER
-           : ParenthesesInsertHandler.WITH_PARAMETERS;
-  }
-
-  @NotNull
-  public static LookupElement createVariableLikeLookupElement(@NotNull GoNamedElement v) {
-    String name = StringUtil.notNullize(v.getName());
-    SingleCharInsertHandler handler =
-      v instanceof GoFieldDefinition ?
-      new SingleCharInsertHandler(':') {
-        @Override
-        public void handleInsert(@NotNull InsertionContext context, LookupElement item) {
-          PsiFile file = context.getFile();
-          if (!(file instanceof GoFile)) return;
-          context.commitDocument();
-          int offset = context.getStartOffset();
-          PsiElement at = file.findElementAt(offset);
-          GoCompositeElement ref = PsiTreeUtil.getParentOfType(at, GoValue.class, GoReferenceExpression.class);
-          if (ref instanceof GoReferenceExpression && (((GoReferenceExpression)ref).getQualifier() != null || GoPsiImplUtil.prevDot(ref))) {
-            return;
-          }
-          GoValue value = PsiTreeUtil.getParentOfType(at, GoValue.class);
-          if (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null) return;
-          super.handleInsert(context, item);
-        }
-      } : null;
-    return PrioritizedLookupElement.withPriority(
-      LookupElementBuilder.createWithSmartPointer(name, v).withRenderer(VARIABLE_RENDERER).withInsertHandler(handler), VAR_PRIORITY);
-  }
-
-  @Nullable
-  private static String calcTailTextForFields(@NotNull GoNamedElement v) {
-    String name = null;
-    if (v instanceof GoFieldDefinition) {
-      GoFieldDefinitionStub stub = ((GoFieldDefinition)v).getStub();
-      GoTypeSpec spec = stub != null ? stub.getParentStubOfType(GoTypeSpec.class) : PsiTreeUtil.getParentOfType(v, GoTypeSpec.class);
-      name = spec != null ? spec.getName() : null;
-    }
-    return StringUtil.isNotEmpty(name) ? " " + UIUtil.rightArrow() + " " + name : null;
-  }
-
-  @Nullable
-  public static LookupElement createPackageLookupElement(@NotNull GoImportSpec spec, @Nullable String name) {
-    name = name != null ? name : ObjectUtils.notNull(spec.getAlias(), spec.getLocalPackageName());
-    return createPackageLookupElement(name, spec, true);
-  }
-
-  @NotNull
-  public static LookupElement createPackageLookupElement(@NotNull String importPath,
-                                                         @Nullable PsiElement context,
-                                                         boolean forType) {
-    return createPackageLookupElement(importPath, getContextImportPath(context), forType);
-  }
-
-  @NotNull
-  public static LookupElement createPackageLookupElement(@NotNull String importPath, @Nullable String contextImportPath, boolean forType) {
-    return PrioritizedLookupElement.withPriority(
-      LookupElementBuilder.create(importPath)
-        .withLookupString(importPath.substring(Math.max(0, importPath.lastIndexOf('/'))))
-        .withIcon(GoIcons.PACKAGE).withInsertHandler(forType ? Lazy.PACKAGE_INSERT_HANDLER : null),
-      calculatePackagePriority(importPath, contextImportPath));
-  }
-
-  public static int calculatePackagePriority(@NotNull String importPath, @Nullable String currentPath) {
-    int priority = PACKAGE_PRIORITY;
-    if (StringUtil.isNotEmpty(currentPath)) {
-      String[] givenSplit = importPath.split("/");
-      String[] contextSplit = currentPath.split("/");
-      for (int i = 0; i < contextSplit.length && i < givenSplit.length; i++) {
-        if (contextSplit[i].equals(givenSplit[i])) {
-          priority++;
-        }
-        else {
-          break;
-        }
-      }
-    }
-    return priority - StringUtil.countChars(importPath, '/') - StringUtil.countChars(importPath, '.');
-  }
-
-  @Nullable
-  public static String getContextImportPath(@Nullable PsiElement context) {
-    if (context == null) return null;
-    String currentPath = null;
-    if (context instanceof PsiDirectory) {
-      currentPath = GoSdkUtil.getImportPath((PsiDirectory)context);
-    }
-    else {
-      PsiFile file = context.getContainingFile();
-      if (file instanceof GoFile) {
-        currentPath = ((GoFile)file).getImportPath();
-      }
-    }
-    return currentPath;
-  }
-
-  @NotNull
-  public static LookupElementBuilder createDirectoryLookupElement(@NotNull PsiDirectory dir) {
-    int files = dir.getFiles().length;
-    return LookupElementBuilder.createWithSmartPointer(dir.getName(), dir).withIcon(GoIcons.DIRECTORY)
-      .withInsertHandler(files == 0 ? Lazy.DIR_INSERT_HANDLER : null);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.psi.GoFunctionOrMethodDeclaration;
-import com.goide.psi.GoNamedElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.util.containers.ContainerUtil;
-import com.intellij.util.containers.OrderedSet;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.List;
-
-public abstract class GoScopeProcessorBase extends GoScopeProcessor {
-  @NotNull protected final OrderedSet<GoNamedElement> myResult = new OrderedSet<GoNamedElement>();
-
-  @NotNull protected final PsiElement myOrigin;
-  @NotNull private final String myRequestedName;
-  protected final boolean myIsCompletion;
-
-  public GoScopeProcessorBase(@NotNull String requestedName, @NotNull PsiElement origin, boolean completion) {
-    myRequestedName = requestedName;
-    myOrigin = origin;
-    myIsCompletion = completion;
-  }
-
-  @Override
-  public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
-    if (psiElement instanceof GoFunctionOrMethodDeclaration) return false;
-    if (!(psiElement instanceof GoNamedElement)) return true;
-    if (!myIsCompletion && !myRequestedName.equals(((GoNamedElement)psiElement).getName())) return true;
-    if (condition(psiElement)) return true;
-    if (psiElement.equals(myOrigin)) return true;
-    return add((GoNamedElement)psiElement) || myIsCompletion;
-  }
-
-  protected boolean add(@NotNull GoNamedElement psiElement) {
-    return !myResult.add(psiElement);
-  }
-
-  @Nullable
-  public GoNamedElement getResult() {
-    return ContainerUtil.getFirstItem(myResult);
-  }
-
-  @NotNull
-  public List<GoNamedElement> getVariants() {
-    return myResult;
-  }
-
-  protected abstract boolean condition(@NotNull PsiElement element);
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.psi.GoBlock;
-import com.goide.psi.GoFunctionOrMethodDeclaration;
-import com.goide.psi.GoStatement;
-import com.goide.psi.GoVarDefinition;
-import com.goide.util.GoUtil;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.IncorrectOperationException;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public class GoVarReference extends GoCachedReference<GoVarDefinition> {
-  private final GoBlock myPotentialStopBlock;
-
-  public GoVarReference(@NotNull GoVarDefinition element) {
-    super(element);
-    myPotentialStopBlock = PsiTreeUtil.getParentOfType(element, GoBlock.class);
-  }
-
-  @Nullable
-  @Override
-  public PsiElement resolveInner() {
-    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, false);
-    processResolveVariants(p);
-    return p.getResult(); 
-  }
-
-  @Override
-  public void processResolveVariants(@NotNull final GoScopeProcessor processor) {
-    GoVarProcessor p = processor instanceof GoVarProcessor
-                       ? ((GoVarProcessor)processor)
-                       : new GoVarProcessor(myElement.getText(), myElement, processor.isCompletion()) {
-                         @Override
-                         public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
-                           return super.execute(psiElement, resolveState) && processor.execute(psiElement, resolveState);
-                         }
-                       };
-
-    if (myPotentialStopBlock != null) {
-      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
-        GoReference.processFunctionParameters(myElement, p);
-      }
-      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
-                                               myElement);
-    }
-  }
-
-  @Override
-  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
-    myElement.replace(GoElementFactory.createVarDefinitionFromText(myElement.getProject(), newElementName));
-    return myElement;
-  }
-
-  @Override
-  public boolean isReferenceTo(PsiElement element) {
-    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.util.GoUtil;
-import com.intellij.openapi.util.TextRange;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReferenceBase;
-import com.intellij.psi.impl.source.resolve.ResolveCache;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.IncorrectOperationException;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public abstract class GoCachedReference<T extends PsiElement> extends PsiReferenceBase<T> {
-  protected GoCachedReference(@NotNull T element) {
-    super(element, TextRange.from(0, element.getTextLength()));
-  }
-
-  private static final ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement> MY_RESOLVER =
-    new ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement>() {
-      @Override
-      public PsiElement resolve(@NotNull PsiReferenceBase base, boolean b) {
-        return ((GoCachedReference)base).resolveInner();
-      }
-    };
-
-  @Nullable
-  protected abstract PsiElement resolveInner();
-
-  @Nullable
-  @Override
-  public final PsiElement resolve() {
-    return myElement.isValid()
-           ? ResolveCache.getInstance(myElement.getProject()).resolveWithCaching(this, MY_RESOLVER, false, false)
-           : null;
-  }
-
-  public abstract void processResolveVariants(@NotNull GoScopeProcessor processor);
-
-  @Override
-  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
-    myElement.replace(GoElementFactory.createIdentifierFromText(myElement.getProject(), newElementName));
-    return myElement;
-  }
-
-  @Override
-  public boolean isReferenceTo(PsiElement element) {
-    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
-  }
-  
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    return ArrayUtil.EMPTY_OBJECT_ARRAY;
-  }
-
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.completion.GoCompletionUtil;
-import com.goide.psi.*;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReference;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.Collection;
-import java.util.List;
-
-public class GoFieldNameReference extends GoCachedReference<GoReferenceExpressionBase> {
-  private GoCompositeElement myValue;
-
-  @NotNull
-  private GoScopeProcessorBase getProcessor(final boolean completion) {
-    return new GoScopeProcessorBase(myElement.getText(), myElement, completion) {
-      @Override
-      protected boolean condition(@NotNull PsiElement element) {
-        return !(element instanceof GoFieldDefinition) && !(element instanceof GoAnonymousFieldDefinition);
-      }
-    };
-  }
-
-  public GoFieldNameReference(@NotNull GoReferenceExpressionBase element) {
-    super(element);
-    GoCompositeElement place = myElement;
-    while ((place = PsiTreeUtil.getParentOfType(place, GoLiteralValue.class)) != null) {
-      if (place.getParent() instanceof GoValue) {
-        myValue = (GoValue)place.getParent();
-        break;
-      }
-    }
-  }
-
-  private boolean processFields(@NotNull GoScopeProcessorBase processor) {
-    GoKey key = PsiTreeUtil.getParentOfType(myElement, GoKey.class);
-    GoValue value = PsiTreeUtil.getParentOfType(myElement, GoValue.class);
-    if (key == null && (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null)) return false;
-
-    GoCompositeLit lit = PsiTreeUtil.getParentOfType(myElement, GoCompositeLit.class);
-
-    GoType type = lit != null ? lit.getType() : null;
-    if (type == null && lit != null) {
-      type = GoPsiImplUtil.getType(lit.getTypeReferenceExpression());
-    }
-
-    type = getType(type);
-
-    if (type instanceof GoStructType && !type.processDeclarations(processor, ResolveState.initial(), null, myElement)) return true;
-
-    return false;
-  }
-
-  @Nullable
-  private GoType getType(GoType type) { 
-    boolean inValue = myValue != null;
-    
-    if (inValue && type instanceof GoArrayOrSliceType) type = ((GoArrayOrSliceType)type).getType();
-    else if (type instanceof GoMapType) type = inValue ? ((GoMapType)type).getValueType() : ((GoMapType)type).getKeyType();
-    else if (inValue && type instanceof GoStructType) {
-      GoKey key = PsiTreeUtil.getPrevSiblingOfType(myValue, GoKey.class);
-      GoFieldName field = key != null ? key.getFieldName() : null;
-      PsiReference reference = field != null ? field.getReference() : null;
-      PsiElement resolve = reference != null ? reference.resolve() : null;
-      if (resolve instanceof GoFieldDefinition) {
-        type = PsiTreeUtil.getNextSiblingOfType(resolve, GoType.class);
-      }
-    }
-
-    if (type != null && type.getTypeReferenceExpression() != null) {
-      type = GoPsiImplUtil.getType(type.getTypeReferenceExpression());
-    }
-
-    if (type instanceof GoPointerType) {
-      GoType inner = ((GoPointerType)type).getType();
-      if (inner != null && inner.getTypeReferenceExpression() != null) {
-        type = GoPsiImplUtil.getType(inner.getTypeReferenceExpression());
-      }
-    }
-
-    return type;
-  }
-
-  @Nullable
-  @Override
-  public PsiElement resolveInner() {
-    GoScopeProcessorBase p = getProcessor(false);
-    processFields(p);
-    return p.getResult();
-  }
-
-  @Override
-  public void processResolveVariants(@NotNull GoScopeProcessor processor) {
-  }
-
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    GoScopeProcessorBase p = getProcessor(true);
-    processFields(p);
-    List<GoNamedElement> variants = p.getVariants();
-    if (variants.isEmpty()) return EMPTY_ARRAY;
-    Collection<LookupElement> result = ContainerUtil.newArrayList();
-    for (GoNamedElement element : variants) {
-      result.add(GoCompletionUtil.createVariableLikeLookupElement(element));
-    }
-    return ArrayUtil.toObjectArray(result);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.completion.GoCompletionUtil;
-import com.goide.psi.GoBlock;
-import com.goide.psi.GoLabelDefinition;
-import com.goide.psi.GoLabelRef;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.Collection;
-
-public class GoLabelReference extends GoCachedReference<GoLabelRef> {
-  private final GoScopeProcessorBase myProcessor = new GoScopeProcessorBase(myElement.getText(), myElement, false) {
-    @Override
-    protected boolean condition(@NotNull PsiElement element) {
-      return !(element instanceof GoLabelDefinition);
-    }
-  };
-
-  public GoLabelReference(@NotNull GoLabelRef element) {
-    super(element);
-  }
-
-  @NotNull
-  private Collection<GoLabelDefinition> getLabelDefinitions() {
-    GoBlock block = PsiTreeUtil.getTopmostParentOfType(myElement, GoBlock.class);
-    return PsiTreeUtil.findChildrenOfType(block, GoLabelDefinition.class);
-  }
-
-  @Nullable
-  @Override
-  protected PsiElement resolveInner() {
-    Collection<GoLabelDefinition> defs = getLabelDefinitions();
-    for (GoLabelDefinition def : defs) {
-      if (!myProcessor.execute(def, ResolveState.initial())) return def;
-    }
-    return null;
-  }
-
-  @Override
-  public void processResolveVariants(@NotNull GoScopeProcessor processor) {
-  }
-
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    Collection<LookupElement> result = ContainerUtil.newArrayList();
-    for (GoLabelDefinition element : getLabelDefinitions()) {
-      String name = element.getName();
-      if (name != null) {
-        result.add(GoCompletionUtil.createLabelLookupElement(element, name));
-      }
-    }
-    return ArrayUtil.toObjectArray(result);
-  }
-}
-
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.psi.*;
-import com.goide.psi.impl.GoFieldNameReference;
-import com.goide.psi.impl.GoReference;
-import com.goide.psi.impl.GoScopeProcessor;
-import com.goide.psi.impl.GoTypeReference;
-import com.intellij.codeInsight.completion.CompletionParameters;
-import com.intellij.codeInsight.completion.CompletionProvider;
-import com.intellij.codeInsight.completion.CompletionResultSet;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReference;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.ProcessingContext;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import static com.goide.completion.GoCompletionUtil.createPrefixMatcher;
-
-public class GoReferenceCompletionProvider extends CompletionProvider<CompletionParameters> {
-  @Override
-  protected void addCompletions(@NotNull CompletionParameters parameters, ProcessingContext context, @NotNull CompletionResultSet set) {
-    final GoReferenceExpressionBase expression = PsiTreeUtil.getParentOfType(parameters.getPosition(), GoReferenceExpressionBase.class);
-    if (expression != null) {
-      fillVariantsByReference(expression.getReference(), set.withPrefixMatcher(createPrefixMatcher(set.getPrefixMatcher())));
-    }
-  }
-
-  private static void fillVariantsByReference(@Nullable PsiReference reference, @NotNull final CompletionResultSet result) {
-    if (reference == null) return;
-    if (reference instanceof PsiMultiReference) {
-      PsiReference[] references = ((PsiMultiReference)reference).getReferences();
-      ContainerUtil.sort(references, PsiMultiReference.COMPARATOR);
-      fillVariantsByReference(ArrayUtil.getFirstElement(references), result);
-    }
-    else if (reference instanceof GoReference) {
-      ((GoReference)reference).processResolveVariants(new MyGoScopeProcessor(result, false));
-
-      PsiElement element = reference.getElement();
-      if (element instanceof GoReferenceExpression && PsiTreeUtil.getParentOfType(element, GoCompositeLit.class) != null) {
-        for (Object o : new GoFieldNameReference(((GoReferenceExpression)element)).getVariants()) {
-          if (o instanceof LookupElement) result.addElement(((LookupElement)o));
-        }
-      }
-    }
-    else if (reference instanceof GoTypeReference) {
-      PsiElement element = reference.getElement();
-      final PsiElement spec = PsiTreeUtil.getParentOfType(element, GoFieldDeclaration.class, GoTypeSpec.class);
-      final boolean insideParameter = PsiTreeUtil.getParentOfType(element, GoParameterDeclaration.class) != null;
-      ((GoTypeReference)reference).processResolveVariants(new MyGoScopeProcessor(result, true) {
-        @Override
-        protected boolean accept(@NotNull PsiElement e) {
-          return e != spec &&
-                 !(insideParameter &&
-                   (e instanceof GoNamedSignatureOwner || e instanceof GoVarDefinition || e instanceof GoConstDefinition));
-        }
-      });
-      if (element instanceof GoReferenceExpressionBase && element.getParent() instanceof GoReceiverType) {
-        fillVariantsByReference(new GoReference((GoReferenceExpressionBase)element), result);
-      }
-    }
-  }
-
-  private static void addElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes, @NotNull CompletionResultSet set) {
-    LookupElement lookup = createLookupElement(o, state, forTypes);
-    if (lookup != null) {
-      set.addElement(lookup);
-    }
-  }
-
-  @Nullable
-  private static LookupElement createLookupElement(@NotNull PsiElement o, @NotNull ResolveState state, boolean forTypes) {
-    if (o instanceof GoNamedElement && !((GoNamedElement)o).isBlank() || o instanceof GoImportSpec && !((GoImportSpec)o).isDot()) {
-      if (o instanceof GoImportSpec) {
-        return GoCompletionUtil.createPackageLookupElement(((GoImportSpec)o), state.get(GoReference.ACTUAL_NAME));
-      }
-      else if (o instanceof GoNamedSignatureOwner && ((GoNamedSignatureOwner)o).getName() != null) {
-        String name = ((GoNamedSignatureOwner)o).getName();
-        if (name != null) {
-          return GoCompletionUtil.createFunctionOrMethodLookupElement((GoNamedSignatureOwner)o, name, null,
-                                                                        GoCompletionUtil.FUNCTION_PRIORITY);
-        }
-      }
-      else if (o instanceof GoTypeSpec) {
-        return forTypes
-                 ? GoCompletionUtil.createTypeLookupElement((GoTypeSpec)o)
-                 : GoCompletionUtil.createTypeConversionLookupElement((GoTypeSpec)o);
-      }
-      else if (o instanceof PsiDirectory) {
-        return GoCompletionUtil.createPackageLookupElement(((PsiDirectory)o).getName(), o, true);
-      }
-      else {
-        return GoCompletionUtil.createVariableLikeLookupElement((GoNamedElement)o);
-      }
-    }
-    return null;
-  }
-
-  private static class MyGoScopeProcessor extends GoScopeProcessor {
-    private final CompletionResultSet myResult;
-    private final boolean myForTypes;
-
-    public MyGoScopeProcessor(@NotNull CompletionResultSet result, boolean forTypes) {
-      myResult = result;
-      myForTypes = forTypes;
-    }
-
-    @Override
-    public boolean execute(@NotNull PsiElement o, @NotNull ResolveState state) {
-      if (accept(o)) {
-        addElement(o, state, myForTypes, myResult);
-      }
-      return true;
-    }
-
-    protected boolean accept(@NotNull PsiElement e) {
-      return true;
-    }
-
-    @Override
-    public boolean isCompletion() {
-      return true;
-    }
-  }
-}
-                                                      
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.GoConstants;
-import com.goide.GoParserDefinition;
-import com.goide.GoTypes;
-import com.goide.psi.GoImportString;
-import com.goide.psi.GoPackageClause;
-import com.goide.psi.GoReferenceExpressionBase;
-import com.goide.util.GoUtil;
-import com.intellij.codeInsight.completion.CompletionContributor;
-import com.intellij.codeInsight.completion.CompletionParameters;
-import com.intellij.codeInsight.completion.CompletionResultSet;
-import com.intellij.codeInsight.completion.CompletionType;
-import com.intellij.codeInsight.lookup.LookupElementBuilder;
-import com.intellij.openapi.util.io.FileUtil;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.patterns.PlatformPatterns;
-import com.intellij.patterns.PsiElementPattern;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.Collection;
-
-public class GoCompletionContributor extends CompletionContributor {
-  public GoCompletionContributor() {
-    extend(CompletionType.BASIC, importString(), new GoImportPathsCompletionProvider());
-    extend(CompletionType.BASIC, referenceExpression(), new GoReferenceCompletionProvider());
-  }
-
-  @Override
-  public void fillCompletionVariants(@NotNull CompletionParameters parameters, @NotNull CompletionResultSet result) {
-    PsiElement position = parameters.getPosition();
-    if (position.getParent() instanceof GoPackageClause && position.getNode().getElementType() == GoTypes.IDENTIFIER) {
-      PsiDirectory directory = parameters.getOriginalFile().getParent();
-      Collection<String> packagesInDirectory = GoUtil.getAllPackagesInDirectory(directory);
-      for (String packageName : packagesInDirectory) {
-        result.addElement(LookupElementBuilder.create(packageName));
-        if (packageName.endsWith(GoConstants.TEST_SUFFIX)) {
-          result.addElement(LookupElementBuilder.create(StringUtil.trimEnd(packageName, GoConstants.TEST_SUFFIX)));
-        }
-      }
-
-      if (packagesInDirectory.isEmpty() && directory != null) {
-        String packageFromDirectory = FileUtil.sanitizeFileName(directory.getName());
-        if (!packageFromDirectory.isEmpty()) {
-          result.addElement(LookupElementBuilder.create(packageFromDirectory));
-        }
-      }
-      result.addElement(LookupElementBuilder.create(GoConstants.MAIN));
-    }
-    super.fillCompletionVariants(parameters, result);
-  }
-
-  private static PsiElementPattern.Capture<PsiElement> importString() {
-    return PlatformPatterns.psiElement().withElementType(GoParserDefinition.STRING_LITERALS).withParent(GoImportString.class);
-  }
-  
-  private static PsiElementPattern.Capture<PsiElement> referenceExpression() {
-    return PlatformPatterns.psiElement().withParent(GoReferenceExpressionBase.class);
-  }
-}
-
-<code block>
-
-
-package com.goide.completion;
-
-import com.goide.GoIcons;
-import com.goide.psi.*;
-import com.goide.psi.impl.GoPsiImplUtil;
-import com.goide.sdk.GoSdkUtil;
-import com.goide.stubs.GoFieldDefinitionStub;
-import com.intellij.codeInsight.completion.InsertHandler;
-import com.intellij.codeInsight.completion.InsertionContext;
-import com.intellij.codeInsight.completion.PrefixMatcher;
-import com.intellij.codeInsight.completion.PrioritizedLookupElement;
-import com.intellij.codeInsight.completion.impl.CamelHumpMatcher;
-import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.codeInsight.lookup.LookupElementBuilder;
-import com.intellij.codeInsight.lookup.LookupElementPresentation;
-import com.intellij.codeInsight.lookup.LookupElementRenderer;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.psi.PsiDirectory;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ObjectUtils;
-import com.intellij.util.ui.UIUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import javax.swing.*;
-
-public class GoCompletionUtil {
-  public static final int KEYWORD_PRIORITY = 20;
-  public static final int CONTEXT_KEYWORD_PRIORITY = 25;
-  public static final int NOT_IMPORTED_FUNCTION_PRIORITY = 3;
-  public static final int FUNCTION_PRIORITY = NOT_IMPORTED_FUNCTION_PRIORITY + 10;
-  public static final int NOT_IMPORTED_TYPE_PRIORITY = 5;
-  public static final int TYPE_PRIORITY = NOT_IMPORTED_TYPE_PRIORITY + 10;
-  public static final int NOT_IMPORTED_TYPE_CONVERSION = 1;
-  public static final int TYPE_CONVERSION = NOT_IMPORTED_TYPE_CONVERSION + 10;
-  public static final int VAR_PRIORITY = 15;
-  public static final int LABEL_PRIORITY = 15;
-  public static final int PACKAGE_PRIORITY = 5;
-  public static final InsertHandler<LookupElement> FUNCTION_INSERT_HANDLER = new InsertHandler<LookupElement>() {
-    @Override
-    public void handleInsert(InsertionContext context, LookupElement item) {
-      PsiElement element = item.getPsiElement();
-      if (!(element instanceof GoSignatureOwner)) return;
-      GoSignatureOwner f = (GoSignatureOwner)element;
-      GoSignature signature = f.getSignature();
-      int paramsCount = signature != null ? signature.getParameters().getParameterDeclarationList().size() : 0;
-      InsertHandler<LookupElement> handler =
-        paramsCount == 0 ? ParenthesesInsertHandler.NO_PARAMETERS : ParenthesesInsertHandler.WITH_PARAMETERS;
-      handler.handleInsert(context, item);
-    }
-  };
-  public static final LookupElementRenderer<LookupElement> FUNCTION_RENDERER = new LookupElementRenderer<LookupElement>() {
-    @Override
-    public void renderElement(LookupElement element, LookupElementPresentation p) {
-      PsiElement o = element.getPsiElement();
-      if (!(o instanceof GoNamedSignatureOwner)) return;
-      GoNamedSignatureOwner f = (GoNamedSignatureOwner)o;
-      Icon icon = f instanceof GoMethodDeclaration || f instanceof GoMethodSpec ? GoIcons.METHOD : GoIcons.FUNCTION;
-      String typeText = "";
-      GoSignature signature = f.getSignature();
-      String paramText = "";
-      if (signature != null) {
-        GoResult result = signature.getResult();
-        paramText = signature.getParameters().getText();
-        if (result != null) typeText = result.getText();
-      }
-
-      p.setIcon(icon);
-      p.setTypeText(typeText);
-      p.setTypeGrayed(true);
-      p.setTailText(calcTailText(f), true);
-      p.setItemText(element.getLookupString() + paramText);
-    }
-  };
-  public static final LookupElementRenderer<LookupElement> VARIABLE_RENDERER = new LookupElementRenderer<LookupElement>() {
-    @Override
-    public void renderElement(LookupElement element, LookupElementPresentation p) {
-      PsiElement o = element.getPsiElement();
-      if (!(o instanceof GoNamedElement)) return;
-      GoNamedElement v = (GoNamedElement)o;
-      GoType type = v.getGoType(null);
-      String text = GoPsiImplUtil.getText(type);
-      Icon icon = v instanceof GoVarDefinition ? GoIcons.VARIABLE :
-                  v instanceof GoParamDefinition ? GoIcons.PARAMETER :
-                  v instanceof GoFieldDefinition ? GoIcons.FIELD :
-                  v instanceof GoReceiver ? GoIcons.RECEIVER :
-                  v instanceof GoConstDefinition ? GoIcons.CONSTANT :
-                  v instanceof GoAnonymousFieldDefinition ? GoIcons.FIELD :
-                  null;
-
-      p.setIcon(icon);
-      p.setTailText(calcTailTextForFields(v), true);
-      p.setTypeText(text);
-      p.setTypeGrayed(true);
-    }
-  };
-
-  private static class Lazy {
-    private static final SingleCharInsertHandler DIR_INSERT_HANDLER = new SingleCharInsertHandler('/');
-    private static final SingleCharInsertHandler PACKAGE_INSERT_HANDLER = new SingleCharInsertHandler('.');
-  }
-
-  private GoCompletionUtil() {
-
-  }
-
-  @NotNull
-  public static CamelHumpMatcher createPrefixMatcher(@NotNull PrefixMatcher original) {
-    return createPrefixMatcher(original.getPrefix());
-  }
-
-  @NotNull
-  public static CamelHumpMatcher createPrefixMatcher(@NotNull String prefix) {
-    return new CamelHumpMatcher(prefix, false);
-  }
-
-  @NotNull
-  public static LookupElement createFunctionOrMethodLookupElement(@NotNull final GoNamedSignatureOwner f,
-                                                                  @NotNull final String lookupString,
-                                                                  @Nullable final InsertHandler<LookupElement> h,
-                                                                  final double priority) {
-    return PrioritizedLookupElement.withPriority(LookupElementBuilder
-                                                   .createWithSmartPointer(lookupString, f)
-                                                   .withRenderer(FUNCTION_RENDERER)
-                                                   .withInsertHandler(h != null ? h : FUNCTION_INSERT_HANDLER), priority);
-  }
-
-  @Nullable
-  private static String calcTailText(GoSignatureOwner m) {
-    String text = "";
-    if (m instanceof GoMethodDeclaration) {
-      text = GoPsiImplUtil.getText(((GoMethodDeclaration)m).getReceiver().getType());
-    }
-    else if (m instanceof GoMethodSpec) {
-      PsiElement parent = m.getParent();
-      if (parent instanceof GoInterfaceType) {
-        text = GoPsiImplUtil.getText((GoInterfaceType)parent);
-      }
-    }
-    return StringUtil.isNotEmpty(text) ? " " + UIUtil.rightArrow() + " " + text : null;
-  }
-
-  @NotNull
-  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t) {
-    return createTypeLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_PRIORITY);
-  }
-
-  @NotNull
-  public static LookupElement createTypeLookupElement(@NotNull GoTypeSpec t,
-                                                      @NotNull String lookupString,
-                                                      @Nullable InsertHandler<LookupElement> handler,
-                                                      @Nullable String importPath,
-                                                      double priority) {
-    LookupElementBuilder builder = LookupElementBuilder.createWithSmartPointer(lookupString, t)
-      .withInsertHandler(handler).withIcon(GoIcons.TYPE);
-    if (importPath != null) builder = builder.withTailText(" " + importPath, true);
-    return PrioritizedLookupElement.withPriority(builder, priority);
-  }
-
-  @NotNull
-  public static LookupElement createLabelLookupElement(@NotNull GoLabelDefinition l, @NotNull String lookupString) {
-    return PrioritizedLookupElement.withPriority(LookupElementBuilder.createWithSmartPointer(lookupString, l)
-                                                   .withIcon(GoIcons.LABEL), LABEL_PRIORITY);
-  }
-
-  @NotNull
-  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t) {
-    return createTypeConversionLookupElement(t, StringUtil.notNullize(t.getName()), null, null, TYPE_CONVERSION);
-  }
-
-  @NotNull
-  public static LookupElement createTypeConversionLookupElement(@NotNull GoTypeSpec t,
-                                                                @NotNull String lookupString,
-                                                                @Nullable InsertHandler<LookupElement> insertHandler,
-                                                                @Nullable String importPath,
-                                                                double priority) {
-    
-    InsertHandler<LookupElement> handler = ObjectUtils.notNull(insertHandler, getTypeConversionInsertHandler(t));
-    return createTypeLookupElement(t, lookupString, handler, importPath, priority);
-  }
-
-  @NotNull
-  public static InsertHandler<LookupElement> getTypeConversionInsertHandler(@NotNull GoTypeSpec t) {
-    GoType type = t.getType();
-    return type instanceof GoStructType || type instanceof GoArrayOrSliceType || type instanceof GoMapType
-           ? BracesInsertHandler.ONE_LINER
-           : ParenthesesInsertHandler.WITH_PARAMETERS;
-  }
-
-  @NotNull
-  public static LookupElement createVariableLikeLookupElement(@NotNull GoNamedElement v) {
-    String name = StringUtil.notNullize(v.getName());
-    SingleCharInsertHandler handler =
-      v instanceof GoFieldDefinition ?
-      new SingleCharInsertHandler(':') {
-        @Override
-        public void handleInsert(@NotNull InsertionContext context, LookupElement item) {
-          PsiFile file = context.getFile();
-          if (!(file instanceof GoFile)) return;
-          context.commitDocument();
-          int offset = context.getStartOffset();
-          PsiElement at = file.findElementAt(offset);
-          GoCompositeElement ref = PsiTreeUtil.getParentOfType(at, GoValue.class, GoReferenceExpression.class);
-          if (ref instanceof GoReferenceExpression && (((GoReferenceExpression)ref).getQualifier() != null || GoPsiImplUtil.prevDot(ref))) {
-            return;
-          }
-          GoValue value = PsiTreeUtil.getParentOfType(at, GoValue.class);
-          if (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null) return;
-          super.handleInsert(context, item);
-        }
-      } : null;
-    return PrioritizedLookupElement.withPriority(
-      LookupElementBuilder.createWithSmartPointer(name, v)
-        .withLookupString(name.toLowerCase()).withRenderer(VARIABLE_RENDERER)
-        .withInsertHandler(handler)
-      , VAR_PRIORITY);
-  }
-
-  @Nullable
-  private static String calcTailTextForFields(@NotNull GoNamedElement v) {
-    String name = null;
-    if (v instanceof GoFieldDefinition) {
-      GoFieldDefinitionStub stub = ((GoFieldDefinition)v).getStub();
-      GoTypeSpec spec = stub != null ? stub.getParentStubOfType(GoTypeSpec.class) : PsiTreeUtil.getParentOfType(v, GoTypeSpec.class);
-      name = spec != null ? spec.getName() : null;
-    }
-    return StringUtil.isNotEmpty(name) ? " " + UIUtil.rightArrow() + " " + name : null;
-  }
-
-  @Nullable
-  public static LookupElement createPackageLookupElement(@NotNull GoImportSpec spec, @Nullable String name) {
-    name = name != null ? name : ObjectUtils.notNull(spec.getAlias(), spec.getLocalPackageName());
-    return createPackageLookupElement(name, spec, true);
-  }
-
-  @NotNull
-  public static LookupElement createPackageLookupElement(@NotNull String importPath,
-                                                         @Nullable PsiElement context,
-                                                         boolean forType) {
-    return createPackageLookupElement(importPath, getContextImportPath(context), forType);
-  }
-
-  @NotNull
-  public static LookupElement createPackageLookupElement(@NotNull String importPath, @Nullable String contextImportPath, boolean forType) {
-    return PrioritizedLookupElement.withPriority(
-      LookupElementBuilder.create(importPath)
-        .withLookupString(importPath.substring(Math.max(0, importPath.lastIndexOf('/'))))
-        .withIcon(GoIcons.PACKAGE).withInsertHandler(forType ? Lazy.PACKAGE_INSERT_HANDLER : null),
-      calculatePackagePriority(importPath, contextImportPath));
-  }
-
-  public static int calculatePackagePriority(@NotNull String importPath, @Nullable String currentPath) {
-    int priority = PACKAGE_PRIORITY;
-    if (StringUtil.isNotEmpty(currentPath)) {
-      String[] givenSplit = importPath.split("/");
-      String[] contextSplit = currentPath.split("/");
-      for (int i = 0; i < contextSplit.length && i < givenSplit.length; i++) {
-        if (contextSplit[i].equals(givenSplit[i])) {
-          priority++;
-        }
-        else {
-          break;
-        }
-      }
-    }
-    return priority - StringUtil.countChars(importPath, '/') - StringUtil.countChars(importPath, '.');
-  }
-
-  @Nullable
-  public static String getContextImportPath(@Nullable PsiElement context) {
-    if (context == null) return null;
-    String currentPath = null;
-    if (context instanceof PsiDirectory) {
-      currentPath = GoSdkUtil.getImportPath((PsiDirectory)context);
-    }
-    else {
-      PsiFile file = context.getContainingFile();
-      if (file instanceof GoFile) {
-        currentPath = ((GoFile)file).getImportPath();
-      }
-    }
-    return currentPath;
-  }
-
-  @NotNull
-  public static LookupElementBuilder createDirectoryLookupElement(@NotNull PsiDirectory dir) {
-    int files = dir.getFiles().length;
-    return LookupElementBuilder.createWithSmartPointer(dir.getName(), dir).withIcon(GoIcons.DIRECTORY)
-      .withInsertHandler(files == 0 ? Lazy.DIR_INSERT_HANDLER : null);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.psi.GoFunctionOrMethodDeclaration;
-import com.goide.psi.GoNamedElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.scope.BaseScopeProcessor;
-import com.intellij.util.containers.ContainerUtil;
-import com.intellij.util.containers.OrderedSet;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.List;
-
-public abstract class GoScopeProcessorBase extends BaseScopeProcessor {
-  @NotNull protected final OrderedSet<GoNamedElement> myResult = new OrderedSet<GoNamedElement>();
-
-  @NotNull protected final PsiElement myOrigin;
-  @NotNull private final String myRequestedName;
-  protected final boolean myIsCompletion;
-
-  public GoScopeProcessorBase(@NotNull String requestedName, @NotNull PsiElement origin, boolean completion) {
-    myRequestedName = requestedName;
-    myOrigin = origin;
-    myIsCompletion = completion;
-  }
-
-  @Override
-  public boolean execute(@NotNull PsiElement psiElement, @NotNull ResolveState resolveState) {
-    if (psiElement instanceof GoFunctionOrMethodDeclaration) return false;
-    if (!(psiElement instanceof GoNamedElement)) return true;
-    if (!myIsCompletion && !myRequestedName.equals(((GoNamedElement)psiElement).getName())) return true;
-    if (condition(psiElement)) return true;
-    if (psiElement.equals(myOrigin)) return true;
-    return add((GoNamedElement)psiElement) || myIsCompletion;
-  }
-
-  protected boolean add(@NotNull GoNamedElement psiElement) {
-    return !myResult.add(psiElement);
-  }
-
-  @Nullable
-  public GoNamedElement getResult() {
-    return ContainerUtil.getFirstItem(myResult);
-  }
-
-  @NotNull
-  public List<GoNamedElement> getVariants() {
-    return myResult;
-  }
-
-  protected abstract boolean condition(@NotNull PsiElement element);
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.psi.GoBlock;
-import com.goide.psi.GoFunctionOrMethodDeclaration;
-import com.goide.psi.GoStatement;
-import com.goide.psi.GoVarDefinition;
-import com.goide.util.GoUtil;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.IncorrectOperationException;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public class GoVarReference extends GoCachedReference<GoVarDefinition> {
-  private final GoBlock myPotentialStopBlock;
-
-  public GoVarReference(@NotNull GoVarDefinition element) {
-    super(element);
-    myPotentialStopBlock = PsiTreeUtil.getParentOfType(element, GoBlock.class);
-  }
-
-  @Nullable
-  @Override
-  public PsiElement resolveInner() {
-    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, false);
-    if (myPotentialStopBlock != null) {
-      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
-        GoReference.processFunctionParameters(myElement, p);
-        if (p.getResult() != null) return p.getResult();
-      }
-      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
-                                               myElement);
-    }
-    return p.getResult();
-  }
-
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    GoVarProcessor p = new GoVarProcessor(myElement.getText(), myElement, true);
-    if (myPotentialStopBlock != null) {
-      if (myPotentialStopBlock.getParent() instanceof GoFunctionOrMethodDeclaration) {
-        GoReference.processFunctionParameters(myElement, p);
-      }
-      myPotentialStopBlock.processDeclarations(p, ResolveState.initial(), PsiTreeUtil.getParentOfType(myElement, GoStatement.class),
-                                               myElement);
-    }
-    return ArrayUtil.toObjectArray(p.getVariants());
-  }
-
-  @Override
-  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
-    myElement.replace(GoElementFactory.createVarDefinitionFromText(myElement.getProject(), newElementName));
-    return myElement;
-  }
-
-  @Override
-  public boolean isReferenceTo(PsiElement element) {
-    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.util.GoUtil;
-import com.intellij.openapi.util.TextRange;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReferenceBase;
-import com.intellij.psi.impl.source.resolve.ResolveCache;
-import com.intellij.util.IncorrectOperationException;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public abstract class GoCachedReference<T extends PsiElement> extends PsiReferenceBase<T> {
-  protected GoCachedReference(@NotNull T element) {
-    super(element, TextRange.from(0, element.getTextLength()));
-  }
-
-  private static final ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement> MY_RESOLVER =
-    new ResolveCache.AbstractResolver<PsiReferenceBase, PsiElement>() {
-      @Override
-      public PsiElement resolve(@NotNull PsiReferenceBase base, boolean b) {
-        return ((GoCachedReference)base).resolveInner();
-      }
-    };
-
-  @Nullable
-  protected abstract PsiElement resolveInner();
-
-  @Nullable
-  @Override
-  public final PsiElement resolve() {
-    return myElement.isValid()
-           ? ResolveCache.getInstance(myElement.getProject()).resolveWithCaching(this, MY_RESOLVER, false, false)
-           : null;
-  }
-
-  @Override
-  public PsiElement handleElementRename(String newElementName) throws IncorrectOperationException {
-    myElement.replace(GoElementFactory.createIdentifierFromText(myElement.getProject(), newElementName));
-    return myElement;
-  }
-
-  @Override
-  public boolean isReferenceTo(PsiElement element) {
-    return GoUtil.couldBeReferenceTo(element, myElement) && super.isReferenceTo(element);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.completion.GoCompletionUtil;
-import com.goide.psi.*;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReference;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.Collection;
-import java.util.List;
-
-public class GoFieldNameReference extends GoCachedReference<GoReferenceExpressionBase> {
-  private GoCompositeElement myValue;
-
-  @NotNull
-  private GoScopeProcessorBase getProcessor(final boolean completion) {
-    return new GoScopeProcessorBase(myElement.getText(), myElement, completion) {
-      @Override
-      protected boolean condition(@NotNull PsiElement element) {
-        return !(element instanceof GoFieldDefinition) && !(element instanceof GoAnonymousFieldDefinition);
-      }
-    };
-  }
-
-  public GoFieldNameReference(@NotNull GoReferenceExpressionBase element) {
-    super(element);
-    GoCompositeElement place = myElement;
-    while ((place = PsiTreeUtil.getParentOfType(place, GoLiteralValue.class)) != null) {
-      if (place.getParent() instanceof GoValue) {
-        myValue = (GoValue)place.getParent();
-        break;
-      }
-    }
-  }
-
-  private boolean processFields(@NotNull GoScopeProcessorBase processor) {
-    GoKey key = PsiTreeUtil.getParentOfType(myElement, GoKey.class);
-    GoValue value = PsiTreeUtil.getParentOfType(myElement, GoValue.class);
-    if (key == null && (value == null || PsiTreeUtil.getPrevSiblingOfType(value, GoKey.class) != null)) return false;
-
-    GoCompositeLit lit = PsiTreeUtil.getParentOfType(myElement, GoCompositeLit.class);
-
-    GoType type = lit != null ? lit.getType() : null;
-    if (type == null && lit != null) {
-      type = GoPsiImplUtil.getType(lit.getTypeReferenceExpression());
-    }
-
-    type = getType(type);
-
-    if (type instanceof GoStructType && !type.processDeclarations(processor, ResolveState.initial(), null, myElement)) return true;
-
-    return false;
-  }
-
-  @Nullable
-  private GoType getType(GoType type) { 
-    boolean inValue = myValue != null;
-    
-    if (inValue && type instanceof GoArrayOrSliceType) type = ((GoArrayOrSliceType)type).getType();
-    else if (type instanceof GoMapType) type = inValue ? ((GoMapType)type).getValueType() : ((GoMapType)type).getKeyType();
-    else if (inValue && type instanceof GoStructType) {
-      GoKey key = PsiTreeUtil.getPrevSiblingOfType(myValue, GoKey.class);
-      GoFieldName field = key != null ? key.getFieldName() : null;
-      PsiReference reference = field != null ? field.getReference() : null;
-      PsiElement resolve = reference != null ? reference.resolve() : null;
-      if (resolve instanceof GoFieldDefinition) {
-        type = PsiTreeUtil.getNextSiblingOfType(resolve, GoType.class);
-      }
-    }
-
-    if (type != null && type.getTypeReferenceExpression() != null) {
-      type = GoPsiImplUtil.getType(type.getTypeReferenceExpression());
-    }
-
-    if (type instanceof GoPointerType) {
-      GoType inner = ((GoPointerType)type).getType();
-      if (inner != null && inner.getTypeReferenceExpression() != null) {
-        type = GoPsiImplUtil.getType(inner.getTypeReferenceExpression());
-      }
-    }
-
-    return type;
-  }
-
-  @Nullable
-  @Override
-  public PsiElement resolveInner() {
-    GoScopeProcessorBase p = getProcessor(false);
-    processFields(p);
-    return p.getResult();
-  }
-
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    GoScopeProcessorBase p = getProcessor(true);
-    processFields(p);
-    List<GoNamedElement> variants = p.getVariants();
-    if (variants.isEmpty()) return EMPTY_ARRAY;
-    Collection<LookupElement> result = ContainerUtil.newArrayList();
-    for (GoNamedElement element : variants) {
-      result.add(GoCompletionUtil.createVariableLikeLookupElement(element));
-    }
-    return ArrayUtil.toObjectArray(result);
-  }
-}
-
-<code block>
-
-
-package com.goide.psi.impl;
-
-import com.goide.completion.GoCompletionUtil;
-import com.goide.psi.GoBlock;
-import com.goide.psi.GoLabelDefinition;
-import com.goide.psi.GoLabelRef;
-import com.intellij.codeInsight.lookup.LookupElement;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.ResolveState;
-import com.intellij.psi.util.PsiTreeUtil;
-import com.intellij.util.ArrayUtil;
-import com.intellij.util.containers.ContainerUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.Collection;
-
-public class GoLabelReference extends GoCachedReference<GoLabelRef> {
-  private final GoScopeProcessorBase myProcessor = new GoScopeProcessorBase(myElement.getText(), myElement, false) {
-    @Override
-    protected boolean condition(@NotNull PsiElement element) {
-      return !(element instanceof GoLabelDefinition);
-    }
-  };
-
-  public GoLabelReference(@NotNull GoLabelRef element) {
-    super(element);
-  }
-
-  @NotNull
-  private Collection<GoLabelDefinition> getLabelDefinitions() {
-    GoBlock block = PsiTreeUtil.getTopmostParentOfType(myElement, GoBlock.class);
-    return PsiTreeUtil.findChildrenOfType(block, GoLabelDefinition.class);
-  }
-
-  @Nullable
-  @Override
-  protected PsiElement resolveInner() {
-    Collection<GoLabelDefinition> defs = getLabelDefinitions();
-    for (GoLabelDefinition def : defs) {
-      if (!myProcessor.execute(def, ResolveState.initial())) return def;
-    }
-    return null;
-  }
-
-  @NotNull
-  @Override
-  public Object[] getVariants() {
-    Collection<LookupElement> result = ContainerUtil.newArrayList();
-    for (GoLabelDefinition element : getLabelDefinitions()) {
-      String name = element.getName();
-      if (name != null) {
-        result.add(GoCompletionUtil.createLabelLookupElement(element, name));
-      }
-    }
-    return ArrayUtil.toObjectArray(result);
-  }
-}
-
-<code block>
-
-
-package com.goide.actions.fmt;
-
-import com.goide.GoConstants;
-import com.goide.GoFileType;
-import com.goide.sdk.GoSdkService;
-import com.goide.util.GoExecutor;
-import com.intellij.execution.ExecutionException;
-import com.intellij.notification.NotificationType;
-import com.intellij.notification.Notifications;
-import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.actionSystem.CommonDataKeys;
-import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.editor.Document;
-import com.intellij.openapi.fileEditor.FileDocumentManager;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleUtilCore;
-import com.intellij.openapi.project.DumbAwareAction;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.util.ExceptionUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public abstract class GoExternalToolsAction extends DumbAwareAction {
-  private static final Logger LOG = Logger.getInstance(GoExternalToolsAction.class);
-
-  private static void error(@NotNull String title, @NotNull Project project, @Nullable Exception ex) {
-    String message = ex == null ? "" : ExceptionUtil.getUserStackTrace(ex, LOG);
-    NotificationType type = NotificationType.ERROR;
-    Notifications.Bus.notify(GoConstants.GO_EXECUTION_NOTIFICATION_GROUP.createNotification(title, message, type, null), project);
-  }
-
-  @Override
-  public void update(@NotNull AnActionEvent e) {
-    super.update(e);
-    Project project = e.getProject();
-    VirtualFile file = e.getData(CommonDataKeys.VIRTUAL_FILE);
-    if (project == null || file == null || !file.isInLocalFileSystem() || file.getFileType() != GoFileType.INSTANCE) {
-      e.getPresentation().setEnabled(false);
-      return;
-    }
-    Module module = ModuleUtilCore.findModuleForFile(file, project);
-    e.getPresentation().setEnabled(GoSdkService.getInstance(project).isGoModule(module));
-  }
-
-  @Override
-  public void actionPerformed(@NotNull AnActionEvent e) {
-    Project project = e.getProject();
-    VirtualFile file = e.getRequiredData(CommonDataKeys.VIRTUAL_FILE);
-    assert project != null;
-    String title = StringUtil.notNullize(e.getPresentation().getText());
-
-    final Module module = ModuleUtilCore.findModuleForFile(file, project);
-    try {
-      doSomething(file, module, project, title);
-    }
-    catch (ExecutionException ex) {
-      error(title, project, ex);
-      LOG.error(ex);
-    }
-  }
-
-  protected boolean doSomething(@NotNull VirtualFile virtualFile,
-                                @Nullable Module module, 
-                                @NotNull Project project, 
-                                @NotNull String title) throws ExecutionException {
-    return doSomething(virtualFile, module, project, title, false);
-  }
-
-  protected boolean doSomething(@NotNull VirtualFile virtualFile,
-                                @Nullable Module module,
-                                @NotNull Project project,
-                                @NotNull String title,
-                                boolean withProgress) throws ExecutionException {
-    Document document = FileDocumentManager.getInstance().getDocument(virtualFile);
-    assert document != null;
-    final String filePath = virtualFile.getCanonicalPath();
-    assert filePath != null;
-
-    FileDocumentManager.getInstance().saveDocument(document);
-    createExecutor(project, module, title, filePath).executeWithProgress(withProgress);
-    return true;
-  }
-
-  @NotNull
-  protected abstract GoExecutor createExecutor(@NotNull Project project,
-                                               @Nullable Module module,
-                                               @NotNull String title,
-                                               @NotNull String filePath);
-}
-
-<code block>
-
-
-package com.goide.actions.fmt;
-
-import com.goide.psi.GoFile;
-import com.intellij.execution.ExecutionException;
-import com.intellij.ide.util.PropertiesComponent;
-import com.intellij.openapi.fileEditor.FileDocumentManager;
-import com.intellij.openapi.module.ModuleUtilCore;
-import com.intellij.openapi.vcs.CheckinProjectPanel;
-import com.intellij.openapi.vcs.changes.CommitContext;
-import com.intellij.openapi.vcs.changes.CommitExecutor;
-import com.intellij.openapi.vcs.checkin.CheckinHandler;
-import com.intellij.openapi.vcs.checkin.CheckinHandlerFactory;
-import com.intellij.openapi.vcs.ui.RefreshableOnComponent;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiManager;
-import com.intellij.util.PairConsumer;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import javax.swing.*;
-import java.awt.*;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-
-public class GoFmtCheckinFactory extends CheckinHandlerFactory {
-  private static final String GO_FMT = "GO_FMT";
-
-  @NotNull
-  public CheckinHandler createHandler(@NotNull final CheckinProjectPanel panel, @NotNull CommitContext commitContext) {
-    return new CheckinHandler() {
-      @Override
-      public RefreshableOnComponent getBeforeCheckinConfigurationPanel() {
-        final JCheckBox checkBox = new JCheckBox("Go fmt");
-        return new RefreshableOnComponent() {
-          @NotNull
-          public JComponent getComponent() {
-            JPanel panel = new JPanel(new BorderLayout());
-            panel.add(checkBox, BorderLayout.WEST);
-            return panel;
-          }
-
-          public void refresh() {
-          }
-
-          public void saveState() {
-            PropertiesComponent.getInstance(panel.getProject()).setValue(GO_FMT, Boolean.toString(checkBox.isSelected()));
-          }
-
-          public void restoreState() {
-            checkBox.setSelected(enabled(panel));
-          }
-        };
-      }
-
-      @Override
-      public ReturnResult beforeCheckin(@Nullable CommitExecutor executor, PairConsumer<Object, Object> additionalDataConsumer) {
-        if (enabled(panel)) {
-          FileDocumentManager.getInstance().saveAllDocuments();
-          for (PsiFile file : getPsiFiles()) {
-            try {
-              VirtualFile virtualFile = file.getVirtualFile();
-              new GoFmtFileAction().doSomething(virtualFile, ModuleUtilCore.findModuleForPsiElement(file), file.getProject(), "Go fmt", true);
-            }
-            catch (ExecutionException ignored) {
-            }
-          }
-        }
-        return super.beforeCheckin();
-      }
-
-      @NotNull
-      private List<PsiFile> getPsiFiles() {
-        Collection<VirtualFile> files = panel.getVirtualFiles();
-        List<PsiFile> psiFiles = new ArrayList<PsiFile>();
-        PsiManager manager = PsiManager.getInstance(panel.getProject());
-        for (VirtualFile file : files) {
-          PsiFile psiFile = manager.findFile(file);
-          if (psiFile instanceof GoFile) {
-            psiFiles.add(psiFile);
-          }
-        }
-        return psiFiles;
-      }
-    };
-  }
-
-  private static boolean enabled(@NotNull CheckinProjectPanel panel) {
-    return PropertiesComponent.getInstance(panel.getProject()).getBoolean(GO_FMT, false);
-  }
-}
-<code block>
-
-
-package com.goide.actions.fmt;
-
-import com.goide.GoConstants;
-import com.goide.GoFileType;
-import com.goide.sdk.GoSdkService;
-import com.goide.util.GoExecutor;
-import com.intellij.execution.ExecutionException;
-import com.intellij.notification.NotificationType;
-import com.intellij.notification.Notifications;
-import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.actionSystem.CommonDataKeys;
-import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.editor.Document;
-import com.intellij.openapi.fileEditor.FileDocumentManager;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleUtilCore;
-import com.intellij.openapi.project.DumbAwareAction;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.util.ExceptionUtil;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-public abstract class GoExternalToolsAction extends DumbAwareAction {
-  private static final Logger LOG = Logger.getInstance(GoExternalToolsAction.class);
-
-  private static void error(@NotNull String title, @NotNull Project project, @Nullable Exception ex) {
-    String message = ex == null ? "" : ExceptionUtil.getUserStackTrace(ex, LOG);
-    NotificationType type = NotificationType.ERROR;
-    Notifications.Bus.notify(GoConstants.GO_EXECUTION_NOTIFICATION_GROUP.createNotification(title, message, type, null), project);
-  }
-
-  @Override
-  public void update(@NotNull AnActionEvent e) {
-    super.update(e);
-    Project project = e.getProject();
-    VirtualFile file = e.getData(CommonDataKeys.VIRTUAL_FILE);
-    if (project == null || file == null || !file.isInLocalFileSystem() || file.getFileType() != GoFileType.INSTANCE) {
-      e.getPresentation().setEnabled(false);
-      return;
-    }
-    Module module = ModuleUtilCore.findModuleForFile(file, project);
-    e.getPresentation().setEnabled(GoSdkService.getInstance(project).isGoModule(module));
-  }
-
-  @Override
-  public void actionPerformed(@NotNull AnActionEvent e) {
-    Project project = e.getProject();
-    VirtualFile file = e.getRequiredData(CommonDataKeys.VIRTUAL_FILE);
-    assert project != null;
-    String title = StringUtil.notNullize(e.getPresentation().getText());
-    
-    final Module module = ModuleUtilCore.findModuleForFile(file, project);
-    try {
-      doSomething(file, module, project, title);
-    }
-    catch (ExecutionException ex) {
-      error(title, project, ex);
-      LOG.error(ex);
-    }
-  }
-
-  protected boolean doSomething(@NotNull VirtualFile virtualFile, @Nullable Module module, @NotNull Project project, @NotNull String title)
-    throws ExecutionException {
-    Document document = FileDocumentManager.getInstance().getDocument(virtualFile);
-    assert document != null;
-    final String filePath = virtualFile.getCanonicalPath();
-    assert filePath != null;
-
-    FileDocumentManager.getInstance().saveDocument(document);
-    createExecutor(project, module, title, filePath).executeWithProgress(false);
-    return true;
-  }
-
-  @NotNull
-  protected abstract GoExecutor createExecutor(@NotNull Project project,
-                                               @Nullable Module module,
-                                               @NotNull String title,
-                                               @NotNull String filePath);
-}
-
-<code block>
-
-
-package com.goide.actions.fmt;
-
-import com.goide.psi.GoFile;
-import com.intellij.execution.ExecutionException;
-import com.intellij.ide.util.PropertiesComponent;
-import com.intellij.openapi.fileEditor.FileDocumentManager;
-import com.intellij.openapi.module.ModuleUtilCore;
-import com.intellij.openapi.vcs.CheckinProjectPanel;
-import com.intellij.openapi.vcs.changes.CommitContext;
-import com.intellij.openapi.vcs.changes.CommitExecutor;
-import com.intellij.openapi.vcs.checkin.CheckinHandler;
-import com.intellij.openapi.vcs.checkin.CheckinHandlerFactory;
-import com.intellij.openapi.vcs.ui.RefreshableOnComponent;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiManager;
-import com.intellij.util.PairConsumer;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import javax.swing.*;
-import java.awt.*;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-
-public class GoFmtCheckinFactory extends CheckinHandlerFactory {
-  private static final String GO_FMT = "GO_FMT";
-
-  @NotNull
-  public CheckinHandler createHandler(@NotNull final CheckinProjectPanel panel, @NotNull CommitContext commitContext) {
-    return new CheckinHandler() {
-      @Override
-      public RefreshableOnComponent getBeforeCheckinConfigurationPanel() {
-        final JCheckBox checkBox = new JCheckBox("Go fmt");
-        return new RefreshableOnComponent() {
-          @NotNull
-          public JComponent getComponent() {
-            JPanel panel = new JPanel(new BorderLayout());
-            panel.add(checkBox, BorderLayout.WEST);
-            return panel;
-          }
-
-          public void refresh() {
-          }
-
-          public void saveState() {
-            PropertiesComponent.getInstance(panel.getProject()).setValue(GO_FMT, Boolean.toString(checkBox.isSelected()));
-          }
-
-          public void restoreState() {
-            checkBox.setSelected(enabled(panel));
-          }
-        };
-      }
-
-      @Override
-      public ReturnResult beforeCheckin(@Nullable CommitExecutor executor, PairConsumer<Object, Object> additionalDataConsumer) {
-        if (enabled(panel)) {
-          FileDocumentManager.getInstance().saveAllDocuments();
-          for (PsiFile file : getPsiFiles()) {
-            try {
-              VirtualFile virtualFile = file.getVirtualFile();
-              new GoFmtFileAction().doSomething(virtualFile, ModuleUtilCore.findModuleForPsiElement(file), file.getProject(), "Go fmt");
-            }
-            catch (ExecutionException ignored) {
-            }
-          }
-        }
-        return super.beforeCheckin();
-      }
-
-      @NotNull
-      private List<PsiFile> getPsiFiles() {
-        Collection<VirtualFile> files = panel.getVirtualFiles();
-        List<PsiFile> psiFiles = new ArrayList<PsiFile>();
-        PsiManager manager = PsiManager.getInstance(panel.getProject());
-        for (VirtualFile file : files) {
-          PsiFile psiFile = manager.findFile(file);
-          if (psiFile instanceof GoFile) {
-            psiFiles.add(psiFile);
-          }
-        }
-        return psiFiles;
-      }
-    };
-  }
-
-  private static boolean enabled(@NotNull CheckinProjectPanel panel) {
-    return PropertiesComponent.getInstance(panel.getProject()).getBoolean(GO_FMT, false);
   }
 }

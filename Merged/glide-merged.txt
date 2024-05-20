@@ -18,39 +18,36 @@ public abstract class ImageViewTarget<Z> extends ViewTarget<ImageView, Z>
     super(view);
   }
 
-  
+
   @Override
   @Nullable
   public Drawable getCurrentDrawable() {
     return view.getDrawable();
   }
 
-  
+
   @Override
   public void setDrawable(Drawable drawable) {
     view.setImageDrawable(drawable);
   }
 
-  
+
   @Override
   public void onLoadStarted(@Nullable Drawable placeholder) {
-    super.onLoadStarted(placeholder);
     setResource(null);
     setDrawable(placeholder);
   }
 
-  
+
   @Override
   public void onLoadFailed(@Nullable Drawable errorDrawable) {
-    super.onLoadFailed(errorDrawable);
     setResource(null);
     setDrawable(errorDrawable);
   }
 
-  
+
   @Override
   public void onLoadCleared(@Nullable Drawable placeholder) {
-    super.onLoadCleared(placeholder);
     setResource(null);
     setDrawable(placeholder);
   }
@@ -91,7 +88,6 @@ package com.bumptech.glide.request.target;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Point;
-import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.support.annotation.Nullable;
 import android.util.Log;
@@ -122,30 +118,24 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
     sizeDeterminer = new SizeDeterminer(view);
   }
 
-  
+
   public T getView() {
     return view;
   }
 
-  
+
   @Override
   public void getSize(SizeReadyCallback cb) {
     sizeDeterminer.getSize(cb);
   }
 
-  @Override
-  public void onLoadCleared(Drawable placeholder) {
-    super.onLoadCleared(placeholder);
-    sizeDeterminer.clearCallbacksAndListener();
-  }
 
-  
   @Override
   public void setRequest(@Nullable Request request) {
     setTag(request);
   }
 
-  
+
   @Override
   @Nullable
   public Request getRequest() {
@@ -185,7 +175,7 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
     }
   }
 
-  
+
   public static void setTagId(int tagId) {
       if (ViewTarget.tagId != null || isTagUsedAtLeastOnce) {
           throw new IllegalArgumentException("You cannot set the tag id more than once or change"
@@ -195,7 +185,7 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
   }
 
   private static class SizeDeterminer {
-    
+
     private static final int PENDING_SIZE = 0;
     private final View view;
     private final List<SizeReadyCallback> cbs = new ArrayList<>();
@@ -211,6 +201,7 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
       for (SizeReadyCallback cb : cbs) {
         cb.onSizeReady(width, height);
       }
+      cbs.clear();
     }
 
     private void checkCurrentDimens() {
@@ -225,18 +216,28 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
       }
 
       notifyCbs(currentWidth, currentHeight);
-      clearCallbacksAndListener();
+
+
+
+
+
+
+      ViewTreeObserver observer = view.getViewTreeObserver();
+      if (observer.isAlive()) {
+        observer.removeOnPreDrawListener(layoutListener);
+      }
+      layoutListener = null;
     }
 
-    void getSize(SizeReadyCallback cb) {
+    public void getSize(SizeReadyCallback cb) {
       int currentWidth = getViewWidthOrParam();
       int currentHeight = getViewHeightOrParam();
       if (isSizeValid(currentWidth) && isSizeValid(currentHeight)) {
         cb.onSizeReady(currentWidth, currentHeight);
       } else {
-        
-        
-        
+
+
+
         if (!cbs.contains(cb)) {
           cbs.add(cb);
         }
@@ -246,21 +247,6 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
           observer.addOnPreDrawListener(layoutListener);
         }
       }
-    }
-
-    void clearCallbacksAndListener() {
-      
-      
-      
-      
-      
-      
-      ViewTreeObserver observer = view.getViewTreeObserver();
-      if (observer.isAlive()) {
-        observer.removeOnPreDrawListener(layoutListener);
-      }
-      layoutListener = null;
-      cbs.clear();
     }
 
     private int getViewHeightOrParam() {
@@ -360,36 +346,39 @@ public abstract class ImageViewTarget<Z> extends ViewTarget<ImageView, Z>
     super(view);
   }
 
-  
+
   @Override
   @Nullable
   public Drawable getCurrentDrawable() {
     return view.getDrawable();
   }
 
-  
+
   @Override
   public void setDrawable(Drawable drawable) {
     view.setImageDrawable(drawable);
   }
 
-  
+
   @Override
   public void onLoadStarted(@Nullable Drawable placeholder) {
+    super.onLoadStarted(placeholder);
     setResource(null);
     setDrawable(placeholder);
   }
 
-  
+
   @Override
   public void onLoadFailed(@Nullable Drawable errorDrawable) {
+    super.onLoadFailed(errorDrawable);
     setResource(null);
     setDrawable(errorDrawable);
   }
 
-  
+
   @Override
   public void onLoadCleared(@Nullable Drawable placeholder) {
+    super.onLoadCleared(placeholder);
     setResource(null);
     setDrawable(placeholder);
   }
@@ -430,6 +419,7 @@ package com.bumptech.glide.request.target;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Point;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.support.annotation.Nullable;
 import android.util.Log;
@@ -460,24 +450,30 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
     sizeDeterminer = new SizeDeterminer(view);
   }
 
-  
+
   public T getView() {
     return view;
   }
 
-  
+
   @Override
   public void getSize(SizeReadyCallback cb) {
     sizeDeterminer.getSize(cb);
   }
 
-  
+  @Override
+  public void onLoadCleared(Drawable placeholder) {
+    super.onLoadCleared(placeholder);
+    sizeDeterminer.clearCallbacksAndListener();
+  }
+
+
   @Override
   public void setRequest(@Nullable Request request) {
     setTag(request);
   }
 
-  
+
   @Override
   @Nullable
   public Request getRequest() {
@@ -517,7 +513,7 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
     }
   }
 
-  
+
   public static void setTagId(int tagId) {
       if (ViewTarget.tagId != null || isTagUsedAtLeastOnce) {
           throw new IllegalArgumentException("You cannot set the tag id more than once or change"
@@ -527,7 +523,7 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
   }
 
   private static class SizeDeterminer {
-    
+
     private static final int PENDING_SIZE = 0;
     private final View view;
     private final List<SizeReadyCallback> cbs = new ArrayList<>();
@@ -543,7 +539,6 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
       for (SizeReadyCallback cb : cbs) {
         cb.onSizeReady(width, height);
       }
-      cbs.clear();
     }
 
     private void checkCurrentDimens() {
@@ -558,28 +553,18 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
       }
 
       notifyCbs(currentWidth, currentHeight);
-      
-      
-      
-      
-      
-      
-      ViewTreeObserver observer = view.getViewTreeObserver();
-      if (observer.isAlive()) {
-        observer.removeOnPreDrawListener(layoutListener);
-      }
-      layoutListener = null;
+      clearCallbacksAndListener();
     }
 
-    public void getSize(SizeReadyCallback cb) {
+    void getSize(SizeReadyCallback cb) {
       int currentWidth = getViewWidthOrParam();
       int currentHeight = getViewHeightOrParam();
       if (isSizeValid(currentWidth) && isSizeValid(currentHeight)) {
         cb.onSizeReady(currentWidth, currentHeight);
       } else {
-        
-        
-        
+
+
+
         if (!cbs.contains(cb)) {
           cbs.add(cb);
         }
@@ -589,6 +574,21 @@ public abstract class ViewTarget<T extends View, Z> extends BaseTarget<Z> {
           observer.addOnPreDrawListener(layoutListener);
         }
       }
+    }
+
+    void clearCallbacksAndListener() {
+
+
+
+
+
+
+      ViewTreeObserver observer = view.getViewTreeObserver();
+      if (observer.isAlive()) {
+        observer.removeOnPreDrawListener(layoutListener);
+      }
+      layoutListener = null;
+      cbs.clear();
     }
 
     private int getViewHeightOrParam() {

@@ -1,6 +1,6 @@
-Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/PolymorphicFailureTest.java
-Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/ChildTest.java
-Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/ParentTest.java
-Java_Projects/testng/testng-b5cf7a02/prev/src/test/java/test/testng234/PolymorphicFailureTest.java
 Java_Projects/testng/testng-b5cf7a02/prev/src/test/java/test/testng234/ChildTest.java
+Java_Projects/testng/testng-b5cf7a02/prev/src/test/java/test/testng234/PolymorphicFailureTest.java
 Java_Projects/testng/testng-b5cf7a02/prev/src/test/java/test/testng234/ParentTest.java
+Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/ChildTest.java
+Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/PolymorphicFailureTest.java
+Java_Projects/testng/testng-b5cf7a02/curr/src/test/java/test/inheritance/testng234/ParentTest.java

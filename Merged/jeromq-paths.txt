@@ -1,4 +1,4 @@
-Java_Projects/jeromq/jeromq-02d3fa17/curr/src/main/java/zmq/SocketBase.java
-Java_Projects/jeromq/jeromq-02d3fa17/curr/src/main/java/zmq/Signaler.java
-Java_Projects/jeromq/jeromq-02d3fa17/prev/src/main/java/zmq/SocketBase.java
 Java_Projects/jeromq/jeromq-02d3fa17/prev/src/main/java/zmq/Signaler.java
+Java_Projects/jeromq/jeromq-02d3fa17/prev/src/main/java/zmq/SocketBase.java
+Java_Projects/jeromq/jeromq-02d3fa17/curr/src/main/java/zmq/Signaler.java
+Java_Projects/jeromq/jeromq-02d3fa17/curr/src/main/java/zmq/SocketBase.java

@@ -1,5 +1,5 @@
-Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/Assertions.java
-Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/BDDAssertions.java
-Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/StrictAssertions.java
-Java_Projects/assertj_core/assertj_core-b36ab386/prev/src/main/java/org/assertj/core/api/Assertions.java
 Java_Projects/assertj_core/assertj_core-b36ab386/prev/src/main/java/org/assertj/core/api/BDDAssertions.java
+Java_Projects/assertj_core/assertj_core-b36ab386/prev/src/main/java/org/assertj/core/api/Assertions.java
+Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/BDDAssertions.java
+Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/Assertions.java
+Java_Projects/assertj_core/assertj_core-b36ab386/curr/src/main/java/org/assertj/core/api/StrictAssertions.java

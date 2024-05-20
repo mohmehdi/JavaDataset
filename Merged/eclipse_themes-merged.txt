@@ -1,3 +1,74 @@
+package net.jeeeyul.eclipse.themes.test.e4app;
+
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.ui.splash.AbstractSplashHandler;
+
+public class SplashHandler extends AbstractSplashHandler {
+
+	public SplashHandler() {
+
+	}
+
+	@Override
+	public void init(Shell splash) {
+		super.init(splash);
+		
+		System.out.println(splash);
+	}
+}
+
+<code block>
+package net.jeeeyul.eclipse.themes.test.e4app;
+
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+
+public class Activator implements BundleActivator {
+
+	@Override
+	public void start(BundleContext context) throws Exception {
+
+	}
+
+	@Override
+	public void stop(BundleContext context) throws Exception {
+
+
+	}
+
+}
+
+<code block>
+package net.jeeeyul.eclipse.themes.test.e4app;
+
+import javax.annotation.PostConstruct;
+
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Label;
+
+public class TestView {
+	
+	@PostConstruct
+	public void create(Composite parent) {
+		Label label = new Label(parent, SWT.NORMAL);
+		label.setText("Hello World");
+	}
+}
+
+<code block>
+package net.jeeeyul.eclipse.themes.test.e4app;
+
+import org.eclipse.e4.core.di.annotations.Execute;
+import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
+
+public class AboutHandler {
+	@Execute
+	public void execute(ESelectionService selectionService) {
+		System.out.println("about!");
+	}
+}
+<code block>
 package net.jeeeyul.eclipse.themes.test.e4app.views;
 
 import javax.annotation.PostConstruct;
@@ -18,25 +89,13 @@ public class TestView {
 <code block>
 package net.jeeeyul.eclipse.themes.test.e4app.handlers;
 
-import org.eclipse.e4.core.di.annotations.Execute;
-import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
-
-public class AboutHandler {
-	@Execute
-	public void execute(ESelectionService selectionService) {
-		System.out.println("about!");
-	}
-}
-<code block>
-package net.jeeeyul.eclipse.themes.test.e4app.handlers;
-
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.splash.AbstractSplashHandler;
 
 public class SplashHandler extends AbstractSplashHandler {
 
 	public SplashHandler() {
-		
+
 	}
 
 	@Override
@@ -80,25 +139,7 @@ public class TestHandler {
 
 }
 <code block>
-package net.jeeeyul.eclipse.themes.test.e4app;
-
-import javax.annotation.PostConstruct;
-
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Label;
-
-public class TestView {
-	
-	@PostConstruct
-	public void create(Composite parent) {
-		Label label = new Label(parent, SWT.NORMAL);
-		label.setText("Hello World");
-	}
-}
-
-<code block>
-package net.jeeeyul.eclipse.themes.test.e4app;
+package net.jeeeyul.eclipse.themes.test.e4app.handlers;
 
 import org.eclipse.e4.core.di.annotations.Execute;
 import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
@@ -107,45 +148,5 @@ public class AboutHandler {
 	@Execute
 	public void execute(ESelectionService selectionService) {
 		System.out.println("about!");
-	}
-}
-<code block>
-package net.jeeeyul.eclipse.themes.test.e4app;
-
-import org.osgi.framework.BundleActivator;
-import org.osgi.framework.BundleContext;
-
-public class Activator implements BundleActivator {
-
-	@Override
-	public void start(BundleContext context) throws Exception {
-
-	}
-
-	@Override
-	public void stop(BundleContext context) throws Exception {
-		
-
-	}
-
-}
-
-<code block>
-package net.jeeeyul.eclipse.themes.test.e4app;
-
-import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.splash.AbstractSplashHandler;
-
-public class SplashHandler extends AbstractSplashHandler {
-
-	public SplashHandler() {
-		
-	}
-
-	@Override
-	public void init(Shell splash) {
-		super.init(splash);
-		
-		System.out.println(splash);
 	}
 }
